@@ -63,4 +63,4 @@ HTTP oracle tests compare note and party create/edit refusals byte for byte with
 - Form-rule story and scene tests: generation races, failure/retry, pending save gate, required markers, hidden controls and derived read-only values. The incident-form Chromium suite proves creation, derived priority, resolution requirements, manager/agent major behavior and the problem form on the real server.
 - `helpdesk-v3-upgrade`, `helpdesk-seed`, doctor and migration-phase checks cover installation and upgrade.
 
-**TODO 3I-B:** run the `form-vs-api` writes through TMF621 once that workstream supplies its routes, including the same priority/major and resolution examples. This branch does not edit `packages/tmf` or `http/tmf` and claims no TMF621-specific proof.
+**3I-B handoff, done** (decision 0035): `form-vs-api` also writes through TMF621. A resolve without resolution code and notes is accepted while the form state requires both, and the form-locked priority, severity label, resolution date and status history, a plain ticket's form-locked type and the hidden major flag (as the `majorIncident` characteristic) are all written.

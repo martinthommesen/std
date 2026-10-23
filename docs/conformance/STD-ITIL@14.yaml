@@ -243,8 +243,12 @@ rows:
     source: "Contracts 14.1; Contracts 5.10"
     level: mandatory
     requirement: "Form rules are browser validation, not record-service acceptance: the incident form prevents a resolve without resolution code and notes, and the same payload is accepted through /api/v1 and TMF621."
-    status: pending
-    note: "The API and TMF621 parts are tested (decision 0035); the browser form part belongs to workstream 3C."
+    status: tested
+    tests:
+      - apps/web/test/browser/incident-form.test.ts#incident form v3
+      - "packages/server/test/form-vs-api.test.ts#resolving without code/notes is accepted by the API while the form requires both"
+      - "packages/server/test/form-vs-api.test.ts#through TMF621, resolving without resolution code and notes is accepted while the form requires both"
+    note: "The browser suite's resolution case requires both fields; the API and TMF621 accept the same resolve (decisions 0035, 0036)."
   - id: STD-ITIL@14/C14/14.2/major-incident-tmf621
     source: "Contracts 14.2 (fourth bullet); Contracts 11.2 troubleTicketCharacteristic"
     level: mandatory

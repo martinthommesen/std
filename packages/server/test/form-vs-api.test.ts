@@ -1,16 +1,44 @@
-/** UX rules never become API guards (Contracts 5.10, 14.1). TMF621 companion proof is tracked as the 3I-B handoff in decision 0036. */
+/** UX rules never become API guards (Contracts 5.10, 14.1), through the generic API and TMF621 (decision 0036's 3I-B handoff, decision 0035). */
 import { assert, describe, it } from "@effect/vitest";
 import { ResourceCreate, ResourcePatch } from "@std/api/resource";
 import { Effect, Result, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
-import { textOf } from "./api-support.ts";
+import { asArray, asObject, textOf } from "./api-support.ts";
 import {
   clientFor,
   createTicket,
   itilLayer,
   patchTicket,
 } from "./itil-support.ts";
+import {
+  bodyOf,
+  characteristicsWith,
+  TICKETS,
+  ticketBody,
+  tmf621As,
+} from "./tmf621-support.ts";
+
+/**
+ * An incident as the generic API stores it.
+ *
+ * @param client - The admin's API client.
+ * @param id - The incident.
+ * @returns Its values.
+ */
+const storedIncident = Effect.fn("FormVsApi.storedIncident")(
+  function* storedIncident(
+    client: Effect.Success<ReturnType<typeof clientFor>>,
+    id: string
+  ) {
+    return asObject(
+      yield* client.records.get({
+        params: { id, table: "helpdeskIncident" },
+        query: {},
+      })
+    );
+  }
+);
 
 describe("form-vs-api", () => {
   it("keeps resolution and known-error requirements out of the public write schemas", () => {
@@ -208,6 +236,136 @@ describe("form-vs-api", () => {
         });
 
         assert.strictEqual(record.status, "root_cause_analysis");
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "through TMF621, resolving without resolution code and notes is accepted while the form requires both",
+    () =>
+      Effect.gen(function* tmf621Resolution() {
+        const client = yield* clientFor();
+        const admin = yield* tmf621As("admin");
+        const ticket = bodyOf(yield* admin.post(TICKETS, ticketBody()));
+        const id = textOf(ticket.id);
+
+        const verdict = yield* client.records.formState({
+          payload: {
+            id,
+            revision: 1,
+            table: "helpdeskIncident",
+            values: { status: "resolved" },
+          },
+        });
+
+        assert.strictEqual(verdict.fields.resolutionCode?.required, true);
+        assert.strictEqual(verdict.fields.resolutionNotes?.required, true);
+
+        const resolved = yield* admin.patch(`${TICKETS}/${id}`, {
+          status: "resolved",
+        });
+
+        assert.strictEqual(resolved.status, 200, resolved.text);
+
+        const saved = yield* storedIncident(client, id);
+
+        assert.deepStrictEqual(
+          [
+            saved.status,
+            saved.resolutionCode ?? null,
+            saved.resolutionNotes ?? null,
+          ],
+          ["resolved", null, null]
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "through TMF621, form-locked priority, labels, dates, type and history stay writable, and the hidden major flag is written",
+    () =>
+      Effect.gen(function* tmf621Locked() {
+        const client = yield* clientFor();
+        const admin = yield* tmf621As("admin");
+        const ticket = bodyOf(yield* admin.post(TICKETS, ticketBody()));
+        const id = textOf(ticket.id);
+
+        const verdict = yield* client.records.formState({
+          payload: {
+            id,
+            revision: 1,
+            table: "helpdeskIncident",
+            values: {},
+          },
+        });
+
+        for (const name of [
+          "priority",
+          "resolvedAt",
+          "statusChangeHistory",
+          "severityLabel",
+          "priorityLabel",
+        ]) {
+          assert.strictEqual(verdict.fields[name]?.readOnly, true, name);
+        }
+
+        assert.strictEqual(verdict.fields.majorIncident?.hidden, true);
+
+        const patched = yield* admin.patch(`${TICKETS}/${id}`, {
+          priority: "Low",
+          resolutionDate: "2026-01-02T03:04:05.000Z",
+          severity: "External severity",
+          statusChangeHistory: [{ status: "pending" }],
+          troubleTicketCharacteristic: characteristicsWith(ticket, {
+            majorIncident: true,
+          }),
+        });
+
+        assert.strictEqual(patched.status, 200, patched.text);
+
+        const saved = yield* storedIncident(client, id);
+
+        assert.deepStrictEqual(
+          [
+            saved.priority,
+            saved.severityLabel,
+            saved.resolvedAt,
+            saved.majorIncident,
+            asArray(saved.statusChangeHistory).map(
+              (item) => asObject(item).status
+            ),
+          ],
+          [
+            "4",
+            "External severity",
+            "2026-01-02T03:04:05.000Z",
+            true,
+            ["pending"],
+          ]
+        );
+
+        // A plain ticket's form-locked type is written through TMF621 too.
+        const plain = bodyOf(
+          yield* admin.post(TICKETS, ticketBody({ ticketType: "External" }))
+        );
+
+        const plainId = textOf(plain.id);
+
+        const plainVerdict = yield* client.records.formState({
+          payload: {
+            id: plainId,
+            revision: 1,
+            table: "helpdeskTicket",
+            values: {},
+          },
+        });
+
+        assert.strictEqual(plainVerdict.fields.ticketType?.readOnly, true);
+
+        const retyped = yield* admin.patch(`${TICKETS}/${plainId}`, {
+          ticketType: "Updated externally",
+        });
+
+        assert.strictEqual(retyped.status, 200, retyped.text);
+        assert.strictEqual(bodyOf(retyped).ticketType, "Updated externally");
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 });
