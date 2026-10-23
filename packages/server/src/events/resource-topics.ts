@@ -7,8 +7,10 @@ import { SqlClient } from "effect/sql";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { collectionNameOf } from "../http/v2/table-names.ts";
 import { writeChangeEntry } from "../records/change-entry.ts";
+import { writeChangeImage } from "../records/change-image.ts";
 import { matchingSubscriptions } from "../records/outbox-producer.ts";
 import { NOW } from "../records/save-sql.ts";
+import type { StoredRecord } from "../records/stored-record.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { STD_VERSION } from "../version.ts";
 import { eventIdOf } from "./event-id.ts";
@@ -85,20 +87,31 @@ export const writeResourceTopicChanges = Effect.fn(
       revision
     );
 
+    const image: StoredRecord = {
+      classId: EVENT_CLASS_IDS.topic,
+      createdAt: now,
+      createdBy: actorId,
+      id: recordId,
+      updatedAt: now,
+      updatedBy: actorId,
+      values: new Map([[field.id, newName ?? oldName]]),
+      version: recordVersion,
+    };
+
+    yield* writeChangeImage(
+      after,
+      entry,
+      oldName === null
+        ? null
+        : { ...image, values: new Map([[field.id, oldName]]) },
+      newName === null ? null : image
+    );
+
     const subscriptions = matchingSubscriptions(
       after,
       {
         classId: EVENT_CLASS_IDS.topic,
-        image: {
-          classId: EVENT_CLASS_IDS.topic,
-          createdAt: now,
-          createdBy: actorId,
-          id: recordId,
-          updatedAt: now,
-          updatedBy: actorId,
-          values: new Map([[field.id, newName ?? oldName]]),
-          version: recordVersion,
-        },
+        image,
         kind,
       },
       { now, timeZone }

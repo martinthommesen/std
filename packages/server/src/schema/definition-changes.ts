@@ -21,6 +21,7 @@ import { Effect } from "effect";
 import { tableOf } from "../catalog/definition-tables.ts";
 import { writeChangeEntry } from "../records/change-entry.ts";
 import type { ChangeCause, ChangeEntry } from "../records/change-entry.ts";
+import { writeChangeImageValues } from "../records/change-image.ts";
 
 /** A definition the change set wrote, with its change entry. */
 export interface WrittenDefinitionChange {
@@ -67,6 +68,25 @@ export const definitionColumns = (
   }
 
   return columns;
+};
+
+/**
+ * A definition's complete canonical platform image, keyed by field ID.
+ * @param snapshot - The current configuration.
+ * @param definition - The effective definition.
+ * @returns Canonical column values keyed by field ID.
+ */
+export const definitionImage = (
+  snapshot: ConfigSnapshot,
+  definition: Definition
+): JsonObject => {
+  const columns = definitionColumns(definition);
+
+  return Object.fromEntries(
+    snapshot
+      .fields(tableOf(definition.kind).classId)
+      .map((field) => [field.id, columns.get(field.name) ?? null])
+  );
 };
 
 const fieldsOf = (
@@ -134,6 +154,12 @@ export const writeDefinitionChanges = Effect.fn(
         revision
       );
 
+      yield* writeChangeImageValues(
+        snapshot,
+        entry,
+        before === undefined ? null : definitionImage(snapshot, before),
+        definitionImage(snapshot, after)
+      );
       written.push({ after, before, entry });
     }
   }

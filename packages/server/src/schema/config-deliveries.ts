@@ -51,13 +51,14 @@ import { tableOf } from "../catalog/definition-tables.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { writeChangeEntry } from "../records/change-entry.ts";
 import type { ChangeEntry } from "../records/change-entry.ts";
+import { writeChangeImageValues } from "../records/change-image.ts";
 import { matchingSubscriptions } from "../records/outbox-producer.ts";
 import { NOW } from "../records/save-sql.ts";
 import type { StoredRecord } from "../records/stored-record.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { WORKER_CHANNEL } from "../sql/wake-up.ts";
 import { STD_VERSION } from "../version.ts";
-import { definitionColumns } from "./definition-changes.ts";
+import { definitionColumns, definitionImage } from "./definition-changes.ts";
 import type { WrittenDefinitionChange } from "./definition-changes.ts";
 import { quoteIdent } from "./sql-text.ts";
 
@@ -152,6 +153,8 @@ const bumpRoles = Effect.fn("Schema.bumpRolesOfAccessRules")(
         revision
       );
 
+      const image = definitionImage(snapshot, role);
+      yield* writeChangeImageValues(snapshot, entry, image, image);
       entries.push({ entry, image: role });
     }
 

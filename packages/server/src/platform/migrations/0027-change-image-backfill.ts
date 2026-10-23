@@ -1,7 +1,9 @@
+import type { DefinitionId } from "@std/definitions/ids";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { Catalog } from "../../catalog/catalog.ts";
+import type { FieldOrigin } from "../../outbox/delivery-payload.ts";
 import {
   readEntries,
   readFieldOrigins,
@@ -66,9 +68,19 @@ export const migration0027: DataMigration = {
         )
       );
 
+    const originsByClass = new Map<
+      DefinitionId,
+      ReadonlyMap<DefinitionId, FieldOrigin>
+    >();
+
     for (const row of rows) {
       const entries = yield* readEntries(row.record_id, row.version);
-      const origins = yield* readFieldOrigins(snapshot, row.record_class_id);
+      let origins = originsByClass.get(row.record_class_id);
+
+      if (origins === undefined) {
+        origins = yield* readFieldOrigins(snapshot, row.record_class_id);
+        originsByClass.set(row.record_class_id, origins);
+      }
 
       const image = JSON.stringify(
         Object.fromEntries(versionImage(snapshot, entries, origins).known)
@@ -108,7 +120,7 @@ export const migration0027: DataMigration = {
     };
   }, Effect.mapError(failure)),
   description:
-    "Backfills missing non-secret after-images and legacy-gap before-images in bounded record/version keyset batches at finalize; deletes reuse the previous after-image. Remaining counts versions still lacking their payload image. Derived images preserve legacy unknown/default semantics without logical writes.",
+    "Backfills missing non-secret after-images and legacy-gap before-images in bounded record/version keyset batches at finalize; deletes reuse the previous after-image. Contiguous versions reuse their predecessor images and field origins are read once per class per batch. Remaining counts versions still lacking their payload image. Derived images preserve legacy unknown/default semantics without logical writes.",
   id: 27,
   kind: "data",
   name: "change-image-backfill",

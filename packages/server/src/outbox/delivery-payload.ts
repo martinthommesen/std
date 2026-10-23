@@ -215,6 +215,48 @@ const entryOf = Effect.fnUntraced(function* entryOf(
   return entry;
 });
 
+const imageEntries = Effect.fnUntraced(function* imageEntries(
+  entry: StoredEntry,
+  currentText: string,
+  previousText: string | null
+) {
+  const current = parseJsonbText(currentText);
+  const previous = parseJsonbText(previousText ?? "null");
+
+  if (!current.ok || !isJsonObject(current.value) || !previous.ok) {
+    return yield* unreadable(`Change image ${entry.changeId} is not readable.`);
+  }
+
+  const entries: StoredEntry[] = [];
+
+  if (entry.recordVersion > 1) {
+    // Retention can remove v-1 while v is pending: undo only changed fields.
+    const derived = new Map(Object.entries(current.value));
+
+    for (const [fieldId, change] of Object.entries(entry.fields)) {
+      if (isJsonObject(change) && Object.hasOwn(change, "before")) {
+        derived.set(fieldId, change.before ?? null);
+      } else {
+        derived.delete(fieldId);
+      }
+    }
+
+    entries.push({
+      ...entry,
+      fields: {},
+      image: isJsonObject(previous.value)
+        ? previous.value
+        : Object.fromEntries(derived),
+      kind: "update",
+      recordVersion: entry.recordVersion - 1,
+    });
+  }
+
+  entries.push({ ...entry, image: current.value });
+
+  return entries;
+});
+
 /**
  * Read a version and its preceding image with constant round trips. New saves
  * carry complete images; legacy history is reduced in SQL to at most three
@@ -252,33 +294,37 @@ export const readEntries = Effect.fn("Outbox.readEntries")(
     const currentImage =
       row.kind === "delete" ? previousImage : row.after_image;
 
-    if (currentImage !== null && (version === 1 || previousImage !== null)) {
-      const entry = yield* entryOf(row);
+    if (currentImage !== null) {
+      return yield* imageEntries(
+        yield* entryOf(row),
+        currentImage,
+        previousImage
+      );
+    }
 
-      const current = parseJsonbText(currentImage);
-      const previous = parseJsonbText(previousImage ?? "null");
+    // Finalize walks versions in order: reuse the image the previous
+    // batch/iteration just wrote instead of reducing the history again.
+    if (previousImage !== null) {
+      const previous = parseJsonbText(previousImage);
 
-      if (!current.ok || !isJsonObject(current.value) || !previous.ok) {
+      const predecessor = rows.find(
+        (candidate) => candidate.version_text === version - 1
+      );
+
+      if (
+        !previous.ok ||
+        !isJsonObject(previous.value) ||
+        predecessor === undefined
+      ) {
         return yield* unreadable(
-          `Change image ${entry.changeId} is not readable.`
+          `Previous image of ${row.id} is not readable.`
         );
       }
 
-      const entries: StoredEntry[] = [];
-
-      if (entry.recordVersion > 1 && isJsonObject(previous.value)) {
-        entries.push({
-          ...entry,
-          fields: {},
-          image: previous.value,
-          kind: "update",
-          recordVersion: entry.recordVersion - 1,
-        });
-      }
-
-      entries.push({ ...entry, image: current.value });
-
-      return entries;
+      return [
+        { ...(yield* entryOf(predecessor)), image: previous.value },
+        yield* entryOf(row),
+      ];
     }
 
     const legacy = yield* client`
@@ -294,11 +340,11 @@ export const readEntries = Effect.fn("Outbox.readEntries")(
         c.record_class_id::text AS record_class_id, c.record_version::text AS version_text,
         c.kind, c.actor_id::text AS actor_id, c.occurred_at::text AS occurred_at,
         c.schema_revision::text AS schema_revision,
-        (CASE WHEN c.record_version = ${version - 1} THEN
+        (CASE WHEN c.record_version = (SELECT max(record_version) FROM history WHERE record_version < ${version}) THEN
           COALESCE((SELECT jsonb_object_agg(key, value) FROM mentioned), '{}'::jsonb)
           ELSE c.fields END)::text AS fields,
         ((SELECT count(*) FROM history h WHERE h.record_version <= c.record_version) = c.record_version) AS complete
-      FROM history c WHERE c.record_version IN (1, ${version - 1}, ${version})
+      FROM history c WHERE c.record_version IN (1, (SELECT max(record_version) FROM history WHERE record_version < ${version}), ${version})
       ORDER BY c.record_version`.pipe(Effect.flatMap(legacyRows));
 
     const entries: StoredEntry[] = [];
@@ -456,6 +502,31 @@ const unmentionedValue = (input: Unmentioned): JsonValue | undefined => {
   return reconstructible ? addedValue(field, origin) : undefined;
 };
 
+const unmentionedWithImage = (
+  input: Unmentioned,
+  previous: StoredEntry | undefined
+): JsonValue | undefined => {
+  const { at, origin, platform, field } = input;
+
+  if (
+    previous?.image === undefined ||
+    origin === undefined ||
+    platform ||
+    origin.numbered
+  ) {
+    return unmentionedValue(input);
+  }
+
+  if (
+    previous.schemaRevision < origin.revision &&
+    at.schemaRevision >= origin.revision
+  ) {
+    return addedValue(field, origin);
+  }
+
+  return unmentionedValue(input);
+};
+
 const savedVersionImage = (
   snapshot: ConfigSnapshot,
   classId: DefinitionId,
@@ -475,6 +546,27 @@ const savedVersionImage = (
   }
 
   return { known, unknown };
+};
+
+const mentionedValues = (
+  entries: readonly StoredEntry[],
+  at: StoredEntry
+): ReadonlyMap<DefinitionId, JsonValue> => {
+  const mentioned = new Map<DefinitionId, JsonValue>();
+  const applied = at.kind === "delete" ? [at] : entries;
+  const side = at.kind === "delete" ? "before" : "after";
+
+  for (const entry of applied) {
+    for (const [fieldId, value] of Object.entries(entry.image ?? {})) {
+      mentioned.set(fieldId, value);
+    }
+
+    for (const [fieldId, change] of Object.entries(entry.fields)) {
+      mentioned.set(fieldId, sideOf(change, side));
+    }
+  }
+
+  return mentioned;
 };
 
 /**
@@ -511,15 +603,7 @@ export const versionImage = (
     first.recordVersion === 1 &&
     (at.completeFromCreate ?? entries.length === at.recordVersion);
 
-  const mentioned = new Map<DefinitionId, JsonValue>();
-  const applied = at.kind === "delete" ? [at] : entries;
-  const side = at.kind === "delete" ? "before" : "after";
-
-  for (const entry of applied) {
-    for (const [fieldId, change] of Object.entries(entry.fields)) {
-      mentioned.set(fieldId, sideOf(change, side));
-    }
-  }
+  const mentioned = mentionedValues(entries, at);
 
   const platform = snapshot.class(at.recordClassId)?.storage === "platform";
 
@@ -530,13 +614,16 @@ export const versionImage = (
       value = mentioned.get(field.id);
     } else if (value === undefined) {
       // A legacy delete proves its empty fields even when v-1's image is partial.
-      value = unmentionedValue({
-        at,
-        created: startsWithCreate ? first : undefined,
-        field,
-        origin: origins.get(field.id),
-        platform,
-      });
+      value = unmentionedWithImage(
+        {
+          at,
+          created: startsWithCreate ? first : undefined,
+          field,
+          origin: origins.get(field.id),
+          platform,
+        },
+        entries.at(-2)
+      );
     }
 
     if (value === undefined) {

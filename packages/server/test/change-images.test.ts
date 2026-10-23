@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
+import { BUILT_IN_ROLE_IDS, SYSTEM_USER_ID } from "@std/definitions/well-known";
 import { Effect, Logger, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
@@ -9,6 +9,8 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { listResourceEvents } from "../src/events/resource-events.ts";
 import { getTopic } from "../src/events/tmf688-resources.ts";
 import {
+  decodedImage,
+  decisionHolds,
   payloadOf,
   readEntries,
   readFieldOrigins,
@@ -26,14 +28,17 @@ import {
 import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { hubTestLayer } from "./hub-support.ts";
+import { hubTestLayer, register } from "./hub-support.ts";
 import {
   ACME,
   addField,
+  addRole,
+  addAccessRule,
   change,
   createClass,
   ensureSite,
 } from "./schema-support.ts";
+import { v2Callers } from "./v2-support.ts";
 import { actingAs, asLoadedUser } from "./worker-support.ts";
 
 const test = it.effect;
@@ -73,6 +78,195 @@ const asset = Effect.gen(function* asset() {
 });
 
 describe("change images", () => {
+  test("a pending version retains its complete payload and unchanged-field conditions after predecessor retention", () =>
+    Effect.gen(function* retained() {
+      const sql = yield* SqlClient.SqlClient;
+      const { id, fixture, update } = yield* asset;
+      const { admin } = yield* v2Callers;
+      yield* register(admin.token ?? "", "http://localhost:12345/events");
+      yield* update(1);
+      yield* sql`DELETE FROM core.resource_event WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid AND record_version = 1)`;
+      yield* sql`DELETE FROM core.change WHERE record_id = ${id}::uuid AND record_version = 1`;
+
+      const [pending] =
+        yield* sql`SELECT status FROM core.delivery WHERE record_id = ${id}::uuid AND record_version = 2`;
+
+      assert.strictEqual(pending?.status, "pending");
+      const snapshot = yield* (yield* Catalog).refresh;
+      const entries = yield* readEntries(id, 2);
+      const origins = yield* readFieldOrigins(snapshot, ACME.asset);
+      const context = { me: fixture.admin.id, now: 0, timeZone: "UTC" };
+
+      const payload = payloadOf(
+        snapshot,
+        { roleIds: [BUILT_IN_ROLE_IDS.admin] },
+        { entries, origins, recordId: id },
+        context
+      );
+
+      assert.notInstanceOf(payload, Error);
+      assert.propertyVal(payload, "visible", true);
+
+      const image = decodedImage(
+        snapshot,
+        ACME.asset,
+        versionImage(snapshot, entries, origins).known
+      );
+
+      assert.isFalse(image instanceof Error);
+
+      if (image instanceof Error) {
+        return;
+      }
+
+      assert.strictEqual(image[ACME.status], "in_use");
+      assert.isTrue(
+        decisionHolds(
+          snapshot,
+          {
+            condition: {
+              left: { path: [ACME.status] },
+              op: "eq",
+              right: { value: "in_use" },
+            },
+            kind: "conditional",
+          },
+          ACME.asset,
+          image,
+          context
+        )
+      );
+      assert.strictEqual(entries[0]?.image?.[ACME.name], "one");
+    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+
+  test("legacy middle gaps accumulate every field into the latest retained predecessor", () =>
+    Effect.gen(function* gap() {
+      const sql = yield* SqlClient.SqlClient;
+      const { id, fixture, update } = yield* asset;
+      yield* updateRecord({
+        body: { cost: "12.00", purchased_on: "2026-01-02", status: "lost" },
+        endpointClassId: ACME.asset,
+        expectedVersion: 1,
+        id,
+      }).pipe(actingAs(fixture.admin.id));
+      yield* update(2);
+      yield* update(3);
+      yield* update(4);
+      yield* sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid)`;
+      yield* sql`DELETE FROM core.resource_event WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid AND record_version = 4)`;
+      yield* sql`DELETE FROM core.change WHERE record_id = ${id}::uuid AND record_version = 4`;
+      const snapshot = yield* (yield* Catalog).refresh;
+      const origins = yield* readFieldOrigins(snapshot, ACME.asset);
+      const image = versionImage(snapshot, yield* readEntries(id, 5), origins);
+      assert.strictEqual(image.known.get(ACME.status), "lost");
+      assert.strictEqual(image.known.get(ACME.cost), "12.00");
+      assert.strictEqual(image.known.get(ACME.purchasedOn), "2026-01-02");
+    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+
+  test("config writers own images and a config commit between backfill batches leaves exact zero remaining", () =>
+    Effect.gen(function* config() {
+      const sql = yield* SqlClient.SqlClient;
+      const { request } = yield* Transactions;
+      const { id, fixture, update } = yield* asset;
+      yield* update(1);
+      assert.strictEqual(
+        yield* request(migration0027.remaining).pipe(
+          actingAs(fixture.admin.id)
+        ),
+        0
+      );
+
+      const [system] =
+        yield* sql`SELECT i.after_image FROM core.change c JOIN core.change_image i ON i.change_id = c.id WHERE c.record_id = ${SYSTEM_USER_ID}::uuid`;
+
+      assert.isDefined(system);
+      yield* sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid)`;
+
+      const first = yield* request(migration0027.batch(null, 1)).pipe(
+        actingAs(fixture.admin.id)
+      );
+
+      yield* ensureSite;
+      const table = createClass("image_config");
+      const role = addRole("image_reader");
+      yield* change([table.op, role.op]);
+      const rule = addAccessRule(table.id, [role.id]);
+      yield* change([rule.op]);
+
+      const [bump] =
+        yield* sql`SELECT c.record_version::int AS version, i.after_image IS NOT NULL AS image FROM core.change c LEFT JOIN core.change_image i ON i.change_id = c.id WHERE c.record_id = ${role.id}::uuid ORDER BY c.record_version DESC LIMIT 1`;
+
+      assert.strictEqual(bump?.version, 2);
+      assert.strictEqual(bump?.image, true);
+      yield* request(migration0027.batch(first.next, 10)).pipe(
+        actingAs(fixture.admin.id)
+      );
+      assert.strictEqual(
+        yield* request(migration0027.remaining).pipe(
+          actingAs(fixture.admin.id)
+        ),
+        0
+      );
+    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+
+  test("long legacy batches reduce history once, cache origins and match slow images", () =>
+    Effect.gen(function* bounded() {
+      const sql = yield* SqlClient.SqlClient;
+      const log = yield* StatementLog;
+      const { request } = yield* Transactions;
+      const { id, fixture } = yield* asset;
+      const historyLength = 10_000;
+      const batchSize = 100;
+      const firstVersion = historyLength - batchSize + 1;
+      yield* sql`INSERT INTO core.change (id, class_id, version, created_at, created_by, updated_at, updated_by, operation_id, record_id, record_class_id, record_version, kind, actor_id, cause, schema_revision, occurred_at, fields)
+        SELECT uuidv7(), c.class_id, c.version, c.created_at, c.created_by, c.updated_at, c.updated_by, c.operation_id, c.record_id, c.record_class_id, versions.n, 'update', c.actor_id, c.cause, c.schema_revision, c.occurred_at,
+          jsonb_build_object(${ACME.name}::text, jsonb_build_object('before', CASE WHEN versions.n = 2 THEN 'one' ELSE 'version-' || (versions.n - 1)::text END, 'after', 'version-' || versions.n::text))
+        FROM core.change c CROSS JOIN generate_series(2, ${historyLength}) versions(n) WHERE c.record_id = ${id}::uuid AND c.record_version = 1`;
+      yield* sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid)`;
+      const snapshot = yield* (yield* Catalog).refresh;
+      const origins = yield* readFieldOrigins(snapshot, ACME.asset);
+      const slow = [];
+
+      for (const version of Array.from(
+        { length: batchSize },
+        (_, index) => index + firstVersion
+      )) {
+        slow.push(
+          versionImage(snapshot, yield* readEntries(id, version), origins)
+        );
+      }
+
+      yield* log.clear;
+      yield* request(
+        migration0027.batch(
+          JSON.stringify({ recordId: id, version: firstVersion - 1 }),
+          batchSize
+        )
+      ).pipe(actingAs(fixture.admin.id));
+      const statements = yield* log.texts;
+      assert.lengthOf(
+        statements.filter((text) => text.includes("WITH history")),
+        1
+      );
+      assert.lengthOf(
+        statements.filter((text) => text.includes('DISTINCT ON ("dr".')),
+        1
+      );
+      // One selection, one origin read, one fallback, and two statements per version, plus transaction setup.
+      assert.isAtMost(statements.length, 2 * batchSize + 10);
+
+      for (const [index, expected] of slow.entries()) {
+        assert.deepStrictEqual(
+          versionImage(
+            snapshot,
+            yield* readEntries(id, index + firstVersion),
+            origins
+          ),
+          expected
+        );
+      }
+    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+
   test("unreadable resource payloads warn with their change ID and leave other events readable", () =>
     Effect.gen(function* unreadableEvent() {
       const sql = yield* SqlClient.SqlClient;
