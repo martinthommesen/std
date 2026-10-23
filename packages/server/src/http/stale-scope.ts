@@ -1,4 +1,4 @@
-import { isSystemFieldName } from "@std/access/visible-schema";
+import type { SystemFieldName } from "@std/access/visible-schema";
 /**
  * The scope of a stale read (Contracts 6.4): the fields a request names,
  * resolved against the definitions at the request's revision R, the way the
@@ -30,6 +30,7 @@ import type { FieldInfo } from "@std/conditions/class-view";
 import { sql, textParameter } from "@std/conditions/sql-fragment";
 import { parseCondition } from "@std/conditions/syntax-parse";
 import type { DefinitionId } from "@std/definitions/ids";
+import { apiAttributeNameOf } from "@std/definitions/names";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
 import { FieldTypeSchema } from "@std/values/field-type";
 import type { FieldType } from "@std/values/field-type";
@@ -41,8 +42,10 @@ import { Effect, Option, Schema } from "effect";
 import {
   fieldInfoOf,
   SYSTEM_FIELD_IDS,
+  SYSTEM_FIELDS,
   systemField,
 } from "../records/read-field.ts";
+import type { Naming } from "../records/read-query.ts";
 import { readRows } from "../records/sql-run.ts";
 
 /** A field as it was at R. */
@@ -88,6 +91,8 @@ export interface ScopeName {
 
 /** What a stale read is checked against. */
 export interface StaleScope {
+  /** How the request spelled its names (`names` keep that spelling). */
+  readonly naming: Naming;
   readonly entries: readonly ScopeEntry[];
   /** Every name the request used, resolved or not, class-qualified. */
   readonly names: readonly ScopeName[];
@@ -112,6 +117,22 @@ export interface ScopeParameters {
    * condition after R (`settingsChanged`) is relevant.
    */
   readonly allowedFor?: string;
+  /**
+   * Names and one-hop paths a request filters on outside `filter` text,
+   * comma-separated (v2's attribute filters, Contracts 10.3), resolved like
+   * `fields` but never replacing the selection.
+   */
+  readonly paths?: string;
+  /**
+   * Names left out of the default selection, comma-separated (v2's
+   * `fields=!name`); used only without `fields`.
+   */
+  readonly excluded?: string;
+  /**
+   * How the names are spelled: definition names (v1, the default) or API
+   * names (v2, Contracts 10.2), resolved at R either way.
+   */
+  readonly naming?: Naming;
 }
 
 const decodeType = Schema.decodeUnknownOption(FieldTypeSchema);
@@ -214,16 +235,58 @@ const lineageAt = (
   return chain;
 };
 
+/**
+ * A definition or system field name as a request spells it.
+ *
+ * @param name - The definition name.
+ * @param naming - How the request spells names.
+ * @returns The name, or its API name.
+ */
+export const spelled = (name: string, naming: Naming): string =>
+  naming === "api" ? apiAttributeNameOf(name) : name;
+
 const fieldByNameAt = (
   definitions: DefinitionsAtR,
   classId: DefinitionId,
-  name: string
+  name: string,
+  naming: Naming = "definition"
 ): FieldAtR | undefined => {
   const lineage = new Set(lineageAt(definitions, classId));
 
-  return [...definitions.fields.values()].find(
-    (field) => field.live && field.name === name && lineage.has(field.classId)
+  const matches = [...definitions.fields.values()].filter(
+    (field) =>
+      field.live &&
+      lineage.has(field.classId) &&
+      spelled(field.name, naming) === name
   );
+
+  // Two fields sharing an API name (a clash older than the rule) resolve
+  // to neither, as at C (`ReadView.byApiName`).
+  return matches.length === 1 ? matches[0] : undefined;
+};
+
+/**
+ * The system field a request name denotes, if any: `class` has no API
+ * name (v2 shows it as `@type`).
+ *
+ * @param name - The request's name.
+ * @param naming - How the request spells names.
+ * @returns The system field's name.
+ */
+const systemNameOf = (
+  name: string,
+  naming: Naming
+): SystemFieldName | undefined =>
+  SYSTEM_FIELDS.find(
+    (system) =>
+      !(naming === "api" && system === "class") &&
+      spelled(system, naming) === name
+  );
+
+const isAuditReference = (name: string, naming: Naming): boolean => {
+  const system = systemNameOf(name, naming);
+
+  return system !== undefined && AUDIT_REFERENCES.has(system);
 };
 
 const targetOf = (field: FieldAtR | undefined): DefinitionId | undefined =>
@@ -231,6 +294,7 @@ const targetOf = (field: FieldAtR | undefined): DefinitionId | undefined =>
 
 /** Collects scope entries while names are resolved. */
 interface Collector {
+  readonly naming: Naming;
   readonly definitions: DefinitionsAtR;
   readonly endpoint: DefinitionId;
   readonly entries: ScopeEntry[];
@@ -266,8 +330,16 @@ const resolvePath = (
   const [name = "", targetName] = path;
   named(collector, collector.endpoint, name);
 
-  const field = fieldByNameAt(collector.definitions, collector.endpoint, name);
-  const target = AUDIT_REFERENCES.has(name) ? USER_CLASS_ID : targetOf(field);
+  const field = fieldByNameAt(
+    collector.definitions,
+    collector.endpoint,
+    name,
+    collector.naming
+  );
+
+  const target = isAuditReference(name, collector.naming)
+    ? USER_CLASS_ID
+    : targetOf(field);
 
   if (field !== undefined) {
     add(collector, field.id, collector.endpoint);
@@ -281,7 +353,8 @@ const resolvePath = (
     const targetField = fieldByNameAt(
       collector.definitions,
       target,
-      targetName
+      targetName,
+      collector.naming
     );
 
     if (targetField !== undefined) {
@@ -328,11 +401,18 @@ const addFilter = (collector: Collector, filter: string): void => {
     resolveName: (classId, name) => {
       named(collector, classId, name);
 
-      if (isSystemFieldName(name)) {
-        return fieldInfoOf(systemField(name, classId));
+      const system = systemNameOf(name, collector.naming);
+
+      if (system !== undefined) {
+        return fieldInfoOf(systemField(system, classId));
       }
 
-      const field = fieldByNameAt(collector.definitions, classId, name);
+      const field = fieldByNameAt(
+        collector.definitions,
+        classId,
+        name,
+        collector.naming
+      );
 
       return field === undefined ? undefined : infoOf(field);
     },
@@ -367,7 +447,7 @@ const addLabel = (
   reference: FieldAtR | undefined,
   name: string
 ) => {
-  const target = AUDIT_REFERENCES.has(name)
+  const target = isAuditReference(name, collector.naming)
     ? USER_CLASS_ID
     : targetOf(reference);
 
@@ -392,11 +472,13 @@ const addLabel = (
  *
  * @param definitions - The definitions at R.
  * @param endpoint - The endpoint's class.
+ * @param naming - How the request spells names.
  * @returns The names.
  */
 const defaultSelectionAt = (
   definitions: DefinitionsAtR,
-  endpoint: DefinitionId
+  endpoint: DefinitionId,
+  naming: Naming
 ): string[] => {
   const lineage = new Set(lineageAt(definitions, endpoint));
 
@@ -405,7 +487,7 @@ const defaultSelectionAt = (
       field.live && lineage.has(field.classId) ? [field.name] : []
     ),
     ...AUDIT_REFERENCES,
-  ];
+  ].map((name) => spelled(name, naming));
 };
 
 const splitList = (text: string): string[] =>
@@ -439,7 +521,12 @@ const addAllowedFor = (
   const name = allowedFor.slice(slash + 1);
   named(collector, source, name);
 
-  const field = fieldByNameAt(collector.definitions, source, name);
+  const field = fieldByNameAt(
+    collector.definitions,
+    source,
+    name,
+    collector.naming
+  );
 
   if (field !== undefined) {
     add(collector, field.id, source);
@@ -468,6 +555,7 @@ export const staleScope = (
     endpoint,
     entries: [],
     names: [],
+    naming: parameters.naming ?? "definition",
   };
 
   if (parameters.filter !== undefined) {
@@ -476,6 +564,10 @@ export const staleScope = (
 
   if (parameters.allowedFor !== undefined && classByName !== undefined) {
     addAllowedFor(collector, parameters.allowedFor, classByName);
+  }
+
+  for (const item of splitList(parameters.paths ?? "")) {
+    resolvePath(collector, item.split("."));
   }
 
   for (const item of splitList(parameters.sort ?? "")) {
@@ -492,9 +584,19 @@ export const staleScope = (
 
   const labels = parameters.labels === "true";
 
+  // Exclusions (v2 `fields=!name`) leave names out of the default
+  // selection at R; each is still a name the request used.
+  const excluded = new Set(splitList(parameters.excluded ?? ""));
+
+  for (const name of excluded) {
+    named(collector, endpoint, name);
+  }
+
   const selection =
     parameters.fields === undefined
-      ? defaultSelectionAt(definitions, endpoint)
+      ? defaultSelectionAt(definitions, endpoint, collector.naming).filter(
+          (name) => !excluded.has(name)
+        )
       : splitList(parameters.fields);
 
   for (const item of selection) {
@@ -510,5 +612,6 @@ export const staleScope = (
     classes: collector.classes,
     entries: collector.entries,
     names: collector.names,
+    naming: collector.naming,
   };
 };

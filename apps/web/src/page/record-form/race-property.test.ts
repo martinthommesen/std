@@ -95,7 +95,21 @@ const ticketAt = (step: Step): MetaTable => ({
   relatedLists: RELATED_LISTS[step],
 });
 
+const TICKETS: Readonly<Record<Step, MetaTable>> = {
+  5: ticketAt(5),
+  6: ticketAt(6),
+  7: ticketAt(7),
+  8: ticketAt(8),
+};
+
 const incidentAt = (step: Step): MetaTable => renamedFrom(step, incidentTable);
+
+const INCIDENTS: Readonly<Record<Step, MetaTable>> = {
+  5: incidentAt(5),
+  6: incidentAt(6),
+  7: incidentAt(7),
+  8: incidentAt(8),
+};
 
 const TASKS: MetaTable = { ...ticketTable, label: "Task", name: "help.task" };
 
@@ -117,6 +131,13 @@ const savedAt = (step: Step): RecordJson => ({
   ),
   version: 4,
 });
+
+const SAVED: Readonly<Record<Step, RecordJson>> = {
+  5: savedAt(5),
+  6: savedAt(6),
+  7: savedAt(7),
+  8: savedAt(8),
+};
 
 /** What can happen next. */
 type Event =
@@ -226,7 +247,7 @@ const start = (): Model =>
     }).model,
     Message.SucceededLoadFormMetadata({
       revision: REVISION_5,
-      table: ticketAt(5),
+      table: TICKETS[5],
     }),
     Message.SucceededLoadRecord({
       generation: 1,
@@ -236,7 +257,7 @@ const start = (): Model =>
     }),
     Message.SucceededLoadClassMetadata({
       revision: REVISION_5,
-      table: incidentAt(5),
+      table: INCIDENTS[5],
     }),
     Message.UpdatedText({ fieldId: TICKET_FIELDS.shortDescription, text: "A" }),
     Message.ClickedSave(),
@@ -275,6 +296,18 @@ const seeInstances = (run: Run, before: readonly RelatedList[]): Run => {
     nextInstance: run.nextInstance + fresh.length,
   };
 };
+
+const INITIAL_RUN: Run = seeInstances(
+  {
+    instances: new Map(),
+    maybeLastRead: Option.none(),
+    metadataRequests: [],
+    model: start(),
+    nextInstance: 0,
+    pages: [],
+  },
+  []
+);
 
 const seeCommand = (
   current: Run,
@@ -330,7 +363,7 @@ const messageOf = (run: Run, next: Event): Option.Option<Message> => {
       return Option.some(
         Message.SucceededLoadFormMetadata({
           revision: REVISIONS[next.step],
-          table: ticketAt(next.step),
+          table: TICKETS[next.step],
         })
       );
     }
@@ -339,7 +372,7 @@ const messageOf = (run: Run, next: Event): Option.Option<Message> => {
       return Option.some(
         Message.SucceededLoadClassMetadata({
           revision: REVISIONS[next.step],
-          table: incidentAt(next.step),
+          table: INCIDENTS[next.step],
         })
       );
     }
@@ -349,7 +382,7 @@ const messageOf = (run: Run, next: Event): Option.Option<Message> => {
         Message.SucceededSaveRecord({
           generation: 2,
           maybeRevision: Option.some(REVISION_5),
-          saved: savedAt(5),
+          saved: SAVED[5],
         })
       );
     }
@@ -362,7 +395,7 @@ const messageOf = (run: Run, next: Event): Option.Option<Message> => {
             generation: asked.generation,
             maybeRevision: Option.some(asked.revision),
             purpose: asked.purpose,
-            record: savedAt(stepOf(asked.revision)),
+            record: SAVED[stepOf(asked.revision)],
           })
         )
       );
@@ -445,16 +478,7 @@ const expectTakenByItsList = (
  * @param events - What happens, in order.
  */
 const runRace = (events: readonly Event[]): void => {
-  const first: Run = {
-    instances: new Map(),
-    maybeLastRead: Option.none(),
-    metadataRequests: [],
-    model: start(),
-    nextInstance: 0,
-    pages: [],
-  };
-
-  let run = seeInstances(first, []);
+  let run = INITIAL_RUN;
 
   for (const next of events) {
     const maybeMessage = messageOf(run, next);

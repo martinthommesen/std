@@ -30,6 +30,7 @@ import {
 } from "./models/common.ts";
 import type {
   LoadChunks,
+  LoadJob,
   ModelContext,
   StorageModel,
 } from "./storage-model.ts";
@@ -360,6 +361,24 @@ export interface DisposableRecord {
   readonly owner: string | null;
 }
 
+const jobsByTable = (
+  jobs: readonly LoadJob[]
+): readonly (readonly string[])[] => {
+  const byTable = new Map<string, string[]>();
+
+  for (const job of jobs) {
+    const group = byTable.get(job.table);
+
+    if (group === undefined) {
+      byTable.set(job.table, [job.text]);
+    } else {
+      group.push(job.text);
+    }
+  }
+
+  return [...byTable.values()];
+};
+
 /**
  * Adds records of one class that nothing references, set-based, through the
  * staging table and the model's own load SQL: the delete targets of W3,
@@ -402,14 +421,17 @@ export const addDisposableRecords = Effect.fn("bench.addDisposableRecords")(
       { concurrency: disposableConcurrency, discard: true }
     );
 
-    const loads = model
-      .loadJobs(ctx, { records: ranges, tickets: [] })
-      .map((job) => job.text);
-
-    yield* Effect.all(loads.map(exec), {
-      concurrency: disposableConcurrency,
-      discard: true,
-    });
+    // Unlike initial generation (which adds foreign keys after loading all
+    // tables), the schema here already has level foreign keys: load each
+    // table's chunks before moving down to its children.
+    for (const loads of jobsByTable(
+      model.loadJobs(ctx, { records: ranges, tickets: [] })
+    )) {
+      yield* Effect.all(loads.map(exec), {
+        concurrency: disposableConcurrency,
+        discard: true,
+      });
+    }
 
     return yield* query(
       {

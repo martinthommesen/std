@@ -128,13 +128,14 @@ const updateEach = Effect.fn("Rules.updateEach")(function* updateEach(
     if (Option.isSome(targetRecord) && !saved.has(targetRecord.value.id)) {
       saved.add(targetRecord.value.id);
 
+      // A rule's update evaluates no patch, so no patch test can fail.
       yield* updateRecord({
         body: bodyOf(input, action.values, source),
         cause: input.cause,
         endpointClassId,
         expectedVersion: targetRecord.value.version,
         id: targetRecord.value.id,
-      });
+      }).pipe(Effect.catchTag("PatchTestFailed", Effect.die));
     }
   }
 });

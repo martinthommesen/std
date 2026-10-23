@@ -39,6 +39,7 @@ import {
   checkUnscopedRevision,
   parseRequestRevision,
 } from "./stale-request.ts";
+import { v1Refusals } from "./v1-frozen.ts";
 
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/u;
 
@@ -230,7 +231,8 @@ export const SchemaChangeHandlers = HttpApiBuilder.group(
             };
           }).pipe(
             Effect.provide(services),
-            Effect.provideService(InstanceSettings, settings)
+            Effect.provideService(InstanceSettings, settings),
+            v1Refusals
           )
         )
         .handle("getChangeSet", ({ params, request }) =>

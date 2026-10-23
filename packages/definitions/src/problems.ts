@@ -19,6 +19,7 @@ import {
 export const ProblemCodeSchema = Literals([
   "invalidName",
   "duplicateName",
+  "apiNameClash",
   "duplicateId",
   "unknownReference",
   "wrongKind",

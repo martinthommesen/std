@@ -6,6 +6,18 @@ entries:
     decision0021: 14
     rows:
       - TMF621@5.0.1/OAS/query/filter-jsonpath
+      - TMF630@5.0.0/P1/13.3/keep-guideline-parameters-and-patterns
+      - TMF630@5.0.0/P1/4.4.1/prefer-jsonpath
+      - TMF630@5.0.0/P6/2.3.6/function-extensions-side-effect-free
+      - TMF630@5.0.0/P6/2.3.7/non-standard-function-extensions
+      - TMF630@5.0.0/P6/2.3.7/standard-function-extensions
+      - TMF630@5.0.0/P6/4/filter-and-basic-filter-conjunction
+      - TMF630@5.0.0/P6/4/filter-leading-root-optional
+      - TMF630@5.0.0/P6/4/filter-paginated-as-part1
+      - TMF630@5.0.0/P6/4/filter-parameter-name
+      - TMF630@5.0.0/P6/4/filter-returns-full-representation
+      - TMF630@5.0.0/P6/4/invalid-filter-400
+      - TMF630@5.0.0/P6/4/jsonpath-filter-optional
     requirement: "TMF630 part 6: JSONPath `filter` query parameter"
     reason: "The condition AST has no array semantics; refused with `InvalidFilter` `jsonPathNotSupported` (Contracts 10.3)."
     recommendation: accept
@@ -18,6 +30,11 @@ entries:
     decision0021: 15
     rows:
       - TMF621@5.0.1/OAS/media/patch-json-patch-query
+      - TMF630@5.0.0/P1/3.2/patch-json-patch-query
+      - TMF630@5.0.0/P5/4/jsonpath-syntax-error-400
+      - TMF630@5.0.0/P5/4/patch-query-failure-not-successful
+      - TMF630@5.0.0/P5/4/patch-query-stop-on-failure
+      - TMF630@5.0.0/P5/6/dot-notation-condition-must-be-true
     requirement: "TMF630 part 5: `application/json-patch-query+json`"
     reason: "Refused with 415 (Contracts 10.5)."
     recommendation: accept
@@ -31,6 +48,7 @@ entries:
     rows:
       - TMF621@5.0.1/CP/get/filter-sub-resources
       - TMF688@4.0.0/CP/get/filter-sub-resources
+      - TMF630@5.0.0/P1/4.4.1/array-any-element-match
     requirement: "Filters on array and json attributes of TMF resources"
     reason: "The condition AST has no any-element operator; refused with `attributeNotFilterable` (Contracts 11.1). TMF630 v5.0.0 Part 1 §4.4.1 p.68 defines dotted filters on arrays as testing every element; filtering on sub-resources is optional in the TMF621, TMF688, TMF632, TMF669 and TMF672 conformance profiles (decision 0026)."
     recommendation: accept
@@ -41,7 +59,11 @@ entries:
     date: 2026-10-22
   - id: E17-regex-exact-operators
     decision0021: 17
-    rows: []
+    rows:
+      - TMF630@5.0.0/P1/4.4/no-unconstrained-regex
+      - TMF630@5.0.0/P1/4.4/regex-operator
+      - TMF630@5.0.0/P1/4.4/regex-special-chars-encoded
+      - TMF630@5.0.0/P1/4.4/regex-tilde-delimiter
     requirement: "The `.regex` and `.exact` filter operators"
     reason: "The condition AST has no regular expressions (Contracts 10.3)."
     recommendation: accept
@@ -63,7 +85,8 @@ entries:
     date: 2026-10-22
   - id: E19-generic-api-extensions
     decision0021: 19
-    rows: []
+    rows:
+      - TMF630@5.0.0/v4.0.0-P2/2/extension-conformance
     requirement: "STD's extensions to the generic API: `withheld`, `condition`, `count=false`, refusal of unknown query parameters"
     reason: "They keep restricted fields visible as restricted and never widen a result silently (Contracts 10.2, 10.3)."
     recommendation: accept
@@ -183,4 +206,53 @@ entries:
     outcome: accepted
     decidedBy: Martin
     words: "M18: TMF routes answer only statuses the pinned document declares; 429 on hub registration is a recorded deviation (relayed by the coordinator)."
+    date: 2026-10-22
+  - id: X630-hidden-base-fields
+    rows:
+      - TMF630@5.0.0/v4.0.0-P2/2.1/extension-schema-includes-base
+    requirement: "TMF630 v4.0.0 Part 2 §2.1 p.11: an extension schema includes every attribute of its base schema"
+    reason: "A table's schema.json is the caller's: it names no field the caller cannot read, so a child class's schema can leave out an inherited field the caller may not read there (Contracts 3.4, 10.2)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "Where TMF630 would reveal what a caller may not see, information hiding wins, each with a narrow recorded exclusion."
+    date: 2026-10-22
+  - id: X630-referred-type-hidden
+    rows:
+      - TMF630@5.0.0/P7/1.4.2/entityref-id-referredtype-required
+      - TMF630@5.0.0/v4.0.0-P2/4/ref-requires-id-and-href
+      - TMF630@5.0.0/v4.0.0-P2/5/entity-ref-id-and-href
+    requirement: "TMF630 v5.0.0 Part 7 §1.4.2 p.14 (@referredType required) and v4.0.0 Part 2 §4 p.25, §5 p.32 (href required) on EntityRefs"
+    reason: "A reference to a target the caller cannot see, whose declared class the caller does not know, carries only id: @referredType and href would name a class the caller cannot know (Contracts 3.4, 10.2)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "Where TMF630 would reveal what a caller may not see, information hiding wins, each with a narrow recorded exclusion."
+    date: 2026-10-22
+  - id: X630-identical-404
+    rows:
+      - TMF630@5.0.0/P1/3.3.3/status-403-outside-scope
+      - TMF630@5.0.0/P1/3.3.3/status-410-gone
+    requirement: "TMF630 v5.0.0 Part 1 §3.3.3 pp.31-32: 403 outside the permitted scope and 410 for a resource no longer available (SHOULD)"
+    reason: "A table or record the caller cannot see, one that never existed and a deleted one answer the same 404, so the answer reveals nothing (Contracts 3.4, 3.8)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "Where TMF630 would reveal what a caller may not see, information hiding wins, each with a narrow recorded exclusion."
+    date: 2026-10-22
+  - id: X630-no-store
+    rows:
+      - TMF630@5.0.0/P1/1.5.1/caching-encouraged
+      - TMF630@5.0.0/P1/1.5.1/expiration-headers-on-get-200
+      - TMF630@5.0.0/P1/1.5.1/no-cache-only-when-necessary
+    requirement: "TMF630 v5.0.0 Part 1 §1.5.1 p.11: caching should be encouraged and GET 200 responses carry expiration headers (SHOULD)"
+    reason: "Every API response carries Cache-Control: no-store (decision 0018): a cookie-authenticated response must never be stored by a shared cache; Part 1 §1.5.1 permits discouraging caching."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "Where TMF630 would reveal what a caller may not see, information hiding wins, each with a narrow recorded exclusion."
     date: 2026-10-22

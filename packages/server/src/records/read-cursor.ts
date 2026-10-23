@@ -99,11 +99,14 @@ export const keyExpression = (
  *
  * @param keys - The compiled keys.
  * @param id - The `id` column.
+ * @param reversed - Whether `id` sorts descending: with every key's
+ *   direction flipped too, the exact reverse order (a `before` page).
  * @returns The order list.
  */
 export const orderBy = (
   keys: readonly CompiledKey[],
-  id: SqlFragment
+  id: SqlFragment,
+  reversed = false
 ): SqlFragment =>
   joinSql(
     [
@@ -112,7 +115,7 @@ export const orderBy = (
           ? sql`${expression} DESC NULLS FIRST`
           : sql`${expression} ASC NULLS LAST`
       ),
-      sql`${id} ASC`,
+      reversed ? sql`${id} DESC` : sql`${id} ASC`,
     ],
     ", "
   );
@@ -146,14 +149,18 @@ const equal = ({ expression, key }: CompiledKey, value: string | null) =>
  * @param keys - The compiled keys.
  * @param position - The cursor's values and id.
  * @param id - The `id` column.
+ * @param reversed - Whether the order is reversed (`orderBy`'s
+ *   `reversed`, keys flipped): then the rows strictly before it.
  * @returns The predicate.
  */
 export const cursorPredicate = (
   keys: readonly CompiledKey[],
   position: CursorPosition,
-  id: SqlFragment
+  id: SqlFragment,
+  reversed = false
 ): SqlFragment => {
   const disjuncts: SqlFragment[] = [];
+  const beyond = rawSql(reversed ? "<" : ">");
 
   for (let index = 0; index <= keys.length; index += 1) {
     const prefix = keys
@@ -164,7 +171,7 @@ export const cursorPredicate = (
 
     const last =
       key === undefined
-        ? sql`${id} > ${textParameter(position.id, "uuid")}`
+        ? sql`${id} ${beyond} ${textParameter(position.id, "uuid")}`
         : after(key, position.values[index] ?? null);
 
     if (last !== undefined) {

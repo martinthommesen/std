@@ -18,6 +18,7 @@ import { Effect, Predicate, Schedule, Schema } from "effect";
 import { chromium } from "playwright";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { createServer as createViteServer } from "vite";
+import type { ViteDevServer } from "vite";
 
 const APP_DIR = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -331,6 +332,32 @@ export const sameSitePages = (pages: Readonly<Record<string, string>>) =>
   ).pipe(Effect.map(loopbackOrigin));
 
 /**
+ * Warms the Vite dev server's client module graph and waits for its
+ * dependency pre-bundling to commit before the browser navigates to it, so
+ * the first `page.goto` does not race Playwright's navigation timeout
+ * against a cold transform and optimizer run.
+ *
+ * @param server - A listening Vite dev server.
+ * @returns Nothing, once the entry graph and optimized deps are ready.
+ */
+const warmViteServer = (server: ViteDevServer) =>
+  Effect.promise(async () => {
+    await server.warmupRequest("/@vite/client");
+    await server.warmupRequest("virtual:foldkit-devtools-overlay");
+    await server.warmupRequest("/src/entry.ts");
+    await server.waitForRequestsIdle();
+
+    const optimizer = server.environments.client.depsOptimizer;
+
+    await optimizer?.scanProcessing;
+    await Promise.all(
+      (optimizer?.metadata.depInfoList ?? []).flatMap((dep) =>
+        dep.processing === undefined ? [] : [dep.processing]
+      )
+    );
+  });
+
+/**
  * The Vite dev server with Foldkit DevTools and its MCP relay, proxying
  * `/api` to `std serve`; closed with the scope.
  *
@@ -362,6 +389,7 @@ export const viteDevServer = (apiOrigin: string) =>
         await server.close();
       })
   ).pipe(
+    Effect.tap(warmViteServer),
     Effect.flatMap((server) => {
       const [local] = server.resolvedUrls?.local ?? [];
 

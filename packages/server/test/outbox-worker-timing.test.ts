@@ -29,6 +29,7 @@ import type {
 import {
   serveSubscription,
   WorkerProbes,
+  WorkerSettings,
   workerPass,
 } from "../src/outbox/worker.ts";
 import type { WorkerProbesApi } from "../src/outbox/worker.ts";
@@ -43,13 +44,21 @@ import {
   workerTestLayer,
 } from "./worker-support.ts";
 
-/** The effect deadline of these tests; the lease is minutes longer. */
+/** The effect deadline of the overrun tests; the lease is minutes longer. */
 const EFFECT_TIMEOUT = Duration.millis(200);
 
 /** Longer than the deadline. */
 const STALL = Duration.millis(600);
 
 const POOL_SIZE = 4;
+
+// The default effect timeout for the configuration-change tests, which
+// commit a schema change set while the claim is held in `beforeAttempt`.
+const withDefaultEffectTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.provide(
+    effect,
+    WorkerSettings.layerOf({ leaseMargin: Duration.minutes(5) })
+  );
 
 const NO_PROBES: WorkerProbesApi = {
   beforeAttempt: () => Effect.void,
@@ -289,7 +298,7 @@ const disabledAfterClaim = Effect.gen(function* disabledAfterClaimTest() {
   assert.strictEqual(yield* workerPass(), 1);
   assert.lengthOf(yield* Ref.get(calls), 1);
   assert.strictEqual((yield* rowOf(subscription, id))?.attempts, 1);
-});
+}).pipe(withDefaultEffectTimeout);
 
 const identityAfterClaim = Effect.gen(function* identityAfterClaimTest() {
   const fixture = yield* AcmeFixture;
@@ -306,7 +315,7 @@ const identityAfterClaim = Effect.gen(function* identityAfterClaimTest() {
     delivery?.payload.visible,
     "filtered for Bob: the asset is not his"
   );
-});
+}).pipe(withDefaultEffectTimeout);
 
 describe("outbox-worker-timing", () => {
   it("stalls longer than the deadline", () => {

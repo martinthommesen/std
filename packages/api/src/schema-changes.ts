@@ -8,13 +8,13 @@ import { DefinitionProtected } from "@std/definitions/definition-protected";
 import { DependencyConflict } from "@std/definitions/dependency-conflict";
 import { OperationSchema } from "@std/definitions/operation";
 import { PermissionRequired } from "@std/definitions/permission-required";
-import { DefinitionInvalid } from "@std/definitions/problems";
 import { PurgeRefused } from "@std/definitions/purge-refused";
 import { UseRetireOrPurge } from "@std/definitions/use-retire-or-purge";
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 
 import { Authentication } from "./authentication.ts";
+import { DefinitionInvalidV1 } from "./errors/definition-invalid-v1.ts";
 import { ExistingDataViolates } from "./errors/existing-data-violates.ts";
 import { InvalidRequest } from "./errors/invalid-request.ts";
 import { InvalidSchemaRevision } from "./errors/invalid-schema-revision.ts";
@@ -93,7 +93,7 @@ export const SchemaUnavailable = Schema.Union([
  * 1.4 to 1.8): the definition model's refusals and the schema engine's.
  */
 export const changeSetErrors = [
-  DefinitionInvalid.pipe(HttpApiSchema.status(422)),
+  DefinitionInvalidV1.pipe(HttpApiSchema.status(422)),
   DependencyConflict.pipe(HttpApiSchema.status(409)),
   UseRetireOrPurge.pipe(HttpApiSchema.status(409)),
   PurgeRefused.pipe(HttpApiSchema.status(409)),

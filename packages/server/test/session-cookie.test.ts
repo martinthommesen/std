@@ -27,7 +27,22 @@ const COOKIE_SIGN_IN = "/api/v1/auth/cookie-sign-in";
 
 const ASSETS = listPath("acme.asset");
 
+const V2_SESSION = "/api/v2/session";
+
+const V2_CURRENT = "/api/v2/session/current";
+
 const WEB = { "std-client": "web" };
+
+/**
+ * The Set-Cookie lines a response sends for the session cookie.
+ *
+ * @param response - The response.
+ * @returns The lines.
+ */
+const sessionLines = (response: TestResponse): readonly string[] =>
+  response.headers
+    .getSetCookie()
+    .filter((line) => line.startsWith(`${SESSION_COOKIE}=`));
 
 /**
  * The attributes of the session cookie a response sets, lower-cased.
@@ -38,7 +53,11 @@ const WEB = { "std-client": "web" };
 const cookieAttributes = (response: TestResponse): readonly string[] => {
   const line = response.headers
     .getSetCookie()
-    .find((cookie) => cookie.startsWith(`${SESSION_COOKIE}=`));
+    .find(
+      (cookie) =>
+        cookie.startsWith(`${SESSION_COOKIE}=`) &&
+        !cookie.includes("Path=/api/v1;")
+    );
 
   return (line ?? "")
     .split(";")
@@ -118,13 +137,13 @@ describe("session-cookie", () => {
             cookieAttributes(remote).filter(
               (attribute) => attribute !== expires
             ),
-            ["httponly", "path=/api/v1", "samesite=strict", "secure"]
+            ["httponly", "path=/api", "samesite=strict", "secure"]
           );
           assert.deepStrictEqual(
             cookieAttributes(local).filter(
               (attribute) => !attribute.startsWith("expires=")
             ),
-            ["httponly", "path=/api/v1", "samesite=strict"]
+            ["httponly", "path=/api", "samesite=strict"]
           );
 
           // The same token works as a bearer token: one kind of session.
@@ -247,7 +266,7 @@ describe("session-cookie", () => {
           assert.strictEqual(out.status, 204);
           assert.strictEqual(setCookieValue(out, SESSION_COOKIE), "");
           assert.include(cookieAttributes(out), "max-age=0");
-          assert.include(cookieAttributes(out), "path=/api/v1");
+          assert.include(cookieAttributes(out), "path=/api");
 
           const after = yield* http.get(ME, { cookie });
 
@@ -257,7 +276,9 @@ describe("session-cookie", () => {
           const bearerOut = yield* http.request("POST", SIGN_OUT, { token });
 
           assert.strictEqual(bearerOut.status, 204);
-          assert.deepStrictEqual(bearerOut.headers.getSetCookie(), []);
+          // Only the legacy /api/v1 expiry; the /api cookie is left alone.
+          assert.isUndefined(setCookieValue(bearerOut, SESSION_COOKIE));
+          assert.strictEqual(sessionLines(bearerOut).length, 1);
         })
     );
 
@@ -284,6 +305,120 @@ describe("session-cookie", () => {
           const viaCookie = yield* http.get(ME, { cookie });
 
           assert.strictEqual(objectOf(viaCookie.json).userId, bob.id);
+        })
+    );
+
+    dbTest.effect(
+      "sign-in and sign-out also expire the legacy /api/v1 cookie",
+      () =>
+        Effect.gen(function* legacyCookie() {
+          const http = yield* TestHttpClient;
+
+          const v1 = yield* http.request("POST", COOKIE_SIGN_IN, {
+            body: { login: "bob", password: "bob-password" },
+            headers: WEB,
+          });
+
+          const v2 = yield* http.request("POST", V2_SESSION, {
+            body: {
+              login: "bob",
+              password: "bob-password",
+              tokenDelivery: "cookie",
+            },
+          });
+
+          for (const response of [v1, v2]) {
+            assert.strictEqual(
+              sessionLines(response).length,
+              2,
+              String(response.headers.getSetCookie())
+            );
+            assert.isTrue(
+              sessionLines(response).some(
+                (line) =>
+                  line.includes("Path=/api;") && !line.includes("Max-Age=0")
+              )
+            );
+            assert.isTrue(
+              sessionLines(response).some(
+                (line) =>
+                  line.includes("Path=/api/v1;") &&
+                  line.includes("Max-Age=0") &&
+                  line.includes("HttpOnly") &&
+                  line.includes("SameSite=Strict")
+              )
+            );
+          }
+
+          const cookie1 = yield* http.cookieSignIn("alice", "alice-password");
+
+          const out1 = yield* http.request("POST", SIGN_OUT, {
+            cookie: cookie1,
+          });
+
+          const cookie2 = yield* http.cookieSignIn("alice", "alice-password");
+
+          const out2 = yield* http.request("DELETE", V2_CURRENT, {
+            cookie: cookie2,
+          });
+
+          const bearer = yield* http.signIn("alice", "alice-password");
+
+          const out3 = yield* http.request("POST", SIGN_OUT, {
+            token: bearer,
+          });
+
+          for (const response of [out1, out2]) {
+            const lines = sessionLines(response);
+
+            assert.strictEqual(lines.length, 2, lines.join("\n"));
+            assert.isTrue(lines.every((line) => line.includes("Max-Age=0")));
+            assert.isTrue(lines.some((line) => line.includes("Path=/api;")));
+            assert.isTrue(lines.some((line) => line.includes("Path=/api/v1;")));
+          }
+
+          // A bearer sign-out leaves the /api cookie alone but still
+          // expires the legacy one.
+          const bearerLines = sessionLines(out3);
+
+          assert.strictEqual(bearerLines.length, 1);
+          assert.include(bearerLines[0] ?? "", "Path=/api/v1;");
+        })
+    );
+
+    dbTest.effect(
+      "a request with two std_session cookies is not authenticated by either",
+      () =>
+        Effect.gen(function* ambiguousCookies() {
+          const http = yield* TestHttpClient;
+          const alice = yield* http.cookieSignIn("alice", "alice-password");
+          const bob = yield* http.cookieSignIn("bob", "bob-password");
+          const bearer = yield* http.signIn("bob", "bob-password");
+
+          const headers = {
+            ...WEB,
+            cookie: `${SESSION_COOKIE}=${alice}; ${SESSION_COOKIE}=${bob}`,
+          };
+
+          for (const path of [ME, V2_CURRENT]) {
+            const refused = yield* http.get(path, { headers });
+
+            assert.strictEqual(refused.status, 401, path);
+
+            const lone = yield* http.get(path, {
+              headers: { ...WEB, cookie: `${SESSION_COOKIE}=${alice}` },
+            });
+
+            assert.strictEqual(lone.status, 200, path);
+
+            const viaBearer = yield* http.get(path, {
+              headers,
+              token: bearer,
+            });
+
+            assert.strictEqual(viaBearer.status, 200, path);
+            assert.strictEqual(objectOf(viaBearer.json).name, "Bob");
+          }
         })
     );
   });
