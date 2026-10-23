@@ -2,7 +2,9 @@
  * Who a rule's nested saves run as (Contracts 4.1, 4.10, decision 0022):
  *
  * - an `after` rule without `runAs`: the acting user, so access rules
- *   apply to its writes exactly as to the user's own;
+ *   apply to its writes exactly as to the user's own. Local rules under a
+ *   reserved service identity reload the originating human's current roles;
+ *   a system-only chain without that origin is refused;
  * - an `after` rule with `runAs`, or an `afterCommit` rule (its
  *   subscription's identity): that user, with the roles they hold now.
  *   This needs the rule's author to hold `rules.run_as`: definition
@@ -19,7 +21,10 @@ import type { RecordRuleDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import { hasPermission } from "@std/definitions/requester";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { RULES_RUN_AS_PERMISSION_ID } from "@std/definitions/well-known";
+import {
+  RULES_RUN_AS_PERMISSION_ID,
+  SERVICE_USER_IDS,
+} from "@std/definitions/well-known";
 import { Effect } from "effect";
 
 import { loadActor } from "../auth/actor.ts";
@@ -65,6 +70,10 @@ export const checkRunAsAuthor = Effect.fn("Rules.checkRunAsAuthor")(
       return yield* Effect.void;
     }
 
+    if (SERVICE_USER_IDS.has(identityId)) {
+      return yield* new NotAllowed();
+    }
+
     const author = yield* authorOf(rule);
 
     // Running as oneself needs no permission, as when the rule was written.
@@ -98,6 +107,21 @@ export const ruleActor = Effect.fn("Rules.actor")(function* ruleActor(
   acting: ActingUser
 ) {
   if (identityId === null) {
+    if (rule.owner.layer === "local" && SERVICE_USER_IDS.has(acting.userId)) {
+      if (acting.origin === undefined) {
+        yield* Effect.logWarning(
+          `Local rule ${rule.id} cannot run under reserved identity ${acting.userId} without a human origin`
+        );
+
+        return yield* new NotAllowed();
+      }
+
+      return {
+        ...(yield* loadActor(snapshot, acting.origin.userId)),
+        origin: acting.origin,
+      };
+    }
+
     return acting;
   }
 
@@ -105,5 +129,11 @@ export const ruleActor = Effect.fn("Rules.actor")(function* ruleActor(
 
   const actor: ActingUser = yield* loadActor(snapshot, identityId);
 
-  return actor;
+  const origin =
+    acting.origin ??
+    (SERVICE_USER_IDS.has(acting.userId)
+      ? undefined
+      : { userId: acting.userId });
+
+  return origin === undefined ? actor : { ...actor, origin };
 });

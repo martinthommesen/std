@@ -14,7 +14,8 @@
  *   transaction. Deactivating a user deletes their sessions in the same
  *   transaction (a trigger, `session-revocation.ts`), and a session whose
  *   user is inactive never authenticates.
- * - The system user acts only for bootstrap and definition loading
+ * - Reserved service identities never authenticate. The system user acts
+ *   only for bootstrap and definition loading
  *   (Contracts 3.1): it never signs in and no session authenticates as it,
  *   even if someone activates it and gives it a password. Its refusals are
  *   the same `InvalidCredentials` and `Unauthenticated` as anyone's.
@@ -26,7 +27,7 @@ import { Unauthenticated } from "@std/api/errors/unauthenticated";
 import { rawSql, sql, textParameter } from "@std/conditions/sql-fragment";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { SYSTEM_USER_ID } from "@std/definitions/well-known";
+import { SERVICE_USER_IDS } from "@std/definitions/well-known";
 import { formatDateTime } from "@std/values/date-time";
 import { textKey } from "@std/values/fold";
 import type { Plaintext } from "@std/values/write-only";
@@ -133,7 +134,7 @@ FOR SHARE OF "u"`
   const verified = yield* verifyPassword(password, user?.password ?? null);
 
   const userId = user?.id ?? null;
-  const mayActOverHttp = userId !== null && userId !== SYSTEM_USER_ID;
+  const mayActOverHttp = userId !== null && !SERVICE_USER_IDS.has(userId);
 
   if (!(mayActOverHttp && user?.active === "true" && verified)) {
     return yield* new InvalidCredentials();
@@ -180,14 +181,17 @@ export const authenticate = Effect.fn("Sessions.authenticate")(
       sql`SELECT "s"."user_id"::text AS "user_id", "ur".${rawSql(quoteIdent(tables.userRoleRole))}::text AS "role_id"
 FROM "core"."session" AS "s"
 JOIN ${tables.user} AS "u" ON "u"."id" = "s"."user_id" AND "u".${rawSql(quoteIdent(tables.active))}
-  AND "u"."id" <> ${textParameter(SYSTEM_USER_ID, "uuid")}
 LEFT JOIN ${tables.userRole} AS "ur" ON "ur".${rawSql(quoteIdent(tables.userRoleUser))} = "u"."id"
 WHERE "s"."token_hash" = ${tokenHashParameter(text)} AND "s"."expires_at" > now()`
     );
 
     const userId = rows[0]?.user_id;
 
-    if (userId === undefined || userId === null) {
+    if (
+      userId === undefined ||
+      userId === null ||
+      SERVICE_USER_IDS.has(userId)
+    ) {
       return yield* new Unauthenticated();
     }
 

@@ -33,17 +33,19 @@ import type {
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
   BUILT_IN_ROLE_IDS,
+  HELPDESK_CASCADE_USER_ID,
+  HELPDESK_CASCADE_ROLE_ID,
   PERMISSION_IDS,
   SYSTEM_USER_ID,
 } from "@std/definitions/well-known";
-import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
-import { Effect, Result } from "effect";
+import { Effect, Logger, Result } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import { Actor } from "../src/auth/actor.ts";
+import { Actor, loadActor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { ruleActor } from "../src/hooks/rule-identity.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
 import type { SaveHooksApi } from "../src/records/save-hooks.ts";
 import {
@@ -56,13 +58,9 @@ import {
   TABLE as AGGREGATE_TABLE,
   update as updateAggregate,
 } from "./aggregates-support.ts";
-import {
-  readsTestLayer,
-  recordOf,
-  recordPath,
-  tagOf,
-} from "./reads-support.ts";
+import { codeOf, readsTestLayer } from "./reads-support.ts";
 import { ACME_FIELDS, actorOf, USERS } from "./records-support.ts";
+import { postChangeSet } from "./schema-paths-support.ts";
 import {
   ACME,
   addField,
@@ -72,9 +70,16 @@ import {
   freshId,
   values,
 } from "./schema-support.ts";
-import { LAPTOP, MONITOR, patch, versionOf } from "./writes-support.ts";
+import {
+  LAPTOP,
+  MONITOR,
+  patch,
+  remove,
+  savedOf,
+  versionOf,
+} from "./writes-support.ts";
 
-const SYSTEM: Requester = { roleIds: [], userId: SYSTEM_USER_ID };
+const LOCAL_REQUESTER: Requester = { roleIds: [], userId: USERS.alice };
 
 /**
  * A part class of acme.asset (Contracts 4.9), created in the same change
@@ -181,7 +186,7 @@ const carrier = (id: string, extra: Record<string, JsonValue> = {}) =>
       deadLetter: "block",
       enabled: true,
       id,
-      identityId: SYSTEM_USER_ID,
+      identityId: USERS.alice,
       kind: "subscription",
       maxAttempts: 10,
       name: `carrier_${id.slice(0, 8)}`,
@@ -234,7 +239,7 @@ const ruleIn = (slot: Slot, actions: readonly RuleAction[]) => {
 const outcomeOf = (
   snapshot: ConfigSnapshot,
   operations: readonly Operation[],
-  requester: Requester = SYSTEM
+  requester: Requester = LOCAL_REQUESTER
 ): readonly string[] => {
   const applied = applyOperations(
     snapshot,
@@ -289,19 +294,6 @@ const dockLaptops = (prefix: string, runAsId: string | null) =>
     ruleKind: null,
     runAsId,
   });
-
-const postChangeSet = Effect.fn("RuleActions.postChangeSet")(function* post(
-  token: string,
-  operations: readonly Operation[]
-) {
-  const http = yield* TestHttpClient;
-  const parsed = parseJson(JSON.stringify({ operations }));
-
-  return yield* http.request("POST", "/api/v1/schema/change-sets", {
-    body: parsed.ok ? parsed.value : null,
-    token,
-  });
-});
 
 const statusOf = (id: string) =>
   values(
@@ -417,7 +409,7 @@ describe("record-rule-actions", () => {
               addRecordRule(ACME.asset, {
                 actions: set,
                 ruleKind: "derive",
-                runAsId: SYSTEM_USER_ID,
+                runAsId: USERS.alice,
               }).op,
             ],
           ],
@@ -429,7 +421,7 @@ describe("record-rule-actions", () => {
                 actions: each,
                 phase: "afterCommit",
                 ruleKind: null,
-                runAsId: SYSTEM_USER_ID,
+                runAsId: USERS.alice,
                 subscriptionId: subscription,
               }).op,
             ],
@@ -921,11 +913,11 @@ describe("record-rule-actions", () => {
           const byRule = yield* renameMonitor(bob, M, "sync-1");
 
           assert.deepStrictEqual(
-            [byRule.status, yield* tagOf(byRule)],
-            [own.status, yield* tagOf(own)]
+            [byRule.status, yield* codeOf(byRule)],
+            [own.status, yield* codeOf(own)]
           );
           assert.deepStrictEqual(
-            [own.status, yield* tagOf(own)],
+            [own.status, yield* codeOf(own)],
             [403, "NotAllowed"]
           );
           assert.strictEqual(yield* versionOf(M), monitorBefore);
@@ -936,6 +928,213 @@ describe("record-rule-actions", () => {
 
           assert.strictEqual(allowed.status, 200, allowed.text);
           assert.strictEqual(yield* statusOf(K), "docked");
+        })
+    );
+
+    dbTest.effect(
+      "changing ordinary run identities to reserved ones is refused while unrelated legacy edits remain valid",
+      () =>
+        Effect.gen(function* changedReservedIdentities() {
+          const fixture = yield* AcmeFixture;
+          const current = yield* (yield* Catalog).refresh;
+
+          const requester: Requester = {
+            roleIds: [BUILT_IN_ROLE_IDS.admin],
+            userId: fixture.alice.id,
+          };
+
+          const permissionSnapshot = current.with(current, [
+            {
+              id: freshId(),
+              kind: "grant",
+              owner: { layer: "local" },
+              permissionId: PERMISSION_IDS["rules.run_as"],
+              protected: false,
+              roleId: BUILT_IN_ROLE_IDS.admin,
+              state: "active",
+              version: 1,
+            },
+          ]);
+
+          const rule = dockLaptops("legacy", fixture.alice.id);
+          const subscriptionId = freshId();
+
+          const created = applyOperations(
+            permissionSnapshot,
+            [rule.op, carrier(subscriptionId)],
+            { changeSetId: freshId(), revision: current.revision + 1 },
+            { origin: LOCAL_ORIGIN, requester }
+          );
+
+          assert.isTrue(Result.isSuccess(created));
+
+          if (Result.isFailure(created)) {
+            return;
+          }
+
+          const { after: snapshot } = created.success;
+          const ordinaryRule = snapshot.get(rule.id);
+          const ordinarySubscription = snapshot.get(subscriptionId);
+          assert.isDefined(ordinaryRule);
+          assert.isDefined(ordinarySubscription);
+
+          if (
+            ordinaryRule?.kind !== "recordRule" ||
+            ordinarySubscription?.kind !== "subscription"
+          ) {
+            return;
+          }
+
+          for (const identityId of [SYSTEM_USER_ID, HELPDESK_CASCADE_USER_ID]) {
+            assert.deepStrictEqual(
+              outcomeOf(
+                snapshot,
+                [
+                  {
+                    changes: { runAsId: identityId },
+                    id: rule.id,
+                    op: "update",
+                    version: 1,
+                  },
+                ],
+                requester
+              ),
+              ["invalidRecordRule"]
+            );
+            assert.deepStrictEqual(
+              outcomeOf(
+                snapshot,
+                [
+                  {
+                    changes: { identityId },
+                    id: subscriptionId,
+                    op: "update",
+                    version: 1,
+                  },
+                ],
+                requester
+              ),
+              ["invalidSubscription"]
+            );
+
+            const legacy = snapshot.with(snapshot, [
+              { ...ordinaryRule, runAsId: identityId },
+              { ...ordinarySubscription, identityId },
+            ]);
+
+            assert.deepStrictEqual(
+              outcomeOf(
+                legacy,
+                [
+                  {
+                    changes: { description: "Legacy rule edit" },
+                    id: rule.id,
+                    op: "update",
+                    version: 1,
+                  },
+                  {
+                    changes: { maxAttempts: 11 },
+                    id: subscriptionId,
+                    op: "update",
+                    version: 1,
+                  },
+                ],
+                requester
+              ),
+              []
+            );
+          }
+        })
+    );
+
+    dbTest.effect(
+      "implicit local rules reload origin roles; without origin they are NotAllowed and log the rule ID",
+      () =>
+        Effect.gen(function* noHumanOrigin() {
+          const current = yield* (yield* Catalog).refresh;
+          const draft = dockLaptops("no_origin", null);
+
+          const created = applyOperations(
+            current,
+            [draft.op],
+            { changeSetId: freshId(), revision: current.revision + 1 },
+            { origin: LOCAL_ORIGIN, requester: LOCAL_REQUESTER }
+          );
+
+          assert.isTrue(Result.isSuccess(created));
+
+          if (Result.isFailure(created)) {
+            return;
+          }
+
+          const rule = created.success.after.get(draft.id);
+          assert.isDefined(rule);
+
+          if (rule?.kind !== "recordRule") {
+            return;
+          }
+
+          const logs: string[] = [];
+
+          const logger = Logger.make(({ message }) => {
+            logs.push(String(message));
+          });
+
+          for (const userId of [SYSTEM_USER_ID, HELPDESK_CASCADE_USER_ID]) {
+            const refused = yield* ruleActor(current, rule, null, {
+              roleIds: [],
+              userId,
+            }).pipe(Effect.flip, Effect.provide(Logger.layer([logger])));
+
+            assert.strictEqual(refused._tag, "NotAllowed");
+          }
+
+          assert.lengthOf(logs, 2);
+
+          for (const message of logs) {
+            assert.include(message, rule.id);
+            assert.include(message, "without a human origin");
+          }
+
+          const fixture = yield* AcmeFixture;
+          const origin = { userId: fixture.bob.id };
+
+          const acting = {
+            origin,
+            roleIds: [HELPDESK_CASCADE_ROLE_ID],
+            userId: HELPDESK_CASCADE_USER_ID,
+          };
+
+          const reloaded = yield* ruleActor(current, rule, null, acting);
+          assert.deepStrictEqual(reloaded, {
+            ...(yield* loadActor(current, fixture.bob.id)),
+            origin,
+          });
+          assert.notInclude(reloaded.roleIds, HELPDESK_CASCADE_ROLE_ID);
+          yield* values(
+            'UPDATE core."user" SET active = false WHERE id = $1::uuid RETURNING id::text AS value',
+            [fixture.bob.id]
+          );
+
+          const deactivated = yield* ruleActor(
+            current,
+            rule,
+            null,
+            acting
+          ).pipe(
+            Effect.ensuring(
+              values(
+                'UPDATE core."user" SET active = true WHERE id = $1::uuid RETURNING id::text AS value',
+                [fixture.bob.id]
+              ).pipe(Effect.orDie)
+            )
+          );
+
+          assert.deepStrictEqual(deactivated, {
+            origin,
+            roleIds: [],
+            userId: fixture.bob.id,
+          });
         })
     );
 
@@ -954,7 +1153,7 @@ describe("record-rule-actions", () => {
           const refused = yield* postChangeSet(ada, [rule.op]);
 
           assert.deepStrictEqual(
-            [refused.status, yield* tagOf(refused)],
+            [refused.status, yield* codeOf(refused)],
             [403, "PermissionRequired"]
           );
 
@@ -991,11 +1190,39 @@ describe("record-rule-actions", () => {
 
           const assignment = yield* http.request(
             "POST",
-            "/api/v1/tables/core.user_role/records",
+            "/api/v1/coreUserRole",
             { body: { role, user: fixture.admin.id }, token: ada }
           );
 
           assert.strictEqual(assignment.status, 201, assignment.text);
+
+          for (const identityId of [SYSTEM_USER_ID, HELPDESK_CASCADE_USER_ID]) {
+            const reservedRule = yield* postChangeSet(ada, [
+              dockLaptops("reserved", identityId).op,
+            ]);
+
+            assert.strictEqual(reservedRule.status, 422, reservedRule.text);
+            assert.include(
+              reservedRule.text,
+              "Local rules cannot run as reserved service identity"
+            );
+            assert.include(reservedRule.text, identityId);
+
+            const reservedSubscription = yield* postChangeSet(ada, [
+              carrier(freshId(), { identityId }),
+            ]);
+
+            assert.strictEqual(
+              reservedSubscription.status,
+              422,
+              reservedSubscription.text
+            );
+            assert.include(
+              reservedSubscription.text,
+              "Local subscriptions cannot run as reserved service identity"
+            );
+            assert.include(reservedSubscription.text, identityId);
+          }
 
           const written = yield* postChangeSet(ada, [rule.op]);
 
@@ -1017,21 +1244,22 @@ describe("record-rule-actions", () => {
           );
 
           // Without the permission the rule fails closed.
-          const held = yield* recordOf(assignment);
+          const held = yield* savedOf(assignment);
 
-          const revoked = yield* http.request(
-            "DELETE",
-            recordPath("core.user_role", held.id),
-            { headers: { "if-match": `"${held.version}"` }, token: ada }
+          const revoked = yield* remove(
+            ada,
+            "core.user_role",
+            held.id,
+            held.version
           );
 
-          assert.strictEqual(revoked.status, 200, revoked.text);
+          assert.strictEqual(revoked.status, 204, revoked.text);
 
           const before = yield* versionOf(M);
           const failed = yield* renameMonitor(bob, M, "runas-2");
 
           assert.deepStrictEqual(
-            [failed.status, yield* tagOf(failed)],
+            [failed.status, yield* codeOf(failed)],
             [403, "NotAllowed"]
           );
           assert.strictEqual(yield* versionOf(M), before);

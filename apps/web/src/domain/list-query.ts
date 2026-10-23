@@ -12,10 +12,10 @@
 import { ExprSchema } from "@std/conditions/ast";
 import type { Expr } from "@std/conditions/ast";
 import { printCondition } from "@std/conditions/syntax-print";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
 import type { FieldKind } from "@std/values/field-type";
 import { Option, Result, Schema, pipe } from "effect";
 
+import type { MetaField, MetaTable } from "./metadata.ts";
 import { fieldById, tableClassView } from "./table-view.ts";
 import type { TablesByName } from "./table-view.ts";
 
@@ -218,7 +218,7 @@ export const nextSort = (
 };
 
 /**
- * The list request's `sort` parameter: names, `-` for descending.
+ * The list request's `sort` parameter: API names, `-` for descending.
  *
  * @param sort - The keys.
  * @param table - The table's metadata.
@@ -231,7 +231,7 @@ export const sortParameter = (
   const names = sort.flatMap((key) =>
     Option.match(fieldById(table, key.fieldId), {
       onNone: () => [],
-      onSome: (field) => [`${key.isDescending ? "-" : ""}${field.name}`],
+      onSome: (field) => [`${key.isDescending ? "-" : ""}${field.apiName}`],
     })
   );
 
@@ -239,8 +239,8 @@ export const sortParameter = (
 };
 
 /**
- * The list request's `filter` parameter: the condition in the text syntax,
- * with field names.
+ * The list request's `condition` parameter: the condition in the text
+ * syntax, with API names (Contracts 10.3).
  *
  * @param condition - The condition.
  * @param table - The table it applies to.

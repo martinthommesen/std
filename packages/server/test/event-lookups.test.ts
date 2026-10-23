@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it } from "@effect/vitest";
-import { GENERIC_API_PREFIX } from "@std/api/v2/paths";
-import { TMF688_PREFIX } from "@std/api/v2/tmf688";
+import { API_PREFIX } from "@std/api/api";
+import { TMF688_PREFIX } from "@std/api/tmf688";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
@@ -15,20 +15,20 @@ import { createEvent } from "../src/events/tmf688-resources.ts";
 import { runDataMigrations } from "../src/platform/data-migrations.ts";
 import { DataMigrationFailed } from "../src/platform/migration.ts";
 import { PLATFORM_MIGRATIONS } from "../src/platform/migrations.ts";
-import { migration0021 } from "../src/platform/migrations/0021-event-lookup-backfill.ts";
+import { migration0022 } from "../src/platform/migrations/0022-event-lookup-backfill.ts";
 import { createRecord } from "../src/records/save-pipeline.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { asObject, textOf, apiCallers } from "./api-support.ts";
 import { hubTestLayer } from "./hub-support.ts";
-import { asObject, textOf, v2Callers } from "./v2-support.ts";
 import { actingAs, asLoadedUser } from "./worker-support.ts";
 
 const test = it.effect;
 
 const topicFixture = Effect.gen(function* topicFixture() {
   const http = yield* TestHttpClient;
-  const { admin } = yield* v2Callers;
+  const { admin } = yield* apiCallers;
 
   const topic = yield* http.request("POST", `${TMF688_PREFIX}/topic`, {
     ...admin,
@@ -92,7 +92,7 @@ describe("event lookups during rollout", () => {
         201
       );
       assert.strictEqual(
-        (yield* http.request("POST", `${GENERIC_API_PREFIX}/coreEvent`, {
+        (yield* http.request("POST", `${API_PREFIX}/coreEvent`, {
           ...admin,
           body: { payload: bodyOf("generic"), topic: { id } },
         })).status,
@@ -107,7 +107,7 @@ describe("event lookups during rollout", () => {
       }
 
       yield* sql`DELETE FROM core.client_event WHERE topic_id = ${id}::uuid`;
-      yield* sql`DELETE FROM core.platform_migration WHERE id = 21`;
+      yield* sql`DELETE FROM core.platform_migration WHERE id = 22`;
 
       for (const eventId of ["tmf", "generic"]) {
         const response = yield* http.get(`${path}/${eventId}`, admin);
@@ -158,14 +158,14 @@ describe("event lookups during rollout", () => {
       assert.strictEqual(after?.total, before?.total);
     }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
 
-  test("0021 counts both tables, commits bounded phases, resumes after a failed batch and reaches zero", () =>
+  test("0022 counts both tables, commits bounded phases, resumes after a failed batch and reaches zero", () =>
     Effect.gen(function* resumableLookupBackfill() {
       const sql = yield* SqlClient.SqlClient;
       const log = yield* StatementLog;
       const { request } = yield* Transactions;
       const fixture = yield* AcmeFixture;
 
-      const remaining = request(migration0021.remaining).pipe(
+      const remaining = request(migration0022.remaining).pipe(
         actingAs(fixture.admin.id)
       );
 
@@ -181,11 +181,11 @@ describe("event lookups during rollout", () => {
       yield* sql`DELETE FROM core.resource_event WHERE change_id IN (SELECT id FROM core.change WHERE record_id IN (SELECT id FROM core.event WHERE topic = ${id}::uuid))`;
       yield* sql`DELETE FROM core.client_event WHERE topic_id = ${id}::uuid`;
       assert.strictEqual(yield* remaining, 10);
-      yield* sql`DELETE FROM core.platform_migration WHERE id = 21`;
+      yield* sql`DELETE FROM core.platform_migration WHERE id = 22`;
       let failed = false;
 
       const interrupting = {
-        ...migration0021,
+        ...migration0022,
         batch: Effect.fn("Test.interruptedLookupBatch")(function* batch(
           after: string | null,
           size: number
@@ -198,24 +198,24 @@ describe("event lookups during rollout", () => {
             failed = true;
 
             return yield* new DataMigrationFailed({
-              id: 21,
+              id: 22,
               migration: "event-lookup-backfill",
               reason: "deterministic interruption",
             });
           }
 
-          return yield* migration0021.batch(after, size);
+          return yield* migration0022.batch(after, size);
         }),
       };
 
       const migrations = PLATFORM_MIGRATIONS.map((migration) =>
-        migration.id === 21 ? interrupting : migration
+        migration.id === 22 ? interrupting : migration
       );
 
       yield* runDataMigrations({ batchSize: 2, migrations }).pipe(Effect.flip);
 
       const [stopped] =
-        yield* sql`SELECT state, progress->>'after' AS after FROM core.platform_migration WHERE id = 21`.pipe(
+        yield* sql`SELECT state, progress->>'after' AS after FROM core.platform_migration WHERE id = 22`.pipe(
           Effect.flatMap(
             decodeRows(
               Schema.Struct({ after: Schema.String, state: Schema.String })

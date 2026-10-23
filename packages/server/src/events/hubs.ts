@@ -23,8 +23,10 @@ import { Actor, loadActor } from "../auth/actor.ts";
 import type { ActingUser } from "../auth/actor.ts";
 import { authenticate } from "../auth/sessions.ts";
 import { Catalog } from "../catalog/catalog.ts";
-import { parseListQuery } from "../http/v2/query.ts";
-import { collectionNameOf } from "../http/v2/table-names.ts";
+import { parseListQuery } from "../http/api/query.ts";
+import { collectionNameOf } from "../http/api/table-names.ts";
+import type { MappedResource } from "../http/tmf/context.ts";
+import { parseTmfListQuery } from "../http/tmf/query.ts";
 import { uuidv7At } from "../records/change-entry.ts";
 import { currentReadScope } from "../records/read-records.ts";
 import { applyChangeSet } from "../schema/change-set.ts";
@@ -106,7 +108,8 @@ export const prepareRegistration = Effect.fn("Hubs.prepare")(
     target: HubTarget,
     callback: string,
     query: string | null,
-    origin: string
+    origin: string,
+    mapped?: MappedResource
   ) {
     const scope = yield* currentReadScope();
 
@@ -156,11 +159,19 @@ export const prepareRegistration = Effect.fn("Hubs.prepare")(
       });
     }
 
-    const parsed = yield* parseListQuery(
-      scope,
-      scope.view(target.classId),
-      filters
-    );
+    const parsed = yield* mapped === undefined
+      ? parseListQuery(scope, scope.view(target.classId), filters)
+      : parseTmfListQuery(
+          scope,
+          scope.view(target.classId),
+          mapped,
+          filters
+        ).pipe(
+          Effect.map((parsedQuery) => ({
+            condition: Option.none<{ readonly expr: Expr }>(),
+            tmf: parsedQuery.filter,
+          }))
+        );
 
     const conditions = [
       Option.getOrUndefined(parsed.tmf),

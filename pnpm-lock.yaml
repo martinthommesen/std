@@ -728,6 +728,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.5
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -741,6 +744,12 @@ importers:
 
   packages/tmf:
     dependencies:
+      '@std/conditions':
+        specifier: workspace:*
+        version: link:../conditions
+      '@std/definitions':
+        specifier: workspace:*
+        version: link:../definitions
       '@std/values':
         specifier: workspace:*
         version: link:../values

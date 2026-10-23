@@ -1,8 +1,8 @@
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { NotFound } from "@std/api/errors/not-found";
 import { SessionToken } from "@std/api/session-token";
-import { TmfHubCreate, TMF688_PREFIX } from "@std/api/v2/tmf688";
-import { Tmf688Api } from "@std/api/v2/tmf688-api";
+import { TmfHubCreate, TMF688_PREFIX } from "@std/api/tmf688";
+import { Tmf688Api } from "@std/api/tmf688-api";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer, Schema } from "effect";
@@ -49,6 +49,12 @@ import { RuleWriteAccess } from "../../records/write-access-rules.ts";
 import type { WriteOnlyValues } from "../../records/write-only-values.ts";
 import type { ChangeSetServices } from "../../schema/change-set.ts";
 import { Transactions } from "../../sql/transactions.ts";
+import { answered } from "../api/answered.ts";
+import { withoutBody } from "../api/methods.ts";
+import { jsonAnswer } from "../api/records.ts";
+import { jsonBodyOf, mediaTypeOf, withSession } from "../api/request.ts";
+import { originOf } from "../api/resource.ts";
+import { isTmfFailure, tmfErrorResponse } from "../api/tmf-error.ts";
 import { hubRateLimitResponse } from "../hubs.ts";
 import { expectedVersionOf } from "../record-writes.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
@@ -57,12 +63,6 @@ import {
   checkUnscopedRevision,
   parseRequestRevision,
 } from "../stale-request.ts";
-import { answered } from "../v2/answered.ts";
-import { withoutBody } from "../v2/methods.ts";
-import { jsonAnswer } from "../v2/records.ts";
-import { jsonBodyOf, mediaTypeOf, withSession } from "../v2/request.ts";
-import { originOf } from "../v2/resource.ts";
-import { isTmfFailure, tmfErrorResponse } from "../v2/tmf-error.ts";
 import {
   filteredResources,
   pageAnswer,

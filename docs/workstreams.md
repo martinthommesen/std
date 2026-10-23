@@ -35,15 +35,21 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 5 | `ws/2d-helpdesk` | 2D | helpdesk set v1 and v2, upgrade test, rename test, saved filters, compose runnable result, browser-test fixture | merged |
 | 5 | `ws/plan-tmf-oda-itil` | re-plan | Martin's hard requirement (2026-10-22): strict TM Forum (TMF630 on the generic API, TMF621/632/669/672/688/638/639/641/622 with conformance kits), ODA Components on the ODA Canvas, ITIL practices; rework of the plan, contracts and Steps 3–4 | merged (signed off by Martin, 2026-10-22) |
 | 6 | `ws/3a-record-rules` | 3A | record rules as Contracts 4.10 declares them (all four phases; `aggregate` declared, executed by the aggregates workstream); `keepSupplied`; any failed nested save poisons its transaction | merged |
-| 6 | `ws/3a-aggregates` | 3A, 3T | aggregates (Contracts 4.9): owner references, locks, settle and persist, aggregate saves | planned |
+| 6 | `ws/3a-aggregates` | 3A, 3T | aggregates (Contracts 4.9): owner references, root-first locks, settle and persist, aggregate saves, aggregate rules and quantifiers | merged |
 | 6 | `ws/3b-outbox-worker` | 3B | delivery worker (`std worker`), leases with fencing, dead letters, config subscriptions, payloads rebuilt from history (fail closed), afterCommit rules run from carrier deliveries | merged |
 | 6 | `ws/3c-form-rules` | 3C | form rules, browser evaluator, form-state | planned |
-| 6 | `ws/3g-tmf630-api` | 3G | `/api/v2` per Contracts 10 on the TMF630 v5 baseline (Martin, 2026-10-22), `/api/v1` frozen, TMF630 matrix file | in progress |
+| 6 | `ws/3g-tmf630-api` | 3G | the TMF630 API per Contracts 10 on the v5 baseline (Martin, 2026-10-22), TMF630 matrix file | merged |
+| 6 | `ws/3r-migration-phases` | 3R | migration phases and the `migration-phases` check (libpg-query AST allow-list), RU9/RU10/RU12 groundwork, release version 0.0.3 | merged |
+| 6 | `ws/ci-flakes-load`, `ws/ci-flakes-2-main` | CI follow-up | load flakes diagnosed by Gemini 4 Argon | merged |
+| 6 | `ws/api-v1-consolidation` | 3G follow-up | Martin, 2026-10-23: the old `/api/v1` is deleted and the TMF630 API becomes `/api/v1`; release compatibility becomes a database-upgrade check | merged |
+| 6 | `ws/web-new-api` | 3G follow-up | the web app on the TMF630 API (merged with the consolidation) | merged |
+| 6 | `ws/3h-events-hubs` | 3H | hubs, event delivery, TMF688 | in progress |
 | 6 | `ws/3h-events` | 3H | hubs on every API, listener calls from the worker, TMF688 topics (Contracts 12) | planned |
 | 6 | `ws/3t-conformance-matrix` | 3T | `@std/tmf` pins and vendored OpenAPI documents, `check-conformance-matrix`, Step 3 matrix files, spec check of Contracts 10–15 against the member documents and Martin's decisions on it (decision 0026; 0021 decisions 34–55); Contracts 8.8 rolling-upgrade draft | merged |
-| 6 | `ws/3t-tmf-framework` | 3T | mapping rules over the aggregates, CTK runner and OpenAPI contract tests in CI (Contracts 11.1) | planned |
+| 6 | `ws/3t-tmf-framework` | 3T | mapping rules over the aggregates, CTK runner and OpenAPI contract tests in CI (Contracts 11.1); decision 0033 | merged |
 | 6 | `ws/3p-party-foundation` | 3P | `core.party`, `core.individual`, `core.organization`, `core.user.individual`, the `data` migration kind and the user backfill (Contracts 1.9, 11.3), release-compat baseline `v0.0.2` | merged |
-| 6 | `ws/3i-itil-helpdesk` | 3I | helpdesk v3: ITIL incident and problem, TMF621, upgrade test, `v0.0.3` | planned |
+| 6 | `ws/3i-helpdesk-v3` | 3I part A | helpdesk v3: ITIL incident and problem, cascade service identity, v2→v3 upgrade (decision 0034) | merged |
+| 6 | `ws/3i-itil-helpdesk` | 3I part B | TMF621 on the framework, CTK CI job, `v0.0.3` | planned |
 | 6 | `ws/3k-oda-canvas-probe` | 3K | ODA Canvas on kind in GitHub Actions, committed measurements (Contracts 13.6): 10 of 10 runs succeeded | merged |
 | 6 | `ws/ci-pin-actions` | CI follow-up | `ci.yml` and `quickstart-compose.yml` pin every action by commit SHA | merged |
 | 6 | `ws/3s-tls-signing` | 3R (Martin's M16) | TLS to Postgres for every connection (`@std/postgres/transport`), quickstart PKI, doctor check 17, signed release workflow (cosign keyless, SBOM, provenance) | merged |

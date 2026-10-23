@@ -163,7 +163,7 @@ const historyOf = Effect.fn("HistoryDefinitions.historyOf")(function* historyOf(
 
   assert.strictEqual(response.status, 200, response.text);
 
-  return arrayOf(objectOf(response.json).entries).map(objectOf);
+  return arrayOf(response.json).map(objectOf);
 });
 
 const keysOf = (value: JsonValue | undefined): string[] =>
@@ -217,7 +217,7 @@ describe("history-definitions", () => {
 
           assert.strictEqual(created.status, 201, created.text);
 
-          const id = textOf(objectOf(objectOf(created.json).record).id);
+          const id = textOf(objectOf(created.json).id);
 
           // Rename and relabel the field, relabel a choice.
           yield* change([
@@ -365,7 +365,7 @@ describe("history-definitions", () => {
 
           assert.strictEqual(created.status, 201, created.text);
 
-          const id = textOf(objectOf(objectOf(created.json).record).id);
+          const id = textOf(objectOf(created.json).id);
 
           // Relabel the field and a choice once per revision, up to 10.
           while ((yield* currentRevision) <= MAX_SINGLE_DIGIT) {

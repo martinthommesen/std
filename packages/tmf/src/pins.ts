@@ -80,6 +80,14 @@ export const ConformanceKitSchema = Struct({
   defaultUrl: SchemaString.check(isPattern(/^https?:\/\/\S+$/u)),
   /** The Docker image (with tag) its compose file runs. */
   image: NonEmptyString,
+  /**
+   * The image's repository digest (`sha256:...`), which the CTK runner
+   * checks after pulling (Contracts 11.1); recorded when the kit is first
+   * run (decision 0033).
+   */
+  imageDigest: optionalKey(
+    SchemaString.check(isPattern(/^sha256:[0-9a-f]{64}$/u))
+  ),
   /** The kit's own label, which may differ from the API version. */
   name: NonEmptyString,
   /** SHA-256 of the kit's zip. */

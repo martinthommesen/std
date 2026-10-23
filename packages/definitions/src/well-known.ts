@@ -66,6 +66,26 @@ export const USER_ROLE_CLASS_ID: DefinitionId =
 export const SYSTEM_USER_ID: DefinitionId =
   "1970f1d9-a830-4414-ba8e-210e07952a85";
 
+/** The reserved, non-interactive identity used by helpdesk v3 cascades. */
+export const HELPDESK_CASCADE_USER_ID: DefinitionId =
+  "32187bcc-314f-53f1-9a54-4ae3cabd1598";
+
+/** The login reserved for the helpdesk cascade identity, even before installation. */
+export const HELPDESK_CASCADE_LOGIN = "std-helpdesk-cascade";
+
+/** The display name maintained by helpdesk service provisioning. */
+export const HELPDESK_CASCADE_NAME = "Helpdesk cascade service";
+
+/** The role reserved exclusively for the helpdesk cascade identity. */
+export const HELPDESK_CASCADE_ROLE_ID: DefinitionId =
+  "f02cabb1-cdc9-5371-81f0-d77cc1cd2ef3";
+
+/** Reserved identities can act internally but never authenticate over HTTP. */
+export const SERVICE_USER_IDS: ReadonlySet<DefinitionId> = new Set([
+  SYSTEM_USER_ID,
+  HELPDESK_CASCADE_USER_ID,
+]);
+
 /** Built-in roles (Contracts 3.1). */
 export const BUILT_IN_ROLE_IDS = {
   admin: "8e67ee7f-106e-48f9-a8ff-b494fd0999e5",

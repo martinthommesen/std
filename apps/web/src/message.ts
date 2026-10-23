@@ -1,5 +1,5 @@
-import { CurrentUserSchema } from "@std/api/session";
-import { MetaTableSummarySchema } from "@std/definitions/table-metadata";
+import { CurrentSession } from "@std/api/session";
+import { TableMetadataSummary } from "@std/api/table-metadata";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 import { UrlRequest } from "foldkit/navigation";
@@ -30,12 +30,12 @@ export const Message = defineMessageUnion({
   GotTableListMessage: { message: TableListMessage, pageId: Schema.Int },
   SucceededLoadCurrentUser: {
     maybeRevision: Schema.Option(SchemaRevision),
-    maybeUser: Schema.Option(CurrentUserSchema),
+    maybeUser: Schema.Option(CurrentSession),
   },
   SucceededLoadTables: {
     revision: SchemaRevision,
     sessionId: Schema.Int,
-    tables: Schema.Array(MetaTableSummarySchema),
+    tables: Schema.Array(TableMetadataSummary),
   },
   SucceededSignOut: { sessionId: Schema.Int },
 });

@@ -17,7 +17,13 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { objectOf, signInAll, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
-import { listOf, readsTestLayer, recordPath } from "./reads-support.ts";
+import {
+  codeOf,
+  listOf,
+  listPath,
+  readsTestLayer,
+  recordPath,
+} from "./reads-support.ts";
 import { ACME, values } from "./schema-support.ts";
 
 /** The revision, journal entries and change entries. */
@@ -29,10 +35,10 @@ const counters = values(
 ).pipe(Effect.map(([value]) => (value ?? "").split(" ").map(Number)));
 
 const idOf = (response: TestResponse): string =>
-  textOf(objectOf(objectOf(response.json).record).id);
+  textOf(objectOf(response.json).id);
 
 const versionOf = (response: TestResponse): number =>
-  Number(objectOf(objectOf(response.json).record).version);
+  Number(objectOf(response.json).revision);
 
 const storedVersion = (table: string, id: string) =>
   values(
@@ -85,22 +91,20 @@ const measured = Effect.fn("AdminEditing.measured")(function* measured(
   return { deltas, response };
 });
 
-const RULES = "/api/v1/tables/core.access_rule/records";
+const RULES = listPath("core.access_rule");
 
 const ruleBody = (roleId: string, target: JsonObject): JsonObject => ({
   actions: ["read"],
   effect: "allow",
   name: null,
-  role_ids: [roleId],
-  table_id: ACME.asset,
+  roleIds: [roleId],
+  tableId: ACME.asset,
   ...target,
 });
 
 describe("admin config editing", () => {
   it("builds rules naming one role", () => {
-    assert.deepStrictEqual(ruleBody("r", { target: "records" }).role_ids, [
-      "r",
-    ]);
+    assert.deepStrictEqual(ruleBody("r", { target: "records" }).roleIds, ["r"]);
   });
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
@@ -121,7 +125,7 @@ describe("admin config editing", () => {
                 name: `auditor_${randomUUID().slice(0, 8)}`,
               },
               method: "POST",
-              path: "/api/v1/tables/core.role/records",
+              path: listPath("core.role"),
             },
             201
           );
@@ -176,7 +180,7 @@ describe("admin config editing", () => {
             {
               body: { active: true, login, name: "Audrey Auditor", password },
               method: "POST",
-              path: "/api/v1/tables/core.user/records",
+              path: listPath("core.user"),
             },
             201
           );
@@ -185,18 +189,18 @@ describe("admin config editing", () => {
           assert.deepStrictEqual(user.deltas, [0, 0, 2]);
 
           const auditor = yield* http.signIn(login, password);
-          const assetList = "/api/v1/tables/acme.asset/records";
+          const assetList = listPath("acme.asset");
           const unknown = yield* http.get(assetList, { token: auditor });
 
           assert.strictEqual(unknown.status, 404, unknown.text);
-          assert.strictEqual(objectOf(unknown.json)._tag, "UnknownTable");
+          assert.strictEqual(yield* codeOf(unknown), "UnknownTable");
 
           const assignment = yield* measured(
             token,
             {
               body: { role: roleId, user: idOf(user.response) },
               method: "POST",
-              path: "/api/v1/tables/core.user_role/records",
+              path: listPath("core.user_role"),
             },
             201
           );
@@ -207,12 +211,12 @@ describe("admin config editing", () => {
             yield* http.get(assetList, { token: auditor })
           );
 
-          assert.isAbove(seen.records.length, 4);
+          assert.isAbove(seen.resources.length, 4);
 
-          for (const record of seen.records) {
-            assert.property(record.values, "name");
-            assert.notProperty(record.values, "cost");
-            assert.notProperty(record.values, "status");
+          for (const resource of seen.resources) {
+            assert.property(resource, "name");
+            assert.notProperty(resource, "cost");
+            assert.notProperty(resource, "status");
           }
 
           // Removing the assignment is data too, and access ends.
@@ -223,7 +227,7 @@ describe("admin config editing", () => {
               path: recordPath("core.user_role", idOf(assignment.response)),
               version: versionOf(assignment.response),
             },
-            200
+            204
           );
 
           assert.deepStrictEqual(removed.deltas, [0, 0, 1]);
@@ -244,7 +248,7 @@ describe("admin config editing", () => {
                 path: recordPath("core.access_rule", id),
                 version: yield* storedVersion("access_rule", id),
               },
-              200
+              204
             );
 
             assert.deepStrictEqual(deleted.deltas.slice(0, 2), CONFIG);
@@ -270,7 +274,7 @@ describe("admin config editing", () => {
               path: recordPath("core.role", roleId),
               version: yield* storedVersion("role", roleId),
             },
-            200
+            204
           );
 
           assert.deepStrictEqual(deletedRole.deltas.slice(0, 2), CONFIG);
@@ -285,13 +289,12 @@ describe("admin config editing", () => {
           const { tokens } = yield* signInAll;
 
           const roles = yield* listOf(
-            yield* http.get(
-              `/api/v1/tables/core.role/records?filter=${encodeURIComponent('name = "admin"')}`,
-              { token: tokens.admin }
-            )
+            yield* http.get(listPath("core.role", { name: "admin" }), {
+              token: tokens.admin,
+            })
           );
 
-          const roleId = roles.records[0]?.id ?? "";
+          const roleId = textOf(roles.resources[0]?.id);
 
           // As the web form sends it (Contracts 6.7): no `name`, no
           // `condition`, no `active`.
@@ -308,10 +311,7 @@ describe("admin config editing", () => {
           );
 
           assert.deepStrictEqual(created.deltas.slice(0, 2), CONFIG);
-          assert.isNull(
-            objectOf(objectOf(objectOf(created.response.json).record).values)
-              .name
-          );
+          assert.notProperty(objectOf(created.response.json), "name");
 
           // Actions as a word, no role IDs, fields that are no list.
           const before = yield* committedState;
@@ -321,33 +321,31 @@ describe("admin config editing", () => {
               actions: "read",
               effect: "deny",
               fields: "name",
-              table_id: ACME.asset,
+              tableId: ACME.asset,
               target: "fields",
             },
             token: tokens.admin,
           });
 
           assert.strictEqual(refused.status, 422, refused.text);
-          assert.deepStrictEqual(objectOf(refused.json), {
-            _tag: "ValidationFailed",
-            errors: [
-              {
-                _tag: "InvalidValue",
-                field: "actions",
-                message:
-                  'A list of actions, such as ["read"] or ["read", "update"]: read, create, update, delete.',
-                reason: "invalidFormat",
-              },
-              { _tag: "Required", field: "role_ids" },
-              {
-                _tag: "InvalidValue",
-                field: "fields",
-                message:
-                  'With target "fields": "*" for every field, or a list of field IDs.',
-                reason: "invalidFormat",
-              },
-            ],
-          });
+          assert.strictEqual(yield* codeOf(refused), "ValidationFailed");
+          assert.deepStrictEqual(objectOf(refused.json).fieldErrors, [
+            {
+              _tag: "InvalidValue",
+              field: "actions",
+              message:
+                'A list of actions, such as ["read"] or ["read", "update"]: read, create, update, delete.',
+              reason: "invalidFormat",
+            },
+            { _tag: "Required", field: "roleIds" },
+            {
+              _tag: "InvalidValue",
+              field: "fields",
+              message:
+                'With target "fields": "*" for every field, or a list of field IDs.',
+              reason: "invalidFormat",
+            },
+          ]);
           assert.notInclude(refused.text, '"read"],');
           assert.deepStrictEqual(yield* committedState, before);
         })
@@ -371,17 +369,13 @@ describe("admin config editing", () => {
             for (const [table, body] of writes) {
               const before = yield* committedState;
 
-              const response = yield* http.request(
-                "POST",
-                `/api/v1/tables/${table}/records`,
-                { body, token: tokens[who] }
-              );
+              const response = yield* http.request("POST", listPath(table), {
+                body,
+                token: tokens[who],
+              });
 
               assert.strictEqual(response.status, 404, `${who} ${table}`);
-              assert.deepStrictEqual(objectOf(response.json), {
-                _tag: "UnknownTable",
-                table,
-              });
+              assert.strictEqual(yield* codeOf(response), "UnknownTable");
               assert.deepStrictEqual(yield* committedState, before);
             }
           }

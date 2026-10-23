@@ -7,6 +7,7 @@ import type { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
 import { decodeRows } from "../sql/rows.ts";
+import { readOnly } from "../sql/statement-marks.ts";
 import {
   isDataMigration,
   migrationChecksum,
@@ -179,15 +180,44 @@ export const readLedger: (
 /** Decodes ledger rows (for `doctor`, which reads them read-only). */
 export const decodeLedgerRows = decodeEntries;
 
+/** Installed optional-app versions; usable before the layer tables exist. */
+export const installedSetVersions = Effect.fn("Platform.installedSetVersions")(
+  function* installedSetVersions(sql: SqlClient.SqlClient) {
+    const [presence] = yield* readOnly(
+      sql`SELECT to_regclass('core.config_set') IS NOT NULL AS present`
+    ).pipe(
+      Effect.flatMap(decodeRows(Schema.Struct({ present: Schema.Boolean })))
+    );
+
+    if (presence?.present !== true) {
+      return new Map<string, number>();
+    }
+
+    const rows = yield* readOnly(
+      sql`SELECT name, set_version FROM core.config_set`
+    ).pipe(
+      Effect.flatMap(
+        decodeRows(
+          Schema.Struct({ name: Schema.String, set_version: Schema.Int })
+        )
+      )
+    );
+
+    return new Map(rows.map((row) => [row.name, row.set_version]));
+  }
+);
+
 /**
  * Compares the ledger with the known migrations.
  * @param migrations - The code's migrations.
  * @param ledger - The ledger rows.
+ * @param setVersions - Installed or requested optional-app versions.
  * @returns Pending, unknown and changed migrations.
  */
 export const compareLedger = (
   migrations: readonly PlatformMigration[],
-  ledger: readonly LedgerEntry[]
+  ledger: readonly LedgerEntry[],
+  setVersions?: ReadonlyMap<string, number>
 ): LedgerComparison => {
   const recorded = new Set(ledger.map((entry) => entry.id));
 
@@ -217,7 +247,20 @@ export const compareLedger = (
   return {
     changed,
     incomplete,
-    pending: migrations.filter((migration) => !recorded.has(migration.id)),
+    pending: migrations.filter((migration) => {
+      if (recorded.has(migration.id)) {
+        return false;
+      }
+
+      const required =
+        migration.kind === "data" ? migration.requiredSet : undefined;
+
+      return (
+        required === undefined ||
+        setVersions === undefined ||
+        (setVersions.get(required.name) ?? 0) >= required.minVersion
+      );
+    }),
     unknown,
   };
 };

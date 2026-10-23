@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { GENERIC_API_PREFIX } from "@std/api/v2/paths";
+import { API_PREFIX } from "@std/api/api";
 import { parseJson } from "@std/values/json";
 import type { JsonObject } from "@std/values/json-value";
 import { ConfigProvider, Effect, Layer, Schema } from "effect";
@@ -13,7 +13,7 @@ import { WorkerSettings } from "../src/outbox/worker.ts";
 import { OutboxSaveHooks } from "../src/records/outbox-producer.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
-import { asObject, textOf } from "./v2-support.ts";
+import { asObject, textOf } from "./api-support.ts";
 
 /** Build HTTP and worker services with explicit startup configuration.
  * @param config - Startup environment overrides.
@@ -131,7 +131,7 @@ export const register = Effect.fn("HubTest.register")(function* register(
 ) {
   const http = yield* TestHttpClient;
 
-  const response = yield* http.request("POST", `${GENERIC_API_PREFIX}/hub`, {
+  const response = yield* http.request("POST", `${API_PREFIX}/hub`, {
     body: { "@type": "Hub", callback, query: query ?? "resource=acmeAsset" },
     token,
   });

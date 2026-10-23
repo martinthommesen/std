@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it } from "@effect/vitest";
-import { GENERIC_API_PREFIX } from "@std/api/v2/paths";
+import { API_PREFIX } from "@std/api/api";
 import { applyOperations } from "@std/definitions/apply";
 import { PERMISSION_IDS } from "@std/definitions/well-known";
 import { Effect, Result } from "effect";
@@ -13,12 +13,12 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { derivedSources } from "../src/events/render.ts";
 import { workerPass } from "../src/outbox/worker.ts";
+import { asObject, textOf, apiCallers } from "./api-support.ts";
 import { hubTestLayer, listener, register } from "./hub-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
 import { ACME, change, addRecordRule } from "./schema-support.ts";
-import { asObject, textOf, v2Callers } from "./v2-support.ts";
 
-const ASSET = `${GENERIC_API_PREFIX}/acmeAsset`;
+const ASSET = `${API_PREFIX}/acmeAsset`;
 
 // The alias remains Effect-aware and lets Sonar recognize the test file.
 const test = it.effect;
@@ -77,7 +77,7 @@ describe("hub-event-authz", () => {
       Effect.gen(function* scenario1() {
         const http = yield* TestHttpClient;
         const fixture = yield* AcmeFixture;
-        const { admin, bob } = yield* v2Callers;
+        const { admin, bob } = yield* apiCallers;
         const snapshot = yield* (yield* Catalog).refresh;
 
         const employee = snapshot
@@ -208,7 +208,7 @@ describe("hub-event-authz", () => {
       Effect.gen(function* scenario2() {
         const http = yield* TestHttpClient;
         const fixture = yield* AcmeFixture;
-        const { admin, bob } = yield* v2Callers;
+        const { admin, bob } = yield* apiCallers;
         const snapshot = yield* (yield* Catalog).refresh;
 
         const employee = snapshot
@@ -286,7 +286,7 @@ describe("hub-event-authz", () => {
 
         const inactive = yield* http.request(
           "PATCH",
-          `${GENERIC_API_PREFIX}/coreUser/${fixture.bob.id}`,
+          `${API_PREFIX}/coreUser/${fixture.bob.id}`,
           {
             ...admin,
             body: { active: false },

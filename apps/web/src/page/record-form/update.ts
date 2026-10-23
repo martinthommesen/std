@@ -12,11 +12,7 @@
  * asked again after the refresh; a save never is: the user saves again.
  */
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
-import type {
-  MetaField,
-  MetaRelatedList,
-  MetaTable,
-} from "@std/definitions/table-metadata";
+import type { MetaRelatedList } from "@std/definitions/table-metadata";
 import { Equal, Option, Record, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import type { CalendarDate } from "foldkit/calendar";
@@ -24,7 +20,8 @@ import { modifyFields } from "foldkit/struct";
 
 import { fieldShowOf } from "../../domain/form-fields.ts";
 import { FieldInput } from "../../domain/form-input.ts";
-import { listFieldsParameter } from "../../domain/list-columns.ts";
+import { listColumns, listFieldsParameter } from "../../domain/list-columns.ts";
+import type { MetaField, MetaTable } from "../../domain/metadata.ts";
 import {
   isNewerRevision,
   parseSchemaRevision,
@@ -37,6 +34,12 @@ import {
   reconcileWithRecord,
 } from "../../domain/stale-edits.ts";
 import type { Reconciled } from "../../domain/stale-edits.ts";
+import {
+  apiNameIn,
+  collectionOf,
+  defaultSelectionOf,
+  wireFieldOf,
+} from "../../domain/wire.ts";
 import { calendarDateOf, isoDateOf } from "../../filter-builder/condition.ts";
 import { recordRouter, tableListRouter } from "../../route.ts";
 import type { StdApi } from "../../std-client.ts";
@@ -77,7 +80,7 @@ import {
   recordOf,
 } from "./form.ts";
 import { Message, OutMessage } from "./message.ts";
-import type { ReadPurpose, SavedRecord } from "./message.ts";
+import type { ReadPurpose, SavedRecord, UnreadSavedRecord } from "./message.ts";
 import {
   ClassMetadata,
   Deletion,
@@ -577,8 +580,12 @@ const writeRelatedList = (
       lists.map((list) => (list.id === listId ? change(list) : list)),
   });
 
-const relatedFilterOf = (list: RelatedList, recordId: string): string =>
-  `${list.entry.field} = ${JSON.stringify(recordId)}`;
+const relatedFilterOf = (
+  list: RelatedList,
+  related: MetaTable,
+  recordId: string
+): string =>
+  `${apiNameIn(related.fields.map(wireFieldOf), list.entry.field)} = ${JSON.stringify(recordId)}`;
 
 const reloadingRelated = (records: RelatedList["records"]) =>
   Option.match(AsyncData.getData(records), {
@@ -613,9 +620,10 @@ const relatedPageRequest = (
       return {
         commands: [
           LoadRelatedRecords({
+            columns: listColumns(meta.table).map(wireFieldOf),
             cursor: Option.flatten(Option.fromNullishOr(cursors.at(-1))),
             fields: listFieldsParameter(meta.table),
-            filter: relatedFilterOf(list, recordId),
+            filter: relatedFilterOf(list, meta.table, recordId),
             generation,
             listId: list.id,
             revision: meta.revision,
@@ -1511,7 +1519,7 @@ const searchTargets =
           onNone: () => reloadFailedTarget(waiting, target, meta.revision),
           onSome: (targetMeta) =>
             searchOrNothing(waiting, {
-              allowedFor: `${model.table}/${field.name}`,
+              allowedFor: `${collectionOf(model.table)}/${field.apiName}`,
               cursor,
               fieldId,
               generation,
@@ -1845,6 +1853,7 @@ const requestRecord =
                   purpose,
                   recordId: model.mode.recordId,
                   revision: meta.revision,
+                  selected: defaultSelectionOf(meta.table),
                   table: model.table,
                 }),
               ],
@@ -1867,19 +1876,19 @@ const requestClassMetadata: Step = (model) =>
   Option.match(Option.all([metaOf(model), recordOf(model)]), {
     onNone: () => ({ model }),
     onSome: ([meta, record]) => {
-      const isOther = record.class !== meta.table.name;
+      const isOther = record.class !== meta.table.resourceType;
 
       const isCurrent = Option.exists(
         classMetaOf(model),
-        (concrete) => concrete.name === record.class
+        (concrete) => concrete.resourceType === record.class
       );
 
       return isOther && !isCurrent && !AsyncData.isPending(model.classMetadata)
         ? {
             commands: [
               LoadClassMetadata({
+                resourceType: record.class,
                 revision: meta.revision,
-                table: record.class,
               }),
             ],
             model: modifyFields(model, {
@@ -2006,16 +2015,16 @@ const reconcileEdits = (model: Model): Model => {
  * revision follows it, and the older answer must not replace it.
  *
  * @param model - The page.
- * @param table - The class the answer is about.
+ * @param resourceType - The class the answer is about (its `@type`).
  * @param revision - The revision the request was made at.
  * @returns True for the awaited answer.
  */
 const isClassAnswerFor = (
   model: Model,
-  table: string,
+  resourceType: string,
   revision: SchemaRevision
 ): boolean =>
-  Option.exists(recordOf(model), (record) => record.class === table) &&
+  Option.exists(recordOf(model), (record) => record.class === resourceType) &&
   Option.exists(metaOf(model), (meta) => meta.revision === revision);
 
 /**
@@ -2031,7 +2040,10 @@ const isClassAnswerFor = (
  */
 const receiveClassMetadata = (model: Model, table: MetaTable): UpdateReturn => {
   if (
-    !Option.exists(recordOf(model), (record) => record.class === table.name)
+    !Option.exists(
+      recordOf(model),
+      (record) => record.class === table.resourceType
+    )
   ) {
     return { model };
   }
@@ -2138,6 +2150,17 @@ const failMetadata = (model: Model, error: MetaError): UpdateReturn => ({
   }),
 });
 
+/**
+ * The version a save committed whose record could not be read back.
+ *
+ * @param submission - Where saving stands.
+ * @returns The version, while the form waits to read it.
+ */
+const unreadSaveVersionOf = (submission: Submission): Option.Option<number> =>
+  Submission.guards.SavedUnread(submission)
+    ? Option.some(submission.version)
+    : Option.none();
+
 const receiveRecord = (
   model: Model,
   generation: number,
@@ -2146,20 +2169,33 @@ const receiveRecord = (
   maybeRevision: Option.Option<SchemaRevision>
 ): UpdateReturn => {
   // NOTE: a reread that left before a save and arrives after it holds an
-  // older version than the saved record; it is not shown.
-  const isOlder = Option.exists(
-    recordOf(model),
-    (current) => current.id === record.id && current.version > record.version
-  );
+  // older version than the saved record; it is not shown. After a save
+  // whose record could not be read back, the version it committed is the
+  // floor: an older read is from before that save.
+  const maybeUnreadVersion = unreadSaveVersionOf(model.submission);
+
+  const isOlder =
+    Option.exists(
+      recordOf(model),
+      (current) => current.id === record.id && current.version > record.version
+    ) || Option.exists(maybeUnreadVersion, (saved) => record.version < saved);
 
   if (generation !== model.generation || isOlder) {
     return { model };
   }
 
   const afterConflict = purpose === "ReloadAfterConflict";
+  const afterUnreadSave = Option.isSome(maybeUnreadVersion);
+
+  // NOTE: after a save whose record could not be read back, exactly the
+  // version it committed is this page's own save; a later one is someone
+  // else's change, marked under the edits as after any reread (decision
+  // 0020), against the record the page showed before the save.
+  const isOwnSave = Option.contains(maybeUnreadVersion, record.version);
 
   const isChangedUnderEdits =
     purpose !== "Open" &&
+    !isOwnSave &&
     !Record.isEmptyRecord(model.edits) &&
     Option.exists(
       recordOf(model),
@@ -2178,8 +2214,13 @@ const receiveRecord = (
     maybeRecordRevision: () =>
       Option.map(metaOf(model), (meta) => meta.revision),
     record: () => StoredRecord.Success({ data: record }),
-    submission: (submission) =>
-      afterConflict ? Submission.Idle() : submission,
+    submission: (submission) => {
+      if (afterUnreadSave) {
+        return Submission.Saved({ isVisible: true });
+      }
+
+      return afterConflict ? Submission.Idle() : submission;
+    },
   });
 
   const shown = reconcileEdits(read);
@@ -2262,6 +2303,31 @@ const focusFirst = (
   });
 
 /**
+ * Whether the last save is not over for the form: in flight, or its
+ * record not read back yet.
+ *
+ * @param submission - Where saving stands.
+ * @returns True for `Saving` and `SavedUnread`.
+ */
+const isAwaitingSave = (submission: Submission): boolean =>
+  Submission.guards.Saving(submission) ||
+  Submission.guards.SavedUnread(submission);
+
+/**
+ * Whether a click on Save does nothing now: a save is in flight, a save's
+ * record could not be read back, the form is not loaded, its definitions
+ * or record are reloading, or the record is not the metadata's.
+ *
+ * @param model - The page.
+ * @returns True when Save is held back.
+ */
+const isSaveHeld = (model: Model): boolean =>
+  isAwaitingSave(model.submission) ||
+  !isReady(model) ||
+  isReloading(model) ||
+  isRecordOutdated(model);
+
+/**
  * "Save": judges the edits with `recordSchema`; with problems, shows them
  * and moves focus to the first; with nothing changed on an existing
  * record, says so; otherwise sends the create or the update (only the
@@ -2272,12 +2338,7 @@ const focusFirst = (
  * @returns The page and its Commands.
  */
 const save = (model: Model): UpdateReturn => {
-  if (
-    Submission.guards.Saving(model.submission) ||
-    !isReady(model) ||
-    isReloading(model) ||
-    isRecordOutdated(model)
-  ) {
+  if (isSaveHeld(model)) {
     return { model };
   }
 
@@ -2307,18 +2368,23 @@ const save = (model: Model): UpdateReturn => {
       const command = Option.match(recordOf(model), {
         onNone: () =>
           CreateRecord({
+            fields: meta.table.fields.map(wireFieldOf),
             generation,
             revision: meta.revision,
             secrets: check.body.secrets,
+            selected: defaultSelectionOf(meta.table),
             table: model.table,
             values: check.body.values,
           }),
         onSome: (record) =>
           UpdateRecord({
+            fields: meta.table.fields.map(wireFieldOf),
             generation,
+            isDefinitionTable: meta.table.definitionTable === true,
             recordId: record.id,
             revision: meta.revision,
             secrets: check.body.secrets,
+            selected: defaultSelectionOf(meta.table),
             table: model.table,
             values: check.body.values,
             version: record.version,
@@ -2346,6 +2412,10 @@ const isVisibleRecord = (
   saved: SavedRecord
 ): saved is Parameters<typeof StoredRecord.Success>[0]["data"] =>
   "values" in saved;
+
+const isUnreadRecord = (
+  saved: SavedRecord
+): saved is typeof UnreadSavedRecord.Type => "_tag" in saved;
 
 /**
  * The labels the saved record shows: the label the user picked for each
@@ -2403,6 +2473,36 @@ export const editsAfterSave = (
     )
   );
 
+/**
+ * A save that succeeded but whose record could not be read back
+ * (decision 0031): the edits it sent are saved, the later ones stay, and
+ * the record on screen is kept as stale (or, after a create, fails to
+ * show) until the user reads it again; Save waits for that read.
+ *
+ * @param editing - The page, editing the saved record.
+ * @param sentEdits - The edits the save was built from.
+ * @param version - The version the save committed.
+ * @returns The page.
+ */
+const markUnreadSave = (
+  editing: Model,
+  sentEdits: Readonly<Record<string, FieldInput>>,
+  version: number
+): Model =>
+  modifyFields(editing, {
+    droppedEdits: () => [],
+    edits: (edits) => editsAfterSave(edits, sentEdits),
+    maybeEditsFrom: () => Option.none(),
+    record: (record) =>
+      Option.match(AsyncData.getData(record), {
+        onNone: () => StoredRecord.Failure({ error: "Unavailable" }),
+        onSome: (data) => StoredRecord.Stale({ data, error: "Unavailable" }),
+      }),
+    serverErrors: () => ({}),
+    staleChanges: () => [],
+    submission: () => Submission.SavedUnread({ version }),
+  });
+
 const receiveSave = (
   model: Model,
   generation: number,
@@ -2434,6 +2534,16 @@ const receiveSave = (
   const editing = modifyFields(model, {
     mode: () => FormMode.Edit({ recordId: saved.id }),
   });
+
+  if (isUnreadRecord(saved)) {
+    return sawRevision(
+      {
+        commands: navigation,
+        model: markUnreadSave(editing, submission.sentEdits, saved.version),
+      },
+      maybeRevision
+    );
+  }
 
   if (!isVisibleRecord(saved)) {
     return sawRevision(
@@ -2825,8 +2935,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadActorNames: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedLoadClassMetadata: ({ error, revision, table }) => ({
-      model: isClassAnswerFor(model, table, revision)
+    FailedLoadClassMetadata: ({ error, resourceType, revision }) => ({
+      model: isClassAnswerFor(model, resourceType, revision)
         ? modifyFields(model, {
             classMetadata: () => ClassMetadata.Failure({ error }),
           })
@@ -2887,7 +2997,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadClassMetadata: ({ revision, table }) =>
-      isClassAnswerFor(model, table.name, revision)
+      isClassAnswerFor(model, table.resourceType, revision)
         ? receiveClassMetadata(model, table)
         : { model },
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag

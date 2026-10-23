@@ -1,10 +1,12 @@
 /**
  * Helpers for the schema-path suites (Contracts 1.4 to 1.8 over HTTP):
- * the change-set endpoint, generic writes on definition tables, and what
+ * `applyChangeSet`, generic writes on definition tables (in API names),
+ * and what
  * a refused change set must leave as it was: the catalog, the committed
  * revision, the change entries and the outbox's delivery rows.
  */
 import type { Definition } from "@std/definitions/definition";
+import { apiAttributeNameOf } from "@std/definitions/names";
 import type { Operation } from "@std/definitions/operation";
 import { parseJson } from "@std/values/json";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
@@ -18,11 +20,11 @@ import { PATCH_FIELD_OPERATIONS } from "../src/http/definition-writes.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { patch, remove } from "./writes-support.ts";
 
-/** The change-set endpoint. */
-export const CHANGE_SETS = "/api/v1/schema/change-sets";
+/** The change-set task resource. */
+export const CHANGE_SETS = "/api/v1/applyChangeSet";
 
 /**
- * `POST /api/v1/schema/change-sets` with operations.
+ * `POST /api/v1/applyChangeSet` with operations.
  *
  * @param token - The session token.
  * @param operations - The operations.
@@ -99,6 +101,17 @@ export const columnsOf = (
   return spec === undefined ? undefined : { [spec.column]: value };
 };
 
+// A body keyed by column names, keyed by API names (Contracts 10.2).
+const inApiNames = (
+  body: Readonly<Record<string, JsonValue>>
+): Record<string, JsonValue> =>
+  Object.fromEntries(
+    Object.entries(body).map(([column, value]) => [
+      apiAttributeNameOf(column),
+      value,
+    ])
+  );
+
 /**
  * The generic form of an operation on a stored definition: `DELETE` for
  * a delete, `PATCH` with `name` for a rename, with `state` for a retire or
@@ -172,7 +185,13 @@ export const sendGeneric = (
 ) =>
   form.method === "DELETE"
     ? remove(token, form.table, definition.id, definition.version)
-    : patch(token, form.table, definition.id, definition.version, form.body);
+    : patch(
+        token,
+        form.table,
+        definition.id,
+        definition.version,
+        inApiNames(form.body)
+      );
 
 /**
  * Creates an active user with roles (by name) and signs them in.

@@ -24,12 +24,14 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { objectOf } from "./authz-support.ts";
 import {
+  codeOf,
   listOf,
   listPath,
   readsTestLayer,
-  recordOf,
   recordPath,
+  resourceOf,
 } from "./reads-support.ts";
 import { addField, change, values } from "./schema-support.ts";
 
@@ -103,31 +105,26 @@ describe("read-hygiene", () => {
           const pathResponse = yield* http.get(
             listPath("acme.asset", {
               fields: "name,owner,owner.password,owner.name",
-              labels: "true",
             }),
             { token }
           );
 
           const responses = [
-            yield* http.get(listPath("acme.asset", { labels: "true" }), {
-              token,
-            }),
+            yield* http.get(listPath("acme.asset"), { token }),
             pathResponse,
             yield* http.get(
-              listPath("acme.asset", { filter: "owner.password is not empty" }),
-              { token }
-            ),
-            yield* http.get(
-              listPath("core.user", {
-                fields: "name,password",
-                labels: "true",
+              listPath("acme.asset", {
+                condition: "owner.password is not empty",
               }),
               { token }
             ),
             yield* http.get(
-              recordPath("acme.asset", fixture.records.L, { labels: "true" }),
+              listPath("core.user", { fields: "name,password" }),
               { token }
             ),
+            yield* http.get(recordPath("acme.asset", fixture.records.L), {
+              token,
+            }),
           ];
 
           for (const response of responses) {
@@ -137,15 +134,16 @@ describe("read-hygiene", () => {
 
           const withPath = yield* listOf(pathResponse);
           assert.isTrue(
-            withPath.records.every(
-              (record) =>
-                JSON.stringify(record.values["owner.password"]) ===
+            withPath.resources.every(
+              (resource) =>
+                JSON.stringify(objectOf(resource.owner).password) ===
                 '{"set":true}'
             )
           );
+          // The display field is a password: the reference is not labelled.
           assert.isTrue(
-            withPath.records.every(
-              (record) => !("owner" in (record.labels ?? {}))
+            withPath.resources.every(
+              (resource) => !("name" in objectOf(resource.owner))
             )
           );
         })
@@ -156,7 +154,7 @@ describe("read-hygiene", () => {
   // so these tests get a database of their own.
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
-      "a password behind an empty or hidden path is null, not {set: false}",
+      "a password behind an empty or hidden path is absent, not {set: false}",
       () =>
         Effect.gen(function* passwordPaths() {
           const http = yield* TestHttpClient;
@@ -186,66 +184,128 @@ describe("read-hygiene", () => {
           );
 
           const token = yield* http.signIn("bob", "bob-password");
-          const fields = "name,backup_owner.password,owner.password";
+          const fields = "name,backupOwner.password,owner.password";
 
           const read = (id: string) =>
             http
               .get(recordPath("acme.asset", id, { fields }), { token })
-              .pipe(Effect.flatMap(recordOf));
+              .pipe(Effect.flatMap(resourceOf));
 
           const l = yield* read(fixture.records.L);
           const m = yield* read(fixture.records.M);
 
-          // No backup owner: the path is empty.
-          assert.strictEqual(l.values["backup_owner.password"], null);
+          // No backup owner: the path is empty, so the attribute is absent.
+          assert.notProperty(l, "backupOwner");
           // Alice's password is readable to Bob through the new rule.
-          assert.deepStrictEqual(m.values["backup_owner.password"], {
+          assert.deepStrictEqual(objectOf(m.backupOwner).password, {
             set: true,
           });
-          // Bob's own password is withheld on the target: null, not {set: false}.
-          assert.strictEqual(l.values["owner.password"], null);
-          assert.notInclude(l.withheld ?? [], "owner.password");
+          // Bob's own password is withheld on the target: absent, not {set: false}.
+          assert.notProperty(objectOf(l.owner), "password");
+          assert.notInclude(JSON.stringify(l), '"set":false');
         })
     );
 
-    dbTest.effect("class of a target without any allow is a typed null", () =>
-      Effect.gen(function* unknownTargetClass() {
-        const http = yield* TestHttpClient;
+    dbTest.effect(
+      "class of a target without any allow is not named, and its path is empty",
+      () =>
+        Effect.gen(function* unknownTargetClass() {
+          const http = yield* TestHttpClient;
+          const fixture = yield* AcmeFixture;
 
-        const roleRef = addField(ACME.asset, "role_ref", {
-          kind: "reference",
-          targetClassId: PLATFORM_CLASS_IDS.role,
-        });
+          const roleRef = addField(ACME.asset, "role_ref", {
+            kind: "reference",
+            targetClassId: PLATFORM_CLASS_IDS.role,
+          });
 
-        yield* change([roleRef.op]);
+          yield* change([roleRef.op]);
 
-        const token = yield* http.signIn("bob", "bob-password");
-        const alice = yield* http.signIn("alice", "alice-password");
-
-        for (const session of [token, alice]) {
-          const selected = yield* http.get(
-            listPath("acme.asset", { fields: "name,role_ref.class" }),
-            { token: session }
+          yield* values(
+            `UPDATE acme.asset SET role_ref = $1::uuid WHERE id = $2::uuid RETURNING id::text AS value`,
+            [BUILT_IN_ROLE_IDS.admin, fixture.records.L]
           );
 
-          const filtered = yield* http.get(
-            listPath("acme.asset", { filter: "role_ref.class is empty" }),
-            { token: session }
+          const token = yield* http.signIn("bob", "bob-password");
+          const alice = yield* http.signIn("alice", "alice-password");
+
+          for (const session of [token, alice]) {
+            const selected = yield* http.get(
+              listPath("acme.asset", { fields: "name,roleRef,roleRef.name" }),
+              { token: session }
+            );
+
+            const filtered = yield* http.get(
+              listPath("acme.asset", { condition: "roleRef is empty" }),
+              { token: session }
+            );
+
+            assert.strictEqual(selected.status, 200, selected.text);
+            assert.strictEqual(filtered.status, 200, filtered.text);
+
+            // A one-hop filter through a target the caller has no allow on
+            // behaves like an empty value: every record matches "is
+            // empty", none matches "is not empty", and nothing is revealed.
+            const hiddenEmpty = yield* listOf(
+              yield* http.get(
+                listPath("acme.asset", {
+                  condition: "roleRef.creationDate is empty",
+                }),
+                { token: session }
+              )
+            );
+
+            const hiddenValue = yield* listOf(
+              yield* http.get(
+                listPath("acme.asset", {
+                  condition: "roleRef.creationDate is not empty",
+                }),
+                { token: session }
+              )
+            );
+
+            const everyone = yield* listOf(
+              yield* http.get(listPath("acme.asset"), { token: session })
+            );
+
+            assert.strictEqual(
+              hiddenEmpty.resources.length,
+              everyone.resources.length
+            );
+            assert.isAbove(everyone.resources.length, 0);
+            assert.strictEqual(hiddenValue.resources.length, 0);
+
+            // A target field the caller cannot read is refused exactly
+            // like a field that does not exist.
+            const unreadable = yield* http.get(
+              listPath("acme.asset", { condition: 'roleRef.name = "admin"' }),
+              { token: session }
+            );
+
+            const missing = yield* http.get(
+              listPath("acme.asset", {
+                condition: 'roleRef.nonesuch = "admin"',
+              }),
+              { token: session }
+            );
+
+            assert.strictEqual(unreadable.status, 400);
+            assert.strictEqual(yield* codeOf(unreadable), "UnknownField");
+            assert.strictEqual(yield* codeOf(missing), "UnknownField");
+            // No allow on core.role: the target's class name is not shown.
+            assert.notInclude(selected.text, "CoreRole");
+            assert.notInclude(selected.text, "core.role");
+          }
+
+          const page = yield* listOf(
+            yield* http.get(
+              listPath("acme.asset", { condition: "roleRef is empty" }),
+              { token: alice }
+            )
           );
 
-          assert.strictEqual(selected.status, 200, selected.text);
-          assert.strictEqual(filtered.status, 200, filtered.text);
-        }
-
-        const page = yield* listOf(
-          yield* http.get(
-            listPath("acme.asset", { filter: "role_ref.class is empty" }),
-            { token: alice }
-          )
-        );
-
-        assert.strictEqual(page.records.length, 5);
-      })
+          // Five visible assets; L has a role.
+          assert.strictEqual(page.resources.length, 4);
+        })
     );
   });
 });

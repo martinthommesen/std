@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import { assert, describe, it } from "@effect/vitest";
-import { GENERIC_API_PREFIX } from "@std/api/v2/paths";
-import { TMF688_PREFIX } from "@std/api/v2/tmf688";
+import { API_PREFIX } from "@std/api/api";
+import { TMF688_PREFIX } from "@std/api/tmf688";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import { decodePinsFile } from "@std/tmf/pins";
@@ -13,13 +13,14 @@ import { TestClock } from "effect/testing";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import {
-  checkTmf688Notification,
-  checkTmf688Exchange,
-} from "../../testing/src/tmf688-contract.ts";
+  checkTmfExchange,
+  contractAt,
+} from "../../testing/src/tmf-oas-contract.ts";
+import { checkTmf688Notification } from "../../testing/src/tmf688-contract.ts";
 import { workerPass } from "../src/outbox/worker.ts";
+import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import { hubTestLayer, listener } from "./hub-support.ts";
 import { change, createClass, ensureSite } from "./schema-support.ts";
-import { asArray, asObject, textOf, v2Callers } from "./v2-support.ts";
 
 const BASE = TMF688_PREFIX;
 
@@ -30,7 +31,7 @@ describe("tmf688-topics", () => {
   test("pending client events are suppressed when topic read rights are revoked", () =>
     Effect.gen(function* revokedTopic() {
       const http = yield* TestHttpClient;
-      const { admin } = yield* v2Callers;
+      const { admin } = yield* apiCallers;
       const callback = yield* listener();
       yield* http.request("POST", `${BASE}/hub`, {
         ...admin,
@@ -123,7 +124,7 @@ describe("tmf688-topics", () => {
     () =>
       Effect.gen(function* resourceTopicLifecycle() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
         yield* ensureSite;
         const callback = yield* listener();
 
@@ -164,7 +165,7 @@ describe("tmf688-topics", () => {
     () =>
       Effect.gen(function* scenario1() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
         const callback = yield* listener();
 
         const topic = yield* http.request("POST", `${BASE}/topic`, {
@@ -267,16 +268,20 @@ describe("tmf-oas-contract", () => {
           { method: "PATCH", path: `${BASE}/topic`, status: 405 },
           { method: "POST", path: `${BASE}/topic`, status: 429 },
         ]) {
-          const failure = yield* checkTmf688Exchange({
-            ...base,
-            ...request,
-          }).pipe(Effect.flip);
+          const failure = yield* checkTmfExchange(
+            [contractAt("TMF688", BASE)],
+            {
+              ...base,
+              ...request,
+            }
+          ).pipe(Effect.flip);
 
-          assert.include(failure, "undeclared");
+          assert.match(failure, /no such operation|does not declare/u);
         }
 
-        yield* checkTmf688Exchange({
+        yield* checkTmfExchange([contractAt("TMF688", BASE)], {
           ...base,
+          json: { code: "TooManyRequests", reason: "Limited", status: "429" },
           method: "POST",
           path: `${BASE}/hub`,
           status: 429,
@@ -289,7 +294,7 @@ describe("tmf-oas-contract", () => {
     () =>
       Effect.gen(function* fieldSelections() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
         const callback = yield* listener();
 
         const topic = yield* http.request("POST", `${BASE}/topic`, {
@@ -403,7 +408,7 @@ describe("tmf-oas-contract", () => {
     () =>
       Effect.gen(function* tmfRequiredFields() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
 
         const first = yield* http.request("POST", `${BASE}/topic`, {
           ...admin,
@@ -470,7 +475,7 @@ describe("tmf-oas-contract", () => {
     () =>
       Effect.gen(function* scenario2() {
         const http = yield* TestHttpClient;
-        const { admin, bob } = yield* v2Callers;
+        const { admin, bob } = yield* apiCallers;
         const callback = yield* listener();
 
         const topic = yield* http.request("POST", `${BASE}/topic`, {
@@ -575,7 +580,7 @@ describe("tmf-oas-contract", () => {
     () =>
       Effect.gen(function* scenario3() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
         const callback = yield* listener();
         yield* http.request("POST", `${BASE}/hub`, {
           ...admin,
@@ -600,7 +605,7 @@ describe("tmf-oas-contract", () => {
 
         const changed = yield* http.request(
           "PATCH",
-          `${GENERIC_API_PREFIX}/coreEventTopic/${id}`,
+          `${API_PREFIX}/coreEventTopic/${id}`,
           {
             ...admin,
             body: { name: "changed" },

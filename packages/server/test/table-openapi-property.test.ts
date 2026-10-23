@@ -298,11 +298,29 @@ interface Schemas {
   readonly text: string;
 }
 
+// The reference types a caller who knows `acme.asset` sees.
+const REFS = {
+  typeOf: (target: string | null) =>
+    target === null ? "EntityRef" : "AcmeAssetRef",
+  user: "CoreUserRef",
+} as const;
+
+// The members every resource has; the attribute under test is added.
+const RESOURCE = {
+  "@type": "AcmeT",
+  href: "https://std.example/api/v1/acmeT/1",
+  id: "1",
+} as const;
+
 const compile = (field: MetaField): Schemas => {
-  const document = tableOpenApi(tableOf(field), {
-    header: "1.00000000-0000-4000-8000-000000000003",
-    revision: 1,
-  });
+  const document = tableOpenApi(
+    tableOf(field),
+    {
+      header: "1.00000000-0000-4000-8000-000000000003",
+      revision: 1,
+    },
+    { collection: "acmeT", refs: REFS, type: "AcmeT" }
+  );
 
   // Formats are annotations, as in OpenAPI; the patterns carry the shapes.
   const ajv = new Ajv2020({ strict: false, validateFormats: false });
@@ -316,10 +334,10 @@ const compile = (field: MetaField): Schemas => {
   };
 
   return {
-    create: validator("CreateBody"),
-    read: validator("Values"),
+    create: validator("ResourceCreate"),
+    read: validator("Resource"),
     text: JSON.stringify(document),
-    update: validator("UpdateBody"),
+    update: validator("ResourcePatch"),
   };
 };
 
@@ -329,6 +347,13 @@ const outputOf = (field: MetaField, value: DecodedInput): JsonValue => {
 
   if (type.kind === "password" || type.kind === "secret") {
     return { set: value !== null && isPlaintext(value) };
+  }
+
+  if (field.type.kind === "reference" && value !== null) {
+    return {
+      "@type": REFS.typeOf(field.type.target),
+      id: encodeOut(type, isPlaintext(value) ? secretState(true) : value),
+    };
   }
 
   return encodeOut(type, isPlaintext(value) ? secretState(true) : value);
@@ -391,8 +416,11 @@ const checkCandidate = (
 
     const output = outputOf(field, created.value);
 
+    // A resource leaves an empty attribute out, never null.
     assert.isTrue(
-      schemas.read({ [FIELD]: output }),
+      schemas.read(
+        output === null ? RESOURCE : { ...RESOURCE, [FIELD]: output }
+      ),
       `read ${JSON.stringify(output)} for ${type}`
     );
   }
@@ -499,7 +527,7 @@ describe("per-table OpenAPI document against the codecs", () => {
             // A stored choice key outlives its choice: reads accept any key.
             if (field.type.kind === "choice") {
               assert.isTrue(
-                schemas.read({ [FIELD]: "deleted_key" }),
+                schemas.read({ ...RESOURCE, [FIELD]: "deleted_key" }),
                 "stored key"
               );
             }

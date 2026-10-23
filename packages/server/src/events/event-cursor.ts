@@ -6,7 +6,7 @@ import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { Actor } from "../auth/actor.ts";
-import { migration0021 } from "../platform/migrations/0021-event-lookup-backfill.ts";
+import { migration0022 } from "../platform/migrations/0022-event-lookup-backfill.ts";
 import { decodeRows } from "../sql/rows.ts";
 
 /** A raw keyset position; only the opaque database token leaves the server. */
@@ -95,7 +95,7 @@ export const eventLookupPending = Effect.fn("Events.lookupPending")(
     const sql = yield* SqlClient.SqlClient;
 
     const [row] =
-      yield* sql`SELECT EXISTS (SELECT 1 FROM core.platform_migration WHERE id = ${migration0021.id} AND state = 'applied') AS complete`.pipe(
+      yield* sql`SELECT EXISTS (SELECT 1 FROM core.platform_migration WHERE id = ${migration0022.id} AND state = 'applied') AS complete`.pipe(
         Effect.flatMap(decodeRows(Schema.Struct({ complete: Schema.Boolean })))
       );
 

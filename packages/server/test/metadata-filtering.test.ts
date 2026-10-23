@@ -1,6 +1,6 @@
 /**
  * The metadata filtering test (plan Step 2, guarantee 2A; Contracts 6.3):
- * `GET /api/v1/meta/tables/{table}` holds exactly what each caller may
+ * `GET /api/v1/tableMetadata/{collection}` holds exactly what each caller may
  * read, and nothing of a table, field, choice or rule input the caller
  * cannot see.
  *
@@ -14,10 +14,9 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import { TableMetadata } from "@std/api/table-metadata";
 import type { ChoiceDraft, LayoutDraft } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
-import { TableMetadataSchema } from "@std/definitions/table-metadata";
-import type { MetaTable } from "@std/definitions/table-metadata";
 import { Effect, Schema } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -26,7 +25,13 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { DEFINITION_KIND_OF_TABLE } from "../src/http/change-sets.ts";
 import { objectOf, signInAll } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
-import { readsTestLayer } from "./reads-support.ts";
+import {
+  codeOf,
+  collectionOf,
+  readsTestLayer,
+  recordPath,
+  revisionOf,
+} from "./reads-support.ts";
 import {
   ACME,
   addAccessRule,
@@ -40,9 +45,13 @@ const EMPLOYEE = "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b";
 const ASSET_MANAGER = "081e3ce8-26a8-43a2-bc58-838d40b4c22d";
 const local = { owner: { layer: "local" }, protected: false } as const;
 
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadataSchema);
+const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
 
-const metaPath = (table: string): string => `/api/v1/meta/tables/${table}`;
+/** A table's metadata, as the caller reads it. */
+type MetaTable = typeof TableMetadata.Type;
+
+const metaPath = (table: string): string =>
+  `/api/v1/tableMetadata/${collectionOf(table)}`;
 
 const choice = (
   fieldId: string,
@@ -163,9 +172,12 @@ const metadataOf = Effect.fn("MetadataFiltering.metadataOf")(
 
     assert.strictEqual(response.status, 200, response.text);
 
-    const body = yield* decodeMetadata(response.json).pipe(Effect.orDie);
+    const decoded = yield* decodeMetadata(response.json).pipe(Effect.orDie);
 
-    return { body, response };
+    return {
+      body: { schemaRevision: decoded.schemaRevision, table: decoded },
+      response,
+    };
   }
 );
 
@@ -203,15 +215,15 @@ const ASSET_FIELDS = [
   "vault",
 ];
 
-// The response's `table` member, as sent, apart from `schemaRevision`.
+// The response as sent, apart from `schemaRevision`.
 const tableText = (response: TestResponse): string =>
   response.text.replace(/"schemaRevision":\d+/u, '"schemaRevision":0');
 
 describe("metadata filtering", () => {
-  it("serves metadata under /api/v1/meta/tables", () => {
+  it("serves metadata under /api/v1/tableMetadata", () => {
     assert.strictEqual(
       metaPath("acme.asset"),
-      "/api/v1/meta/tables/acme.asset"
+      "/api/v1/tableMetadata/acmeAsset"
     );
   });
 
@@ -373,7 +385,7 @@ describe("metadata filtering", () => {
           const { tokens } = yield* signInAll;
           const before = yield* committedState;
 
-          for (const suffix of ["", "/openapi.json"]) {
+          for (const suffix of ["", "/schema.json", "/openapi.json"]) {
             const hidden = yield* http.get(
               `${metaPath("site.vault")}${suffix}`,
               {
@@ -388,8 +400,8 @@ describe("metadata filtering", () => {
 
             assert.strictEqual(hidden.status, 404);
             assert.strictEqual(
-              hidden.text.replace("site.vault", "<table>"),
-              missing.text.replace("site.nosuch", "<table>")
+              hidden.text.replaceAll("siteVault", "<table>"),
+              missing.text.replaceAll("siteNosuch", "<table>")
             );
 
             const platform = yield* http.get(
@@ -399,8 +411,8 @@ describe("metadata filtering", () => {
 
             assert.strictEqual(platform.status, 404);
             assert.strictEqual(
-              platform.text.replace("core.change", "<table>"),
-              missing.text.replace("site.nosuch", "<table>")
+              platform.text.replaceAll("coreChange", "<table>"),
+              missing.text.replaceAll("siteNosuch", "<table>")
             );
 
             const anonymous = yield* http.get(
@@ -430,7 +442,7 @@ describe("metadata filtering", () => {
             const asset = yield* metadataOf(tokens.bob, "acme.asset");
             const laptop = yield* metadataOf(tokens.bob, "acme.laptop");
 
-            const tables = yield* http.get("/api/v1/meta/tables", {
+            const tables = yield* http.get("/api/v1/tableMetadata", {
               token: tokens.bob,
             });
 
@@ -558,7 +570,7 @@ describe("metadata filtering", () => {
             ]
           );
 
-          const aliceTables = yield* http.get("/api/v1/meta/tables", {
+          const aliceTables = yield* http.get("/api/v1/tableMetadata", {
             token: tokens.alice,
           });
 
@@ -630,16 +642,13 @@ describe("metadata filtering", () => {
           // The server's verdict: a generic create there is `NotAllowed`.
           const before = yield* committedState;
 
-          const refused = yield* http.request(
-            "POST",
-            "/api/v1/tables/core.change/records",
-            { body: {}, token: tokens.admin }
-          );
+          const refused = yield* http.request("POST", "/api/v1/coreChange", {
+            body: {},
+            token: tokens.admin,
+          });
 
           assert.strictEqual(refused.status, 403, refused.text);
-          assert.deepStrictEqual(objectOf(refused.json), {
-            _tag: "NotAllowed",
-          });
+          assert.strictEqual(yield* codeOf(refused), "NotAllowed");
           assert.deepStrictEqual(yield* committedState, before);
 
           // A definition table: owner, protection and state on create are
@@ -666,10 +675,10 @@ describe("metadata filtering", () => {
             }
           );
 
-          for (const body of [{ owner_layer: "local" }, { state: "active" }]) {
+          for (const body of [{ ownerLayer: "local" }, { state: "active" }]) {
             const refusedColumn = yield* http.request(
               "POST",
-              "/api/v1/tables/core.role/records",
+              "/api/v1/coreRole",
               {
                 body: { label: "X", name: "x_role", ...body },
                 token: tokens.admin,
@@ -713,7 +722,7 @@ describe("metadata filtering", () => {
 
           const keyChange = yield* http.request(
             "PATCH",
-            `/api/v1/tables/core.choice/records/${good?.id ?? ""}`,
+            recordPath("core.choice", good?.id ?? ""),
             {
               body: { key: "great" },
               headers: { "if-match": `"${good?.version ?? 0}"` },
@@ -727,37 +736,53 @@ describe("metadata filtering", () => {
         })
     );
 
-    dbTest.effect("the per-table OpenAPI document states its revision", () =>
-      Effect.gen(function* tableOpenApi() {
+    dbTest.effect("the per-table JSON Schema states its revision", () =>
+      Effect.gen(function* tableSchema() {
         const http = yield* TestHttpClient;
         const { tokens } = yield* signInAll;
 
         const response = yield* http.get(
-          `${metaPath("acme.asset")}/openapi.json`,
+          `${metaPath("acme.asset")}/schema.json`,
           { token: tokens.bob }
         );
 
         assert.strictEqual(response.status, 200);
 
+        const document = objectOf(response.json);
+
+        assert.isAtLeast(yield* revisionOf(response), 1);
+        assert.strictEqual(document.title, "AcmeAsset");
+        assert.notInclude(response.text, '"cost"');
+
+        const admin = yield* http.get(`${metaPath("acme.asset")}/schema.json`, {
+          token: tokens.admin,
+        });
+
+        assert.include(admin.text, '"cost"');
+      })
+    );
+
+    dbTest.effect("the per-table OpenAPI document states its revision", () =>
+      Effect.gen(function* tableOpenApi() {
+        const http = yield* TestHttpClient;
+        const { tokens } = yield* signInAll;
+        const path = `${metaPath("acme.asset")}/openapi.json`;
+        const response = yield* http.get(path, { token: tokens.bob });
+
+        assert.strictEqual(response.status, 200, response.text);
+
         const header = response.headers.get("std-schema-revision") ?? "";
         const document = objectOf(response.json);
 
         assert.strictEqual(document.openapi, "3.1.0");
-        assert.deepStrictEqual(document.info, {
-          title: "Asset (acme.asset)",
-          version: header,
-        });
+        assert.strictEqual(objectOf(document.info).version, header);
         assert.strictEqual(
           document["x-std-schema-revision"],
           Number(header.split(".")[0])
         );
         assert.notInclude(response.text, '"cost"');
-        assert.include(response.text, '"/api/v1/tables/acme.asset/records"');
 
-        const admin = yield* http.get(
-          `${metaPath("acme.asset")}/openapi.json`,
-          { token: tokens.admin }
-        );
+        const admin = yield* http.get(path, { token: tokens.admin });
 
         assert.include(admin.text, '"cost"');
       })

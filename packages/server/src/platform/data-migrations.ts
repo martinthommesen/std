@@ -38,6 +38,7 @@ import type { WorkerWakeup } from "../sql/wake-up.ts";
 import { STD_VERSION } from "../version.ts";
 import {
   compareLedger,
+  installedSetVersions,
   decodeLedgerColumns,
   LEDGER_COLUMNS,
   readLedger,
@@ -292,7 +293,13 @@ export const runDataMigrations = Effect.fn("Platform.runDataMigrations")(
     const migrations = options.migrations ?? PLATFORM_MIGRATIONS;
     const sql = yield* SqlClient.SqlClient;
     const ledger = yield* hygienic(readLedger(sql));
-    const comparison = compareLedger(migrations, ledger);
+
+    const comparison = compareLedger(
+      migrations,
+      ledger,
+      yield* hygienic(installedSetVersions(sql))
+    );
+
     const refusal = refusalOf(comparison, true);
 
     if (refusal !== undefined) {

@@ -8,6 +8,7 @@ import { SqlClient } from "effect/sql";
 
 import {
   compareLedger,
+  installedSetVersions,
   decodeLedgerRows,
   decodeLedgerColumns,
   LEDGER_COLUMNS,
@@ -42,7 +43,11 @@ const diagnosticLedger = Effect.gen(function* diagnosticLedger() {
  */
 export const checkLedger = Effect.fn("Doctor.checkLedger")(
   function* checkLedger(migrations: readonly PlatformMigration[]) {
-    const comparison = compareLedger(migrations, yield* diagnosticLedger);
+    const comparison = compareLedger(
+      migrations,
+      yield* diagnosticLedger,
+      yield* installedSetVersions(yield* SqlClient.SqlClient)
+    );
 
     return [
       ...comparison.pending.map((migration) =>

@@ -6,7 +6,6 @@
  * searches again.
  */
 import { Combobox } from "@foldkit/ui";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
 import { Option } from "effect";
 import { AsyncData } from "foldkit";
 import {
@@ -20,6 +19,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { FieldInput } from "../../domain/form-input.ts";
+import type { MetaField, MetaTable } from "../../domain/metadata.ts";
 import {
   REVISION_5,
   REVISION_6,
@@ -29,6 +29,7 @@ import {
   USERS,
   ticketRecord,
   ticketTable,
+  TICKET_SELECTION,
 } from "../../form-fixture.ts";
 import { REVISION_3, USER_TABLE_NAME, userTable } from "../../table-fixture.ts";
 import {
@@ -73,6 +74,7 @@ const userField = (overrides: Partial<MetaField>): MetaField => ({
 
 /** An integer display field of the users. */
 const BADGE = userField({
+  apiName: "badge",
   id: "00000000-0000-4000-8000-00000000b0b1",
   label: "Badge",
   name: "badge",
@@ -81,6 +83,7 @@ const BADGE = userField({
 
 /** A choice display field of the users. */
 const TIER = userField({
+  apiName: "tier",
   choices: [
     { key: "gold", label: "Gold partner", order: 1, retired: false },
     { key: "silver", label: "Silver partner", order: 2, retired: false },
@@ -149,7 +152,7 @@ const search = (
   overrides: Partial<Parameters<typeof SearchTargets>[0]>
 ): ReturnType<typeof SearchTargets> =>
   SearchTargets({
-    allowedFor: `${TICKET}/assignee`,
+    allowedFor: "helpTicket/assignee",
     cursor: Option.none(),
     display: Option.none(),
     fieldId: ASSIGNEE,
@@ -328,7 +331,9 @@ describe("a search refused with SchemaChanged", () => {
     ...userTable,
     displayField: "full_name",
     fields: userTable.fields.map((field) =>
-      field.name === "name" ? { ...field, name: "full_name" } : field
+      field.name === "name"
+        ? { ...field, apiName: "fullName", name: "full_name" }
+        : field
     ),
   };
 
@@ -425,14 +430,15 @@ describe("a search refused with SchemaChanged", () => {
           purpose: "Refresh",
           recordId: TICKET_ID,
           revision: REVISION_6,
+          selected: TICKET_SELECTION,
           table: TICKET,
         }),
         search({
           display: Option.fromNullishOr(renamedUsers.fields[0]),
-          filter: Option.some('full_name contains "Sa"'),
+          filter: Option.some('fullName contains "Sa"'),
           generation: 2,
           revision: REVISION_6,
-          sort: Option.some("full_name"),
+          sort: Option.some("fullName"),
         })
       ),
       Command.resolve(

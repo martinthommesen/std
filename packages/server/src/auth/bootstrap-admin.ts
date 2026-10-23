@@ -18,11 +18,14 @@
  * Like `std upgrade`, it runs with the database owner's credentials,
  * outside the HTTP API: whoever can run it can already change every table.
  */
+import { NotAllowed } from "@std/api/errors/not-allowed";
 import { rawSql, sql, textParameter } from "@std/conditions/sql-fragment";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
   BUILT_IN_ROLE_IDS,
+  HELPDESK_CASCADE_ROLE_ID,
+  SERVICE_USER_IDS,
   SYSTEM_USER_ID,
   USER_CLASS_ID,
   USER_ROLE_CLASS_ID,
@@ -40,6 +43,7 @@ import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { quoteIdent } from "../schema/sql-text.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { Actor } from "./actor.ts";
+import { isReservedServiceLogin } from "./service-identities.ts";
 import { userTables } from "./user-table.ts";
 
 /** The administrator to create. */
@@ -128,6 +132,13 @@ export const ensureUser = Effect.fn("BootstrapAdmin.ensureUser")(
     account: AdminAccount,
     roleIds: readonly DefinitionId[]
   ) {
+    if (
+      roleIds.includes(HELPDESK_CASCADE_ROLE_ID) ||
+      isReservedServiceLogin(account.login)
+    ) {
+      return yield* new NotAllowed();
+    }
+
     const { request } = yield* Transactions;
     const catalog = yield* Catalog;
 
@@ -142,6 +153,10 @@ export const ensureUser = Effect.fn("BootstrapAdmin.ensureUser")(
         }
 
         const existing = yield* userWithLogin(snapshot, account.login);
+
+        if (existing !== undefined && SERVICE_USER_IDS.has(existing)) {
+          return yield* new NotAllowed();
+        }
 
         if (existing !== undefined && existing !== null) {
           return {

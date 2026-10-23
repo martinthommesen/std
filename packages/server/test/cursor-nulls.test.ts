@@ -63,10 +63,10 @@ const bulkRecords = (bob: string, random: () => number): OwnerRecord[] =>
   }));
 
 const SORTS = [
-  "purchased_on",
-  "-purchased_on",
-  "status,-purchased_on",
-  "-status,purchased_on,name",
+  "purchasedOn",
+  "-purchasedOn",
+  "status,-purchasedOn",
+  "-status,purchasedOn,name",
 ];
 
 describe("cursor-nulls", () => {
@@ -104,13 +104,13 @@ describe("cursor-nulls", () => {
           );
 
           const token = yield* http.signIn("bob", "bob-password");
-          const filter = 'name starts with "bulk-"';
+          const condition = 'name starts with "bulk-"';
 
           for (const sort of SORTS) {
             const unpaged = yield* listOf(
               yield* http.get(
                 listPath("acme.asset", {
-                  filter,
+                  condition,
                   limit: String(ROWS),
                   sort,
                 }),
@@ -118,25 +118,23 @@ describe("cursor-nulls", () => {
               )
             );
 
-            const paged = yield* allPages(token, "acme.asset", {
-              filter,
+            const paged = yield* allPages({ token }, "acme.asset", {
+              condition,
               limit: PAGE,
               sort,
             });
 
-            const expected = unpaged.records.map((record) => record.id);
-            const actual = paged.records.map((record) => record.id);
+            const expected = unpaged.resources.map((resource) => resource.id);
+            const actual = paged.resources.map((resource) => resource.id);
 
             assert.strictEqual(expected.length, ROWS, sort);
             assert.strictEqual(new Set(actual).size, actual.length, sort);
             assert.deepStrictEqual(actual, expected, sort);
 
-            if (sort === "purchased_on") {
-              // Hidden and empty keys sort last, ascending.
-              const hidden = unpaged.records.map(
-                (record) =>
-                  (record.withheld ?? []).includes("purchased_on") ||
-                  record.values.purchased_on === null
+            if (sort === "purchasedOn") {
+              // Hidden and empty keys are absent and sort last, ascending.
+              const hidden = unpaged.resources.map(
+                (resource) => !("purchasedOn" in resource)
               );
 
               const firstHidden = hidden.indexOf(true);

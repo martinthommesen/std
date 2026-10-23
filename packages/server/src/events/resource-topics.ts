@@ -5,7 +5,7 @@ import { Clock, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { InstanceSettings } from "../config/instance-settings.ts";
-import { collectionNameOf } from "../http/v2/table-names.ts";
+import { collectionNameOf } from "../http/api/table-names.ts";
 import { writeChangeEntry } from "../records/change-entry.ts";
 import { writeChangeImage } from "../records/change-image.ts";
 import { matchingSubscriptions } from "../records/outbox-producer.ts";

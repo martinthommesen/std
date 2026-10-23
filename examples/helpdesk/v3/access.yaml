@@ -1,0 +1,320 @@
+accessRules:
+  - id: 31dd1a44-7d43-4c96-8c72-a3040c2cbda5
+    description: Agents read every ticket.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket
+    target: records
+    actions:
+      - read
+  - id: 441ffbe0-9df6-45b8-9df7-524ab071a8af
+    description: Agents open tickets.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket
+    target: records
+    actions:
+      - create
+  - id: c39fada7-6881-4ee1-9597-5efbf1ce2d97
+    description: Agents change tickets assigned to them or to no one.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket
+    target: records
+    actions:
+      - update
+    condition:
+      op: or
+      args:
+        - op: eq
+          left:
+            path:
+              - fc99eecb-5682-4a6c-8391-60d1055c4b2e
+          right:
+            ctx: me
+        - op: empty
+          arg:
+            path:
+              - fc99eecb-5682-4a6c-8391-60d1055c4b2e
+  - id: 996c0eb7-c1af-4f23-82d3-9ca8cb7820e6
+    description: Agents read and write every ticket field.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket
+    target: fields
+    fields: "*"
+    actions:
+      - read
+      - create
+      - update
+  - id: 6b53130b-9fd0-4805-96a0-7ff44f821811
+    description: Agents read and write every incident field.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.incident
+    target: fields
+    fields:
+      - category
+      - legacy_impact
+      - parent_incident
+      - problem
+    actions:
+      - read
+      - create
+      - update
+  - id: 7d53f68c-d490-49ea-abbb-1ea7aa859247
+    description: Agents never see or set the internal cost.
+    effect: deny
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket
+    target: fields
+    fields:
+      - internal_cost
+    actions:
+      - read
+      - create
+      - update
+  - id: 82d2980a-5a81-48b1-9afa-e0ebf5b7445a
+    description: Agents see the customer email of their own tickets only.
+    effect: deny
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket
+    target: fields
+    fields:
+      - customer_email
+    actions:
+      - read
+    condition:
+      op: not
+      arg:
+        op: eq
+        left:
+          path:
+            - fc99eecb-5682-4a6c-8391-60d1055c4b2e
+        right:
+          ctx: me
+  - id: 7e9c89f2-c4fb-54b3-92f3-1c6dd98426fc
+    description: Agents and managers read the major incident flag.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.incident
+    target: fields
+    actions:
+      - read
+    fields:
+      - major_incident
+  - id: b2124aa7-2c30-51b1-8687-028c13d90233
+    description: Major incident managers set the major flag on tickets they can update.
+    effect: allow
+    roles:
+      - major_incident_manager
+    table: helpdesk.incident
+    target: fields
+    actions:
+      - create
+      - update
+    fields:
+      - major_incident
+  - id: 341ed9b1-1c31-5f1b-adc7-bb9c4c22ccab
+    description: Agents and managers read and write problem fields.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.problem
+    target: fields
+    actions:
+      - read
+      - create
+      - update
+    fields: "*"
+  - id: a56b5d08-ff62-5128-b12b-9763548e5a2b
+    description: Agents and managers read ticket notes.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket_note
+    target: records
+    actions:
+      - read
+  - id: cbe6ca72-1855-51d8-aa5c-88029ad2aeae
+    description: Agents and managers write ticket notes; owner-assignment checks remain open in decision 0034.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket_note
+    target: records
+    actions:
+      - create
+      - update
+      - delete
+  - id: e242d4b6-e164-54aa-b000-5c087a5dab1f
+    description: Agents and managers use note fields; shipped rules assign and protect the author.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket_note
+    target: fields
+    actions:
+      - read
+      - create
+      - update
+    fields: "*"
+  - id: 1ffb6541-6103-5ebf-ba2c-653c2dad744a
+    description: Agents and managers read ticket party links.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket_party
+    target: records
+    actions:
+      - read
+  - id: ba32c76b-60a3-5055-ad04-b16cb0148eb0
+    description: Agents and managers write ticket party links; owner-assignment checks remain open in decision 0034.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket_party
+    target: records
+    actions:
+      - create
+      - update
+      - delete
+  - id: 2f9f6ef6-cacd-54a6-b21d-55691d3a8071
+    description: Agents and managers read and write ticket party link fields.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket_party
+    target: fields
+    actions:
+      - read
+      - create
+      - update
+    fields: "*"
+  - id: 60479900-87e0-5449-bc8c-385a98f39dc3
+    description: Agents and managers read parties used in ticket references.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: core.party
+    target: records
+    actions:
+      - read
+  - id: 55bc9e72-494c-55d5-8c04-0f74e91895d9
+    description: Agents and managers read party display names.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: core.party
+    target: fields
+    actions:
+      - read
+    fields:
+      - name
+  - id: 10ce7f83-a351-55ba-99e3-398e439e3e2a
+    description: Agents and managers read users used in ticket references.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: core.user
+    target: records
+    actions:
+      - read
+  - id: aaa534d4-ae7c-514f-a7f8-0f829b95a33f
+    description: Agents and managers read user display names.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: core.user
+    target: fields
+    actions:
+      - read
+    fields:
+      - name
+  - id: 567d4193-1184-5bd6-89ba-52419833283e
+    description: Agents and managers read ticket specifications.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket_specification
+    target: records
+    actions:
+      - read
+  - id: d86a7f26-2b5f-50c1-821c-7de553d37d38
+    description: Agents and managers read ticket specification fields.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket_specification
+    target: fields
+    actions:
+      - read
+    fields: "*"
+  - id: 12ab5519-d676-40ec-9314-a0920506ce45
+    description: The cascade service reads matching incidents and updates only their lifecycle and resolution fields.
+    effect: allow
+    roles:
+      - helpdesk_cascade
+    table: helpdesk.incident
+    target: records
+    actions:
+      - read
+      - update
+  - id: 8047e6d0-abe7-4899-a280-107b6f2c1f50
+    description: The cascade service reads matching incidents and updates only their lifecycle and resolution fields.
+    effect: allow
+    roles:
+      - helpdesk_cascade
+    table: helpdesk.ticket
+    target: fields
+    actions:
+      - read
+      - update
+    fields:
+      - status
+      - hold_reason
+      - resolution_code
+      - resolution_notes
+      - resolved_at
+      - status_changed_at
+  - id: 4450b879-eed0-419d-8f56-63c6c26a8ffd
+    description: The cascade service reads matching incidents and updates only their lifecycle and resolution fields.
+    effect: allow
+    roles:
+      - helpdesk_cascade
+    table: helpdesk.incident
+    target: fields
+    actions:
+      - read
+    fields:
+      - parent_incident
+      - problem

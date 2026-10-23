@@ -24,13 +24,13 @@
  * Nothing here sends anything: the user saves again (Contracts 6.4).
  */
 import type { SchemaChange } from "@std/api/errors/schemas";
-import type { MetaField } from "@std/definitions/table-metadata";
 import { Match, Option, Record, Schema, pipe } from "effect";
 
 import type { FieldShow } from "./form-fields.ts";
 import { isWritable } from "./form-fields.ts";
 import { inputOfValue } from "./form-input.ts";
 import type { FieldInput } from "./form-input.ts";
+import type { MetaField } from "./metadata.ts";
 import { valueText } from "./value-text.ts";
 
 /** Why an edit was dropped. */

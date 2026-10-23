@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { assert, describe, it } from "@effect/vitest";
-import { GENERIC_API_PREFIX } from "@std/api/v2/paths";
+import { API_PREFIX } from "@std/api/api";
 import { Deferred, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
@@ -15,14 +15,14 @@ import { workerPass } from "../src/outbox/worker.ts";
 import { createRecord } from "../src/records/save-pipeline.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { asObject, textOf, apiCallers } from "./api-support.ts";
 import { killAndAwait } from "./cli-support.ts";
 import { hubTestLayer, listener, register } from "./hub-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
 import { ACME } from "./schema-support.ts";
-import { asObject, textOf, v2Callers } from "./v2-support.ts";
 import { actingAs, expireLease } from "./worker-support.ts";
 
-const ASSET = `${GENERIC_API_PREFIX}/acmeAsset`;
+const ASSET = `${API_PREFIX}/acmeAsset`;
 
 const CHILD = fileURLToPath(
   new URL("fixtures/hub-worker-child.ts", import.meta.url)
@@ -46,7 +46,7 @@ describe("hub-soak", () => {
         const http = yield* TestHttpClient;
         const sql = yield* SqlClient.SqlClient;
         const database = yield* TestDatabase;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
         const received = yield* Deferred.make<boolean>();
         let stalled = true;
         let newEvents = 0;

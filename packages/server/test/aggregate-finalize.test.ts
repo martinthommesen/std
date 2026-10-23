@@ -11,7 +11,6 @@ import { AggregateNotSettled } from "@std/api/errors/aggregate-not-settled";
 import { InvalidReference } from "@std/api/errors/invalid-reference";
 import { RuleRefused } from "@std/api/errors/rule-refused";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
-import { SYSTEM_USER_ID } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
 import { Cause, Effect, Exit, Option, Schema } from "effect";
 
@@ -28,6 +27,7 @@ import {
 } from "../src/records/save-pipeline.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import type { WriteAccessApi } from "../src/records/write-access.ts";
+import { applyChangeSet } from "../src/schema/change-set.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
@@ -53,7 +53,7 @@ import {
 } from "./aggregates-support.ts";
 import type { Entry } from "./aggregates-support.ts";
 import { USERS } from "./records-support.ts";
-import { addRecordRule, change, freshId, values } from "./schema-support.ts";
+import { addRecordRule, freshId, values } from "./schema-support.ts";
 import { refusalOf } from "./support.ts";
 
 const WRITE_STATEMENT = /^\s*(?:insert|update|delete)\b/iu;
@@ -167,68 +167,71 @@ const afterCommitCarrierOf = Effect.fn("Finalize.afterCommitCarrier")(
   function* afterCommitCarrierOf(prefix: string) {
     const carrier = freshId();
 
-    yield* change([
-      {
-        definition: {
-          classId: C.ticket.id,
-          condition: null,
-          deadLetter: "block",
-          enabled: true,
-          id: carrier,
-          identityId: SYSTEM_USER_ID,
-          kind: "subscription",
-          maxAttempts: 10,
-          name: `ag_closed_${carrier.slice(0, 8)}`,
-          operations: ["update"],
-          owner: { layer: "local" },
-          protected: false,
-        },
-        op: "createSubscription",
-      },
-      addRecordRule(C.ticket.id, {
-        actions: [
-          {
-            classId: C.note.id,
-            forEach: {
-              classId: C.ticket.id,
-              where: {
-                left: { path: [F.ticketName.id] },
-                op: "eq",
-                right: { path: [F.ticketName.id], scope: "record" },
-              },
-            },
-            type: "createEach",
-            values: [
-              {
-                fieldId: F.noteTicket.id,
-                value: { copy: { fieldId: null, from: "source" } },
-              },
-              { fieldId: F.noteBody.id, value: { value: "closing" } },
-            ],
+    yield* applyChangeSet({
+      operations: [
+        {
+          definition: {
+            classId: C.ticket.id,
+            condition: null,
+            deadLetter: "block",
+            enabled: true,
+            id: carrier,
+            identityId: USERS.alice,
+            kind: "subscription",
+            maxAttempts: 10,
+            name: `ag_closed_${carrier.slice(0, 8)}`,
+            operations: ["update"],
+            owner: { layer: "local" },
+            protected: false,
           },
-        ],
-        condition: {
-          args: [
+          op: "createSubscription",
+        },
+        addRecordRule(C.ticket.id, {
+          actions: [
             {
-              left: { path: [F.ticketName.id] },
-              op: "startsWith",
-              right: prefix,
-            },
-            { arg: { path: [F.ticketStatus.id] }, op: "changed" },
-            {
-              left: { path: [F.ticketStatus.id] },
-              op: "eq",
-              right: { value: "closed" },
+              classId: C.note.id,
+              forEach: {
+                classId: C.ticket.id,
+                where: {
+                  left: { path: [F.ticketName.id] },
+                  op: "eq",
+                  right: { path: [F.ticketName.id], scope: "record" },
+                },
+              },
+              type: "createEach",
+              values: [
+                {
+                  fieldId: F.noteTicket.id,
+                  value: { copy: { fieldId: null, from: "source" } },
+                },
+                { fieldId: F.noteBody.id, value: { value: "closing" } },
+              ],
             },
           ],
-          op: "and",
-        },
-        operations: ["update"],
-        phase: "afterCommit",
-        ruleKind: null,
-        subscriptionId: carrier,
-      }).op,
-    ]);
+          condition: {
+            args: [
+              {
+                left: { path: [F.ticketName.id] },
+                op: "startsWith",
+                right: prefix,
+              },
+              { arg: { path: [F.ticketStatus.id] }, op: "changed" },
+              {
+                left: { path: [F.ticketStatus.id] },
+                op: "eq",
+                right: { value: "closed" },
+              },
+            ],
+            op: "and",
+          },
+          operations: ["update"],
+          phase: "afterCommit",
+          ruleKind: null,
+          subscriptionId: carrier,
+        }).op,
+      ],
+      requester: { roleIds: [], userId: USERS.alice },
+    });
 
     return carrier;
   }

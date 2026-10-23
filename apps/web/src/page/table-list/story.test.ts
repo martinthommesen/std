@@ -1,4 +1,3 @@
-import type { RecordJson } from "@std/api/records";
 import type { Expr } from "@std/conditions/ast";
 import { Effect, Option } from "effect";
 import { AsyncData } from "foldkit";
@@ -13,7 +12,9 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { listFieldsParameter } from "../../domain/list-columns.ts";
-import { fakeStdApi } from "../../fake-std-api.ts";
+import type { RecordJson } from "../../domain/record.ts";
+import { wireFieldOf } from "../../domain/wire.ts";
+import { fakeStdApi, tmfError } from "../../fake-std-api.ts";
 import {
   ASSET_FIELDS,
   REVISION_3,
@@ -55,13 +56,28 @@ const opened = init({
   table: ASSETS,
 });
 
-/** The default columns of the fixture's asset table, as the request names them. */
-const FIELDS = "name,number,owner,status,cost,purchased_on";
+/** The default columns of the fixture's asset table, by API name. */
+const FIELDS = "name,number,owner,status,cost,purchasedOn";
+
+/**
+ * The fields a `fields` parameter names, as the request reads them back.
+ *
+ * @param fields - The parameter (API names of the asset table).
+ * @returns The fields.
+ */
+const columnsOf = (fields: string) =>
+  fields
+    .split(",")
+    .flatMap((apiName) =>
+      assetTable.fields.filter((field) => field.apiName === apiName)
+    )
+    .map(wireFieldOf);
 
 const listRequest = (
   overrides: Partial<Parameters<typeof LoadRecords>[0]> = {}
 ) =>
   LoadRecords({
+    columns: columnsOf(overrides.fields ?? FIELDS),
     cursor: Option.none(),
     fields: FIELDS,
     filter: Option.none(),
@@ -517,7 +533,7 @@ describe("loading a stored filter", () => {
     expect(described(shown.commands)).toContainEqual(
       described([
         listRequest({
-          filter: Option.some("docked_to is empty"),
+          filter: Option.some("dockedTo is empty"),
           limit: 5,
           sort: Option.some("-name"),
         }),
@@ -553,14 +569,19 @@ describe("loading a stored filter", () => {
 });
 
 describe("list Commands against the server", () => {
-  const LIST_PATH = "/api/v1/tables/acme.asset/records";
-  const META_PATH = "/api/v1/meta/tables/acme.asset";
+  const LIST_PATH = "/api/v1/acmeAsset";
+  const META_PATH = "/api/v1/tableMetadata/acmeAsset";
+  const OWNER = "019a0000-0000-7000-8000-000000000001";
 
   it("a list request sends its revision and the query, and reads the revision the response states", async () => {
     const api = fakeStdApi({
       [LIST_PATH]: {
-        body: { count: 1, nextCursor: null, records: [], schemaRevision: 4 },
-        headers: { "std-schema-revision": REVISION_4 },
+        body: [],
+        headers: {
+          link: `<http://std.test${LIST_PATH}?limit=25>; rel="self"`,
+          "std-schema-revision": REVISION_4,
+          "x-total-count": "1",
+        },
         status: 200,
       },
     });
@@ -586,31 +607,103 @@ describe("list Commands against the server", () => {
     );
     expect(api.seen[0]?.headers["std-schema-revision"]).toBe(REVISION_3);
     expect(api.seen[0]?.query).toStrictEqual({
+      after: "c2",
+      condition: 'name = "L"',
       count: "true",
-      cursor: "c2",
       fields: FIELDS,
-      filter: 'name = "L"',
-      labels: "true",
       limit: "25",
       sort: "-cost",
     });
   });
 
-  it("a list refusal names its reason; SchemaChanged carries the current revision", async () => {
-    const changed = fakeStdApi({
+  it("reads resources back by field name: references with their labels, empty attributes as null, withheld ones kept apart, the next cursor from Link", async () => {
+    const api = fakeStdApi({
       [LIST_PATH]: {
-        body: {
-          _tag: "SchemaChanged",
-          changes: [],
-          currentRevision: REVISION_4,
-          requestRevision: REVISION_3,
+        body: [
+          {
+            "@type": "AcmeAsset",
+            href: `http://std.test${LIST_PATH}/r1`,
+            id: "r1",
+            name: "Laptop",
+            owner: { "@type": "CoreUserRef", id: OWNER, name: "Ada" },
+            purchasedOn: "2026-01-02",
+            revision: 4,
+            withheld: ["cost"],
+          },
+          {
+            "@type": "AcmeAsset",
+            href: `http://std.test${LIST_PATH}/r2`,
+            id: "r2",
+            owner: { "@type": "EntityRef", id: OWNER },
+            revision: 1,
+          },
+        ],
+        headers: {
+          link: `<http://std.test${LIST_PATH}?limit=25>; rel="self", <http://std.test${LIST_PATH}?limit=25&after=c%2C3>; rel="next"`,
+          "std-schema-revision": REVISION_3,
+          "x-total-count": "7",
         },
-        status: 409,
+        status: 200,
       },
     });
 
+    const result = await Effect.runPromise(
+      listRequest().effect.pipe(Effect.provide(api.layer))
+    );
+
+    expect(result).toStrictEqual(
+      Message.SucceededLoadRecords({
+        generation: 1,
+        maybeRevision: Option.some(REVISION_3),
+        page: {
+          maybeCount: Option.some(7),
+          maybeNextCursor: Option.some("c,3"),
+          records: [
+            {
+              class: "AcmeAsset",
+              id: "r1",
+              labels: { owner: "Ada" },
+              values: {
+                name: "Laptop",
+                number: null,
+                owner: OWNER,
+                purchased_on: "2026-01-02",
+                status: null,
+              },
+              version: 4,
+              withheld: ["cost"],
+            },
+            {
+              class: "AcmeAsset",
+              id: "r2",
+              labels: {},
+              values: {
+                cost: null,
+                name: null,
+                number: null,
+                owner: OWNER,
+                purchased_on: null,
+                status: null,
+              },
+              version: 1,
+            },
+          ],
+        },
+      })
+    );
+  });
+
+  it("a list refusal names its reason; SchemaChanged carries the current revision", async () => {
+    const changed = fakeStdApi({
+      [LIST_PATH]: tmfError("SchemaChanged", 409, {
+        changes: [],
+        currentRevision: REVISION_4,
+        requestRevision: REVISION_3,
+      }),
+    });
+
     const unauthenticated = fakeStdApi({
-      [LIST_PATH]: { body: { _tag: "Unauthenticated" }, status: 401 },
+      [LIST_PATH]: tmfError("Unauthenticated", 401),
     });
 
     const run = async (layer: typeof changed.layer) =>
@@ -631,7 +724,7 @@ describe("list Commands against the server", () => {
   it("metadata comes with the revision its response states", async () => {
     const api = fakeStdApi({
       [META_PATH]: {
-        body: { schemaRevision: 3, table: assetTable },
+        body: assetTable,
         headers: { "std-schema-revision": REVISION_3 },
         status: 200,
       },
@@ -655,10 +748,7 @@ describe("list Commands against the server", () => {
 
   it("an unknown table is not found", async () => {
     const api = fakeStdApi({
-      [META_PATH]: {
-        body: { _tag: "UnknownTable", table: ASSETS },
-        status: 404,
-      },
+      [META_PATH]: tmfError("UnknownTable", 404, { table: "acmeAsset" }),
     });
 
     await expect(

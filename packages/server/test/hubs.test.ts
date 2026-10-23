@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it } from "@effect/vitest";
-import { GENERIC_API_PREFIX } from "@std/api/v2/paths";
-import { TMF688_PREFIX } from "@std/api/v2/tmf688";
+import { API_PREFIX } from "@std/api/api";
+import { TMF688_PREFIX } from "@std/api/tmf688";
 import { PERMISSION_IDS } from "@std/definitions/well-known";
 import { Effect, ConfigProvider, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
@@ -21,6 +21,7 @@ import {
 import { HubSettings } from "../src/events/hubs.ts";
 import { workerPass } from "../src/outbox/worker.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
+import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import {
   hubTestLayer,
   hubTestLayerWith,
@@ -29,9 +30,8 @@ import {
 } from "./hub-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
 import { change } from "./schema-support.ts";
-import { asArray, asObject, textOf, v2Callers } from "./v2-support.ts";
 
-const ASSET = `${GENERIC_API_PREFIX}/acmeAsset`;
+const ASSET = `${API_PREFIX}/acmeAsset`;
 
 // The alias remains Effect-aware and lets Sonar recognize the test file.
 const test = it.effect;
@@ -42,7 +42,7 @@ describe("hub-delivery", () => {
     () =>
       Effect.gen(function* eventTypeFilters() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
         const callback = yield* listener();
 
         const hubId = yield* register(
@@ -106,7 +106,7 @@ describe("hub-delivery", () => {
       const http = yield* TestHttpClient;
       const sql = yield* SqlClient.SqlClient;
       const log = yield* StatementLog;
-      const { admin } = yield* v2Callers;
+      const { admin } = yield* apiCallers;
 
       const created = yield* http.request("POST", ASSET, {
         ...admin,
@@ -190,7 +190,7 @@ describe("hub-delivery", () => {
     () =>
       Effect.gen(function* queryComparisons() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
         const callback = yield* listener();
         yield* register(
           admin.token ?? "",
@@ -232,7 +232,7 @@ describe("hub-delivery", () => {
     () =>
       Effect.gen(function* scenario1() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
         const callback = yield* listener();
 
         const hub = yield* register(
@@ -489,7 +489,7 @@ describe("hub-callback-path", () => {
   it.effect("hostname callbacks pin the validated DNS address", () =>
     Effect.gen(function* hostnameCallback() {
       const http = yield* TestHttpClient;
-      const { admin } = yield* v2Callers;
+      const { admin } = yield* apiCallers;
       const callback = yield* listener(undefined, "localhost");
       yield* register(admin.token ?? "", `${callback.origin}/resolved`);
 
@@ -509,7 +509,7 @@ describe("hub-callback-path", () => {
     () =>
       Effect.gen(function* callbackPolicy() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
 
         const callback = yield* listener((call, response) => {
           if (call.path === "/redirect") {
@@ -598,7 +598,7 @@ describe("hub-callback-path", () => {
     () =>
       Effect.gen(function* scenario2() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
         const callback = yield* listener();
 
         const paths = [
@@ -628,18 +628,14 @@ describe("hub-callback-path", () => {
           "https://user:password@example.test/callback",
           "https://example.test/#fragment",
         ]) {
-          const response = yield* http.request(
-            "POST",
-            `${GENERIC_API_PREFIX}/hub`,
-            {
-              ...admin,
-              body: {
-                "@type": "Hub",
-                callback: url,
-                query: "resource=acmeAsset",
-              },
-            }
-          );
+          const response = yield* http.request("POST", `${API_PREFIX}/hub`, {
+            ...admin,
+            body: {
+              "@type": "Hub",
+              callback: url,
+              query: "resource=acmeAsset",
+            },
+          });
 
           assert.strictEqual(response.status, 400);
         }
@@ -653,10 +649,10 @@ describe("hub-unregister", () => {
     () =>
       Effect.gen(function* configuredCaps() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
 
         const create = (address: string) =>
-          http.request("POST", `${GENERIC_API_PREFIX}/hub`, {
+          http.request("POST", `${API_PREFIX}/hub`, {
             ...admin,
             body: {
               "@type": "Hub",
@@ -726,10 +722,10 @@ describe("hub-unregister", () => {
       Effect.gen(function* activeLimits() {
         const http = yield* TestHttpClient;
         const sql = yield* SqlClient.SqlClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
 
         const create = (callbackAddress: string) =>
-          http.request("POST", `${GENERIC_API_PREFIX}/hub`, {
+          http.request("POST", `${API_PREFIX}/hub`, {
             ...admin,
             body: {
               "@type": "Hub",
@@ -763,11 +759,8 @@ describe("hub-unregister", () => {
           429
         );
         assert.strictEqual(
-          (yield* http.request(
-            "DELETE",
-            `${GENERIC_API_PREFIX}/hub/${ids[0]}`,
-            admin
-          )).status,
+          (yield* http.request("DELETE", `${API_PREFIX}/hub/${ids[0]}`, admin))
+            .status,
           204
         );
         assert.strictEqual(
@@ -782,10 +775,10 @@ describe("hub-unregister", () => {
     () =>
       Effect.gen(function* hiddenTargets() {
         const http = yield* TestHttpClient;
-        const { bob } = yield* v2Callers;
+        const { bob } = yield* apiCallers;
 
         const create = (query: string) =>
-          http.request("POST", `${GENERIC_API_PREFIX}/hub`, {
+          http.request("POST", `${API_PREFIX}/hub`, {
             ...bob,
             body: {
               "@type": "Hub",
@@ -830,7 +823,7 @@ describe("hub-unregister", () => {
     () =>
       Effect.gen(function* registrationLimit() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
+        const { admin } = yield* apiCallers;
         const callback = yield* listener();
         let first = "";
 
@@ -845,24 +838,16 @@ describe("hub-unregister", () => {
           }
         }
 
-        yield* http.request(
-          "DELETE",
-          `${GENERIC_API_PREFIX}/hub/${first}`,
-          admin
-        );
+        yield* http.request("DELETE", `${API_PREFIX}/hub/${first}`, admin);
 
-        const response = yield* http.request(
-          "POST",
-          `${GENERIC_API_PREFIX}/hub`,
-          {
-            ...admin,
-            body: {
-              "@type": "Hub",
-              callback: callback.origin,
-              query: "resource=acmeAsset",
-            },
-          }
-        );
+        const response = yield* http.request("POST", `${API_PREFIX}/hub`, {
+          ...admin,
+          body: {
+            "@type": "Hub",
+            callback: callback.origin,
+            query: "resource=acmeAsset",
+          },
+        });
 
         assert.strictEqual(response.status, 429, response.text);
         assert.strictEqual(response.headers.get("retry-after"), "60");
@@ -873,46 +858,36 @@ describe("hub-unregister", () => {
     () =>
       Effect.gen(function* scenario3() {
         const http = yield* TestHttpClient;
-        const { admin, bob, alice } = yield* v2Callers;
+        const { admin, bob, alice } = yield* apiCallers;
         const callback = yield* listener();
 
-        const denied = yield* http.request(
-          "POST",
-          `${GENERIC_API_PREFIX}/hub`,
-          {
-            ...bob,
-            body: {
-              "@type": "Hub",
-              callback: callback.origin,
-              query: "resource=acmeAsset",
-            },
-          }
-        );
+        const denied = yield* http.request("POST", `${API_PREFIX}/hub`, {
+          ...bob,
+          body: {
+            "@type": "Hub",
+            callback: callback.origin,
+            query: "resource=acmeAsset",
+          },
+        });
 
         assert.strictEqual(denied.status, 403);
         const hub = yield* register(admin.token ?? "", callback.origin);
         assert.strictEqual(
-          (yield* http.get(`${GENERIC_API_PREFIX}/hub/${hub}`, admin)).status,
+          (yield* http.get(`${API_PREFIX}/hub/${hub}`, admin)).status,
           200
         );
         assert.strictEqual(
-          (yield* http.get(`${GENERIC_API_PREFIX}/hub/${hub}`, alice)).status,
+          (yield* http.get(`${API_PREFIX}/hub/${hub}`, alice)).status,
           404
         );
         assert.strictEqual(
-          (yield* http.request(
-            "DELETE",
-            `${GENERIC_API_PREFIX}/hub/${hub}`,
-            bob
-          )).status,
+          (yield* http.request("DELETE", `${API_PREFIX}/hub/${hub}`, bob))
+            .status,
           404
         );
         assert.strictEqual(
-          (yield* http.request(
-            "DELETE",
-            `${GENERIC_API_PREFIX}/hub/${hub}`,
-            admin
-          )).status,
+          (yield* http.request("DELETE", `${API_PREFIX}/hub/${hub}`, admin))
+            .status,
           204
         );
         yield* http.request("POST", ASSET, {
@@ -924,7 +899,7 @@ describe("hub-unregister", () => {
           []
         );
         assert.strictEqual(
-          (yield* http.get(`${GENERIC_API_PREFIX}/hub/${hub}`, admin)).status,
+          (yield* http.get(`${API_PREFIX}/hub/${hub}`, admin)).status,
           404
         );
       }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive)
@@ -938,7 +913,7 @@ describe("hub-payload-filter", () => {
       Effect.gen(function* scenario4() {
         const fixture = yield* AcmeFixture;
         const http = yield* TestHttpClient;
-        const { admin, bob } = yield* v2Callers;
+        const { admin, bob } = yield* apiCallers;
         const snapshot = yield* (yield* Catalog).refresh;
 
         const employee = snapshot
@@ -962,18 +937,14 @@ describe("hub-payload-filter", () => {
         const callback = yield* listener();
         yield* register(bob.token ?? "", callback.origin);
 
-        const refused = yield* http.request(
-          "POST",
-          `${GENERIC_API_PREFIX}/hub`,
-          {
-            ...bob,
-            body: {
-              "@type": "Hub",
-              callback: callback.origin,
-              query: "resource=acmeAsset&cost=10",
-            },
-          }
-        );
+        const refused = yield* http.request("POST", `${API_PREFIX}/hub`, {
+          ...bob,
+          body: {
+            "@type": "Hub",
+            callback: callback.origin,
+            query: "resource=acmeAsset&cost=10",
+          },
+        });
 
         assert.strictEqual(refused.status, 400);
 

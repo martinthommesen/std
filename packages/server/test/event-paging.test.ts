@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it } from "@effect/vitest";
-import { GENERIC_API_PREFIX } from "@std/api/v2/paths";
-import { TMF688_PREFIX } from "@std/api/v2/tmf688";
+import { API_PREFIX } from "@std/api/api";
+import { TMF688_PREFIX } from "@std/api/tmf688";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import type { JsonValue } from "@std/values/json-value";
@@ -18,13 +18,13 @@ import { readEntries } from "../src/outbox/delivery-payload.ts";
 import { workerPass } from "../src/outbox/worker.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
+import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import { hubTestLayer, listener, register } from "./hub-support.ts";
 import { change } from "./schema-support.ts";
-import { asArray, asObject, textOf, v2Callers } from "./v2-support.ts";
 
 const test = it.effect;
 
-const ASSET = `${GENERIC_API_PREFIX}/acmeAsset`;
+const ASSET = `${API_PREFIX}/acmeAsset`;
 const EVENTS = `${TMF688_PREFIX}/topic/record:acmeAsset/event`;
 
 const nextOf = (link: string | null): string | undefined => {
@@ -45,7 +45,7 @@ const resourceOf = (event: JsonValue | undefined) =>
 
 const createAsset = Effect.fn("EventTest.createAsset")(function* createAsset() {
   const http = yield* TestHttpClient;
-  const { admin } = yield* v2Callers;
+  const { admin } = yield* apiCallers;
 
   const response = yield* http.request("POST", ASSET, {
     ...admin,
@@ -71,7 +71,7 @@ const history = Effect.fn("EventTest.history")(function* history(
 
 const markLookupPending = Effect.gen(function* markLookupPending() {
   const sql = yield* SqlClient.SqlClient;
-  yield* sql`DELETE FROM core.platform_migration WHERE id = 21`;
+  yield* sql`DELETE FROM core.platform_migration WHERE id = 22`;
 });
 
 describe("event history and paging regressions", () => {
@@ -79,7 +79,7 @@ describe("event history and paging regressions", () => {
     Effect.gen(function* unauthorizedCandidates() {
       const http = yield* TestHttpClient;
       const fixture = yield* AcmeFixture;
-      const { admin, bob } = yield* v2Callers;
+      const { admin, bob } = yield* apiCallers;
 
       const visible = yield* http.request("POST", ASSET, {
         ...admin,
@@ -118,7 +118,7 @@ describe("event history and paging regressions", () => {
   test("the full-payload work budget falls back to authorized resource identity without failing the page", () =>
     Effect.gen(function* payloadBudget() {
       const http = yield* TestHttpClient;
-      const { admin } = yield* v2Callers;
+      const { admin } = yield* apiCallers;
       const id = yield* createAsset();
       const snapshot = yield* (yield* Catalog).refresh;
       yield* history(
@@ -146,7 +146,7 @@ describe("event history and paging regressions", () => {
       const http = yield* TestHttpClient;
       const sql = yield* SqlClient.SqlClient;
       const log = yield* StatementLog;
-      const { admin } = yield* v2Callers;
+      const { admin } = yield* apiCallers;
       const id = yield* createAsset();
       const snapshot = yield* (yield* Catalog).refresh;
       const name = snapshot.fieldByName(ACME.asset, "name")?.id ?? "";
@@ -203,11 +203,13 @@ describe("event history and paging regressions", () => {
           ),
           1
         );
+        // Version 2 can reuse the retained create image; the legacy tail cannot.
+        const historyReductions = row.version === "2" ? 0 : 1;
         assert.lengthOf(
           statements.filter((text) =>
             text.includes("WITH history AS MATERIALIZED")
           ),
-          1
+          historyReductions
         );
 
         const after = yield* http.get(
@@ -267,7 +269,7 @@ describe("event history and paging regressions", () => {
     Effect.gen(function* scanContinuation() {
       const http = yield* TestHttpClient;
       const sql = yield* SqlClient.SqlClient;
-      const { admin } = yield* v2Callers;
+      const { admin } = yield* apiCallers;
       const id = yield* createAsset();
       const snapshot = yield* (yield* Catalog).refresh;
       const name = snapshot.fieldByName(ACME.asset, "name")?.id ?? "";
@@ -353,7 +355,7 @@ describe("event history and paging regressions", () => {
     Effect.gen(function* clientPaging() {
       const http = yield* TestHttpClient;
       const sql = yield* SqlClient.SqlClient;
-      const { admin } = yield* v2Callers;
+      const { admin } = yield* apiCallers;
 
       const topic = yield* http.request("POST", `${TMF688_PREFIX}/topic`, {
         ...admin,

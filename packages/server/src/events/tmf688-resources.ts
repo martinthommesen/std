@@ -2,7 +2,7 @@ import { knowsTable } from "@std/access/rules";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { MethodNotAllowed } from "@std/api/errors/method-not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
-import { EventCreate, TopicCreate, TMF688_PREFIX } from "@std/api/v2/tmf688";
+import { EventCreate, TopicCreate, TMF688_PREFIX } from "@std/api/tmf688";
 import {
   EVENT_CLASS_IDS,
   EVENT_PAYLOAD_FIELD_ID,
@@ -19,7 +19,7 @@ import { SqlClient } from "effect/sql";
 
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
-import { collectionNameOf } from "../http/v2/table-names.ts";
+import { collectionNameOf } from "../http/api/table-names.ts";
 import { encodeCursor } from "../records/read-cursor.ts";
 import { systemField } from "../records/read-field.ts";
 import { getRecord, listRecords } from "../records/read-records.ts";

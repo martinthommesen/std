@@ -4,14 +4,11 @@
  * field type; the ID lookup; the sort; and nothing when nothing can match.
  */
 import type { Expr } from "@std/conditions/ast";
-import type {
-  MetaField,
-  MetaFieldType,
-  MetaTable,
-} from "@std/definitions/table-metadata";
+import type { MetaFieldType } from "@std/definitions/table-metadata";
 import { Option } from "effect";
 import { describe, expect, it } from "vitest";
 
+import type { MetaField, MetaTable } from "../../domain/metadata.ts";
 import { userTable } from "../../table-fixture.ts";
 import {
   DisplayMatch,
@@ -30,6 +27,7 @@ const displayField = (
   type: MetaFieldType,
   overrides: Partial<MetaField> = {}
 ): MetaField => ({
+  apiName: "shown",
   autoNumber: null,
   choices: null,
   default: null,

@@ -96,6 +96,7 @@ import {
 } from "./load-set.ts";
 import type { PlannedSetLoad } from "./load-set.ts";
 import { CORE_SET_DIRECTORY, readSetDirectory } from "./set-files.ts";
+import type { SetIdentityFailed } from "./set-identities.ts";
 import type { SetRefused } from "./set-refused.ts";
 import { UpgradeIncomplete } from "./upgrade-incomplete.ts";
 import { UpgradePlanStale } from "./upgrade-plan-stale.ts";
@@ -121,7 +122,6 @@ export interface PlannedMigration {
   readonly id: number;
   readonly name: string;
   readonly kind: PlatformMigration["kind"];
-  /** `pending`, or `running`: a `data` migration an earlier run left incomplete. */
   readonly state: "pending" | "running";
 }
 
@@ -190,6 +190,7 @@ export type UpgradeError =
   | MigrationStateRefused
   | UpgradePlanStale
   | SetRefused
+  | SetIdentityFailed
   | ChangeSetError;
 
 /** One set read from disk. */
@@ -387,13 +388,14 @@ interface ComputedPlan {
 const pendingMigrations = Effect.fn("Config.pendingMigrations")(
   function* pendingMigrations(
     connection: DedicatedConnection,
-    migrations: readonly PlatformMigration[]
+    migrations: readonly PlatformMigration[],
+    setVersions: ReadonlyMap<string, number>
   ): Effect.fn.Return<
     readonly PlannedMigration[],
     MigrationStateRefused | DatabaseError
   > {
     const ledger = yield* hygienic(readLedger(connection.client));
-    const comparison = compareLedger(migrations, ledger);
+    const comparison = compareLedger(migrations, ledger, setVersions);
     const refusal = refusalOf(comparison, true);
 
     if (refusal !== undefined) {
@@ -511,11 +513,6 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
   MigrationStateRefused | DefinitionInvalid | DatabaseError,
   ChangeSetServices
 > {
-  const migrations = yield* pendingMigrations(
-    connection,
-    options.migrations ?? PLATFORM_MIGRATIONS
-  );
-
   const resume = yield* plannedResumes(connection);
   const installed = yield* readInstalledState;
 
@@ -523,6 +520,20 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
     options.coreDirectory ?? CORE_SET_DIRECTORY,
     ...(options.sets ?? []),
   ]);
+
+  const setVersions = new Map(
+    [...installed.layers.sets.values()].map((set) => [set.name, set.version])
+  );
+
+  for (const source of sources) {
+    setVersions.set(source.header.name, source.header.version);
+  }
+
+  const migrations = yield* pendingMigrations(
+    connection,
+    options.migrations ?? PLATFORM_MIGRATIONS,
+    setVersions
+  );
 
   const { order, refusals: orderRefusals } = orderSets(
     sources,
@@ -622,7 +633,11 @@ const applySets = Effect.fn("Config.applySets")(function* applySets(
   connection: DedicatedConnection,
   computed: ComputedPlan,
   options: UpgradeOptions
-): Effect.fn.Return<readonly UpgradedSet[], UpgradeError, ChangeSetServices> {
+): Effect.fn.Return<
+  readonly UpgradedSet[],
+  UpgradeError,
+  ChangeSetServices | DataMigrationServices
+> {
   const outcomes: UpgradedSet[] = [];
   const owners = new Map<string, Owner>();
   const lifecycle = options.lifecycle ?? SCHEMA_LIFECYCLE;

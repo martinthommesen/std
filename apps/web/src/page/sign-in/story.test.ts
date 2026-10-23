@@ -12,7 +12,7 @@ import {
 import { modifyFields } from "foldkit/struct";
 import { describe, expect, it } from "vitest";
 
-import { fakeStdApi } from "../../fake-std-api.ts";
+import { fakeStdApi, tmfError } from "../../fake-std-api.ts";
 import { ada } from "../../fixture.ts";
 import { REVISION_3 } from "../../table-fixture.ts";
 import {
@@ -234,13 +234,20 @@ describe("sign-in", () => {
   });
 });
 
-const ME = "/api/v1/auth/me";
+const ME = "/api/v1/session/current";
 
-const COOKIE_SIGN_IN = "/api/v1/auth/cookie-sign-in";
+const COOKIE_SIGN_IN = "/api/v1/session";
 
 const signedIn = {
-  body: { expiresAt: "2026-10-22T12:00:00.000Z", userId: ada.userId },
-  status: 200,
+  body: {
+    "@type": "Session",
+    expiresAt: "2026-10-22T12:00:00.000Z",
+    href: "http://std.test/api/v1/session/current",
+    id: "current",
+    tokenDelivery: "cookie",
+    user: ada.user,
+  },
+  status: 201,
 };
 
 const run = (answers: Parameters<typeof fakeStdApi>[0]) => {
@@ -278,6 +285,7 @@ describe("the sign-in request", () => {
     expect(JSON.parse(seen[0]?.body ?? "{}")).toStrictEqual({
       login: "ada",
       password: PASSWORD,
+      tokenDelivery: "cookie",
     });
     expect(seen[0]?.headers["std-client"]).toBe("web");
     expect(seen[0]?.headers.authorization).toBeUndefined();
@@ -285,12 +293,12 @@ describe("the sign-in request", () => {
 
   it("maps refused credentials, a session not kept and anything else", async () => {
     const refused = run({
-      [COOKIE_SIGN_IN]: { body: { _tag: "InvalidCredentials" }, status: 401 },
+      [COOKIE_SIGN_IN]: tmfError("InvalidCredentials", 401),
     });
 
     const notKept = run({
       [COOKIE_SIGN_IN]: signedIn,
-      [ME]: { body: { _tag: "Unauthenticated" }, status: 401 },
+      [ME]: tmfError("Unauthenticated", 401),
     });
 
     const unreachable = run({});

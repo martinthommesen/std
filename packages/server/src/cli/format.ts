@@ -5,7 +5,11 @@ import type { SetReport } from "@std/definitions/upgrade-report";
 import { stringifyJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
 
-import type { UpgradePlan, UpgradeReport } from "../config/upgrade.ts";
+import type {
+  PlannedMigration,
+  UpgradePlan,
+  UpgradeReport,
+} from "../config/upgrade.ts";
 import type { DoctorReport } from "../doctor/doctor.ts";
 
 const value = (input: JsonValue): string => stringifyJson(input);
@@ -24,6 +28,14 @@ const versionText = (report: SetReport): string =>
   report.fromVersion === null
     ? `install v${report.toVersion}`
     : `v${report.fromVersion} -> v${report.toVersion}`;
+
+const migrationStateText = (state: PlannedMigration["state"]): string => {
+  if (state === "running") {
+    return "incomplete, resumed";
+  }
+
+  return "pending";
+};
 
 /**
  * The record changes of a set: each one, or counts per kind for a first
@@ -85,7 +97,7 @@ export const planLines = (plan: UpgradePlan): readonly string[] => [
     ? ["Platform migrations: up to date"]
     : plan.migrations.map(
         (migration) =>
-          `Platform migration ${String(migration.id).padStart(4, "0")} ${migration.name} (${migration.kind}): ${migration.state === "running" ? "incomplete, resumed" : "pending"}`
+          `Platform migration ${String(migration.id).padStart(4, "0")} ${migration.name} (${migration.kind}): ${migrationStateText(migration.state)}`
       )),
   ...plan.resume.map(
     (changeSet) =>

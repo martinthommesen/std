@@ -1,4 +1,3 @@
-import type { CurrentUser } from "@std/api/session";
 import { Match, Option, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
@@ -16,12 +15,13 @@ import {
 import { isNewerRevision, latestRevision } from "./domain/schema-revision.ts";
 import type { SchemaRevision } from "./domain/schema-revision.ts";
 import { Message } from "./message.ts";
-import { Model, SignOutRequest, Tables } from "./model.ts";
 import type {
+  CurrentUser,
   Tables as TablesState,
   SignedInModel,
   SignedOutModel,
 } from "./model.ts";
+import { Model, SignOutRequest, Tables } from "./model.ts";
 import { OutMessage as RecordFormOutMessage } from "./page/record-form/message.ts";
 import type { Message as RecordFormMessage } from "./page/record-form/message.ts";
 import { FormMode } from "./page/record-form/model.ts";
@@ -625,11 +625,11 @@ const changeRoute = (model: Model, route: AppRoute): UpdateReturn => {
 };
 
 /**
- * Settles start-up with `auth/me`'s answer: signed in or signed out.
+ * Settles start-up with `session/current`'s answer: signed in or signed out.
  *
  * @param route - The route the app started on.
  * @param maybeUser - The session's user, if there is a session.
- * @param maybeRevision - The revision `auth/me`'s answer stated.
+ * @param maybeRevision - The revision `session/current`'s answer stated.
  * @returns The state and any redirect.
  */
 const settleSession = (

@@ -58,15 +58,12 @@ import type { ActingUser } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { TABLE_OF } from "../catalog/definition-tables.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
-import {
-  currentReadScope,
-  getRecord,
-  resolveTable,
-} from "../records/read-records.ts";
+import { currentReadScope, resolveTable } from "../records/read-records.ts";
 import { stepBoundary } from "../schema/recovery-settings.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import type { TransactionsApi } from "../sql/transactions.ts";
+import { mergePatch } from "./api/patch.ts";
 import {
   applyAsActor,
   checkTargetsVisible,
@@ -74,9 +71,7 @@ import {
   authorizeOperations,
   sessionAuthorization,
 } from "./change-sets.ts";
-import { jsonWithStatus } from "./record-writes.ts";
 import { asActor, inRequestTransaction } from "./request-scope.ts";
-import { recordServedRevision } from "./schema-revision-header.ts";
 import { checkRequestRevision } from "./stale-request.ts";
 import type { parseRequestRevision } from "./stale-request.ts";
 
@@ -524,6 +519,48 @@ const PATCH_BUILDERS: Readonly<
 const sameValue = (left: JsonValue, right: JsonValue | undefined): boolean =>
   stringifyJson(left) === stringifyJson(right ?? null);
 
+/** The codecs of JSON-valued definition columns. */
+const JSON_CODECS: ReadonlySet<string> = new Set(["json", "nullableJson"]);
+
+/**
+ * A body whose JSON-valued columns are merged into the definition's current
+ * values by RFC 7396 (Contracts 10.5: a `PATCH` is a merge patch), so a
+ * patch that names one member of a field type or a condition keeps the
+ * others. The update is applied at the definition's version (`If-Match`),
+ * which the change set checks again under its lock, so the merge never
+ * builds on a value another change set replaced. Other columns are taken
+ * as they are.
+ *
+ * @param current - The definition as stored.
+ * @param body - Column values.
+ * @returns The body with merged JSON columns.
+ */
+const mergedJsonColumns = (
+  current: Definition,
+  body: Readonly<Record<string, JsonValue>>
+): Readonly<Record<string, JsonValue>> => {
+  const stored: JsonObject = current;
+
+  const jsonProperties = new Map(
+    (TABLE_OF.get(current.kind)?.columns ?? []).flatMap((spec) =>
+      JSON_CODECS.has(spec.codec) ? [[spec.column, spec.property] as const] : []
+    )
+  );
+
+  return Object.fromEntries(
+    Object.entries(body).map(([column, value]): [string, JsonValue] => {
+      const property = jsonProperties.get(column);
+
+      // RFC 7396 on every JSON-valued attribute: an object patch merges into
+      // an object and replaces anything else, its null members removed; any
+      // other patch replaces the value.
+      return property === undefined
+        ? [column, value]
+        : [column, mergePatch(stored[property] ?? null, value)];
+    })
+  );
+};
+
 /**
  * The operations a `PATCH` body stands for, from `PATCH_FIELD_OPERATIONS`
  * and `PATCH_OTHER_OPERATIONS`: first the other fields as one update (an
@@ -543,7 +580,7 @@ export const updateOperations = Effect.fn("Http.definitionUpdate")(
     body: Readonly<Record<string, JsonValue>>
   ) {
     const properties = yield* fromResult(
-      propertiesOf(current.kind, body, true)
+      propertiesOf(current.kind, mergedJsonColumns(current, body), true)
     );
 
     const dispatched = new Set<string>(
@@ -788,19 +825,20 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
 });
 
 /**
- * Runs a write to a definition table as a change set and answers like the
- * generic write routes: 201 or 200 with the record, or the delete's ID and
- * version.
+ * Runs a write to a definition table as a change set: the request's checks
+ * in a request transaction, then the change set, everything checked again
+ * under its lock. Both APIs answer from the result.
  *
  * @param transactions - The process's transactions.
  * @param request - The HTTP request.
+ * @param stated - The request's stated revision.
  * @param table - The qualified table name.
  * @param kind - Its definition kind.
- * @param write - The write.
- * @returns The response.
+ * @param write - The write, keyed by definition column names.
+ * @returns The definition's ID, the acting user and the change set's result.
  */
-export const writeDefinition = Effect.fn("Http.writeDefinition")(
-  function* writeDefinition(
+export const applyDefinitionWrite = Effect.fn("Http.applyDefinitionWrite")(
+  function* applyDefinitionWrite(
     transactions: TransactionsApi,
     request: HttpServerRequest,
     stated: StatedRevision,
@@ -838,40 +876,16 @@ export const writeDefinition = Effect.fn("Http.writeDefinition")(
       userId: prepared.actor.userId,
     });
 
-    yield* applyAsActor(prepared.actor, {
+    const result = yield* applyAsActor(prepared.actor, {
       authorize,
       operations: prepared.operations,
       source: { kind: "api", route: "records", table },
     });
 
-    return yield* inRequestTransaction(
-      transactions,
-      request,
-      asActor(
-        Effect.gen(function* answer() {
-          const reading = yield* Catalog;
-          const snapshot = yield* reading.current;
+    // Tests commit another change set here, after this one and before the
+    // answer (`StepBoundary`; nothing happens in production).
+    yield* stepBoundary("definition-write:applied");
 
-          recordServedRevision(request, snapshot.key);
-
-          if (write.action === "delete") {
-            return jsonWithStatus(
-              {
-                id: prepared.id,
-                schemaRevision: snapshot.revision,
-                version:
-                  snapshot.get(prepared.id)?.version ?? write.expectedVersion,
-              },
-              200
-            );
-          }
-
-          return jsonWithStatus(
-            yield* getRecord({ id: prepared.id, table }),
-            write.action === "create" ? 201 : 200
-          );
-        })
-      )
-    );
+    return { actor: prepared.actor, id: prepared.id, result };
   }
 );

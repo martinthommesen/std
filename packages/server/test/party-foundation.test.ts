@@ -23,7 +23,7 @@ import {
   USER_CLASS_ID,
   USER_FIELD_IDS,
 } from "@std/definitions/well-known";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
+import type { JsonValue } from "@std/values/json-value";
 import { Effect, Exit, Fiber, Redacted, Schema } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -38,7 +38,7 @@ import { migration0012 } from "../src/platform/migrations/0012-user-individuals.
 import { individualOf } from "../src/records/party-rules.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { objectOf, recordIn, signInAll, textOf } from "./authz-support.ts";
-import { readsTestLayer, recordPath, tagOf } from "./reads-support.ts";
+import { codeOf, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
   addOverride,
   createClass,
@@ -111,12 +111,12 @@ const operationOf = (recordId: string) =>
   ).pipe(Effect.map(([id]) => id ?? ""));
 
 /**
- * The field values of the record in a response.
- * @param json - The response body.
- * @returns Its `record.values`.
+ * The ID a resource's reference attribute points at (an EntityRef).
+ * @param reference - The attribute value.
+ * @returns The referenced ID, or an empty string.
  */
-const valuesIn = (json: JsonValue | undefined): JsonObject =>
-  objectOf(recordIn(json).values);
+const refIdOf = (reference: JsonValue | undefined): string =>
+  textOf(objectOf(reference).id);
 
 /** The state of migration 12's ledger row, if it has one. */
 const ledgerRow12 = values(
@@ -182,24 +182,20 @@ describe("party-foundation", () => {
             // The fixture's users and the system user already have theirs.
             const before = yield* assertOneEach(true);
 
-            const created = yield* http.request(
-              "POST",
-              "/api/v1/tables/core.user/records",
-              {
-                body: {
-                  active: true,
-                  login: `grace-${randomUUID().slice(0, 8)}`,
-                  name: "Grace Hopper",
-                  password: `pw-${randomUUID()}`,
-                },
-                token: tokens.admin,
-              }
-            );
+            const created = yield* http.request("POST", "/api/v1/coreUser", {
+              body: {
+                active: true,
+                login: `grace-${randomUUID().slice(0, 8)}`,
+                name: "Grace Hopper",
+                password: `pw-${randomUUID()}`,
+              },
+              token: tokens.admin,
+            });
 
             assert.strictEqual(created.status, 201, created.text);
 
             const user = recordIn(created.json);
-            const individualId = textOf(valuesIn(created.json).individual);
+            const individualId = refIdOf(user.individual);
 
             const individual = yield* http.get(
               recordPath("core.individual", individualId),
@@ -207,9 +203,9 @@ describe("party-foundation", () => {
             );
 
             assert.strictEqual(individual.status, 200, individual.text);
-            assert.deepInclude(valuesIn(individual.json), {
-              family_name: "Hopper",
-              given_name: "Grace",
+            assert.deepInclude(recordIn(individual.json), {
+              familyName: "Hopper",
+              givenName: "Grace",
               name: "Grace Hopper",
               status: "initialized",
             });
@@ -256,7 +252,7 @@ describe("party-foundation", () => {
 
             const contractor = yield* http.request(
               "POST",
-              "/api/v1/tables/site.contractor/records",
+              "/api/v1/siteContractor",
               {
                 body: {
                   active: false,
@@ -268,7 +264,7 @@ describe("party-foundation", () => {
             );
 
             assert.strictEqual(contractor.status, 201, contractor.text);
-            assert.isString(valuesIn(contractor.json).individual);
+            assert.isString(refIdOf(recordIn(contractor.json).individual));
 
             assert.strictEqual(yield* assertOneEach(true), before + 3);
           })
@@ -283,21 +279,17 @@ describe("party-foundation", () => {
             const aliceIndividual = yield* individualOfUser(fixture.alice.id);
             const bobIndividual = yield* individualOfUser(fixture.bob.id);
 
-            const named = yield* http.request(
-              "POST",
-              "/api/v1/tables/core.user/records",
-              {
-                body: {
-                  individual: aliceIndividual,
-                  login: `copy-${randomUUID().slice(0, 8)}`,
-                  name: "Copy",
-                },
-                token: tokens.admin,
-              }
-            );
+            const named = yield* http.request("POST", "/api/v1/coreUser", {
+              body: {
+                individual: aliceIndividual,
+                login: `copy-${randomUUID().slice(0, 8)}`,
+                name: "Copy",
+              },
+              token: tokens.admin,
+            });
 
             assert.strictEqual(named.status, 422, named.text);
-            assert.strictEqual(yield* tagOf(named), "ValidationFailed");
+            assert.strictEqual(yield* codeOf(named), "ValidationFailed");
 
             const [version] = yield* values(
               `SELECT version::text AS value FROM core."user" WHERE id = $1::uuid`,
@@ -315,7 +307,7 @@ describe("party-foundation", () => {
             );
 
             assert.strictEqual(moved.status, 422, moved.text);
-            assert.strictEqual(yield* tagOf(moved), "ValidationFailed");
+            assert.strictEqual(yield* codeOf(moved), "ValidationFailed");
             assert.strictEqual(
               yield* individualOfUser(fixture.bob.id),
               bobIndividual
@@ -337,7 +329,7 @@ describe("party-foundation", () => {
             );
 
             assert.strictEqual(
-              yield* tagOf(deleted),
+              yield* codeOf(deleted),
               "Referenced",
               deleted.text
             );
@@ -382,9 +374,9 @@ describe("party-foundation", () => {
 
             const created = yield* http.request(
               "POST",
-              "/api/v1/tables/core.individual/records",
+              "/api/v1/coreIndividual",
               {
-                body: { family_name: "Lovelace", given_name: "Ada" },
+                body: { familyName: "Lovelace", givenName: "Ada" },
                 token: tokens.admin,
               }
             );
@@ -393,20 +385,20 @@ describe("party-foundation", () => {
 
             const record = recordIn(created.json);
 
-            assert.strictEqual(valuesIn(created.json).name, "Ada Lovelace");
+            assert.strictEqual(record.name, "Ada Lovelace");
 
             const renamed = yield* http.request(
               "PATCH",
               recordPath("core.individual", textOf(record.id)),
               {
-                body: { family_name: "King" },
-                headers: { "if-match": `"${textOf(record.version)}"` },
+                body: { familyName: "King" },
+                headers: { "if-match": `"${textOf(record.revision)}"` },
                 token: tokens.admin,
               }
             );
 
             assert.strictEqual(renamed.status, 200, renamed.text);
-            assert.strictEqual(valuesIn(renamed.json).name, "Ada King");
+            assert.strictEqual(recordIn(renamed.json).name, "Ada King");
 
             const cleared = yield* http.request(
               "PATCH",
@@ -414,22 +406,22 @@ describe("party-foundation", () => {
               {
                 body: { name: null },
                 headers: {
-                  "if-match": `"${textOf(recordIn(renamed.json).version)}"`,
+                  "if-match": `"${textOf(recordIn(renamed.json).revision)}"`,
                 },
                 token: tokens.admin,
               }
             );
 
             assert.strictEqual(cleared.status, 200, cleared.text);
-            assert.strictEqual(valuesIn(cleared.json).name, "Ada King");
+            assert.strictEqual(recordIn(cleared.json).name, "Ada King");
 
             const named = yield* http.request(
               "POST",
-              "/api/v1/tables/core.individual/records",
+              "/api/v1/coreIndividual",
               {
                 body: {
-                  family_name: "Byron",
-                  given_name: "Augusta Ada",
+                  familyName: "Byron",
+                  givenName: "Augusta Ada",
                   name: "Countess of Lovelace",
                 },
                 token: tokens.admin,
@@ -437,7 +429,7 @@ describe("party-foundation", () => {
             );
 
             assert.strictEqual(
-              valuesIn(named.json).name,
+              recordIn(named.json).name,
               "Countess of Lovelace"
             );
           })

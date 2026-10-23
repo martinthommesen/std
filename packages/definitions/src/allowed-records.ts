@@ -8,6 +8,7 @@
  * adds `condition_reads` edges like stored rule conditions.
  */
 import type { FieldType } from "@std/values/field-type";
+import { stringifyJson } from "@std/values/json";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
 import { getOrUndefined } from "effect/Option";
@@ -75,6 +76,11 @@ export const withoutAllowedRecords = (type: TypeJson): TypeJson =>
 export const sameTypeApartFromAllowedRecords = (
   before: TypeJson,
   after: TypeJson
-): boolean =>
-  JSON.stringify(withoutAllowedRecords(before)) ===
-  JSON.stringify(withoutAllowedRecords(after));
+): boolean => {
+  const left = withoutAllowedRecords(before);
+  const right = withoutAllowedRecords(after);
+
+  return left === undefined || right === undefined
+    ? left === right
+    : stringifyJson(left) === stringifyJson(right);
+};

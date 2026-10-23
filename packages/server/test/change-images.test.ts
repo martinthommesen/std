@@ -19,7 +19,7 @@ import {
 import { runDataMigrations } from "../src/platform/data-migrations.ts";
 import { DataMigrationFailed } from "../src/platform/migration.ts";
 import { PLATFORM_MIGRATIONS } from "../src/platform/migrations.ts";
-import { migration0027 } from "../src/platform/migrations/0027-change-image-backfill.ts";
+import { migration0028 } from "../src/platform/migrations/0028-change-image-backfill.ts";
 import {
   createRecord,
   deleteRecord,
@@ -28,6 +28,7 @@ import {
 import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { apiCallers } from "./api-support.ts";
 import { hubTestLayer, register } from "./hub-support.ts";
 import {
   ACME,
@@ -38,7 +39,6 @@ import {
   createClass,
   ensureSite,
 } from "./schema-support.ts";
-import { v2Callers } from "./v2-support.ts";
 import { actingAs, asLoadedUser } from "./worker-support.ts";
 
 const test = it.effect;
@@ -82,7 +82,7 @@ describe("change images", () => {
     Effect.gen(function* retained() {
       const sql = yield* SqlClient.SqlClient;
       const { id, fixture, update } = yield* asset;
-      const { admin } = yield* v2Callers;
+      const { admin } = yield* apiCallers;
       yield* register(admin.token ?? "", "http://localhost:12345/events");
       yield* update(1);
       yield* sql`DELETE FROM core.resource_event WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid AND record_version = 1)`;
@@ -170,7 +170,7 @@ describe("change images", () => {
       const { id, fixture, update } = yield* asset;
       yield* update(1);
       assert.strictEqual(
-        yield* request(migration0027.remaining).pipe(
+        yield* request(migration0028.remaining).pipe(
           actingAs(fixture.admin.id)
         ),
         0
@@ -182,7 +182,7 @@ describe("change images", () => {
       assert.isDefined(system);
       yield* sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid)`;
 
-      const first = yield* request(migration0027.batch(null, 1)).pipe(
+      const first = yield* request(migration0028.batch(null, 1)).pipe(
         actingAs(fixture.admin.id)
       );
 
@@ -198,11 +198,11 @@ describe("change images", () => {
 
       assert.strictEqual(bump?.version, 2);
       assert.strictEqual(bump?.image, true);
-      yield* request(migration0027.batch(first.next, 10)).pipe(
+      yield* request(migration0028.batch(first.next, 10)).pipe(
         actingAs(fixture.admin.id)
       );
       assert.strictEqual(
-        yield* request(migration0027.remaining).pipe(
+        yield* request(migration0028.remaining).pipe(
           actingAs(fixture.admin.id)
         ),
         0
@@ -238,7 +238,7 @@ describe("change images", () => {
 
       yield* log.clear;
       yield* request(
-        migration0027.batch(
+        migration0028.batch(
           JSON.stringify({ recordId: id, version: firstVersion - 1 }),
           batchSize
         )
@@ -371,7 +371,7 @@ describe("change images", () => {
       assert.deepStrictEqual(yield* readEntries(legacy.id, 2), []);
     }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
 
-  test("0027 resumes committed version batches and preserves legacy payloads using one image query after finalize", () =>
+  test("0028 resumes committed version batches and preserves legacy payloads using one image query after finalize", () =>
     Effect.gen(function* backfill() {
       const sql = yield* SqlClient.SqlClient;
       const log = yield* StatementLog;
@@ -418,16 +418,16 @@ describe("change images", () => {
         );
       }
 
-      const remaining = request(migration0027.remaining).pipe(
+      const remaining = request(migration0028.remaining).pipe(
         actingAs(fixture.admin.id)
       );
 
       assert.strictEqual(yield* remaining, 5);
-      yield* sql`DELETE FROM core.platform_migration WHERE id = 27`;
+      yield* sql`DELETE FROM core.platform_migration WHERE id = 28`;
       let interrupted = false;
 
       const interrupting = {
-        ...migration0027,
+        ...migration0028,
         batch: Effect.fn("Test.interruptedImageBatch")(function* batch(
           after: string | null,
           size: number
@@ -436,20 +436,20 @@ describe("change images", () => {
             interrupted = true;
 
             return yield* new DataMigrationFailed({
-              id: 27,
-              migration: migration0027.name,
+              id: 28,
+              migration: migration0028.name,
               reason: "deterministic interruption",
             });
           }
 
-          return yield* migration0027.batch(after, size);
+          return yield* migration0028.batch(after, size);
         }),
       };
 
       yield* runDataMigrations({
         batchSize: 2,
         migrations: PLATFORM_MIGRATIONS.map((migration) =>
-          migration.id === 27 ? interrupting : migration
+          migration.id === 28 ? interrupting : migration
         ),
       }).pipe(Effect.flip);
       assert.strictEqual(yield* remaining, 3);

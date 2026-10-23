@@ -44,7 +44,9 @@ import type { Browser, Page, Response } from "playwright";
 import { inject } from "vitest";
 
 import {
+  API_PREFIX,
   assertHiddenValuesAbsent,
+  collectionOf,
   bearerToken,
   captureResponses,
   historyEntryTexts,
@@ -72,7 +74,10 @@ import {
   instantText,
   isWriteOnly,
   listShowsTheApiValues,
-  patchRecord,
+  definitionPath,
+  incidentPath,
+  patchDefinition,
+  patchIncident,
   shownRows,
   valueText,
   visibleTextOf,
@@ -250,9 +255,9 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
     decodeRead(
       await adminCall(origin, token, {
         method: "GET",
-        path: `/tables/${INCIDENTS}/records/${pinChild}`,
+        path: incidentPath(pinChild),
       })
-    ).record.values.description,
+    ).description,
     STORED_CHILD_DESCRIPTION
   );
 
@@ -261,17 +266,17 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
     short_description: "Unassigned child",
   });
 
-  const fullPath = `/tables/${INCIDENTS}/records/${full}`;
+  const fullPath = incidentPath(full);
 
   // The server stored the long text with LF and its spaces kept.
   assert.strictEqual(
     decodeRead(
       await adminCall(origin, token, { method: "GET", path: fullPath })
-    ).record.values.description,
+    ).description,
     STORED_DESCRIPTION
   );
 
-  await patchRecord(origin, token, fullPath, {
+  await patchIncident(origin, token, full, {
     big_count: "1234567890123456789",
     payload: { tags: [] },
     pin: "pin-plaintext-0418",
@@ -282,7 +287,7 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
   // As the agent the incident is assigned to.
   const agentToken = await bearerToken(origin, visitorOf(fixture.agent));
 
-  await patchRecord(origin, agentToken, fullPath, {
+  await patchIncident(origin, agentToken, full, {
     description: AGENT_DESCRIPTION,
     rule: condition("eq", [HELPDESK.fields.priority], { value: "critical" }),
     short_description: "Structured values, changed by the agent",
@@ -291,41 +296,41 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
   assert.strictEqual(
     decodeRead(
       await adminCall(origin, token, { method: "GET", path: fullPath })
-    ).record.values.description,
+    ).description,
     STORED_AGENT_DESCRIPTION
   );
 
   // After the entries: labels and a name change, and two fields become
   // read-only.
-  await patchRecord(
+  await patchDefinition(
     origin,
     token,
-    `/tables/core.choice/records/${HIGH_PRIORITY_CHOICE}`,
+    definitionPath("core.choice", HIGH_PRIORITY_CHOICE),
     { label: "Two - High" }
   );
-  await patchRecord(
+  await patchDefinition(
     origin,
     token,
-    `/tables/core.field/records/${fieldId("big_count")}`,
+    definitionPath("core.field", fieldId("big_count")),
     { label: "Large count" }
   );
-  await patchRecord(
+  await patchDefinition(
     origin,
     token,
-    `/tables/core.field/records/${fieldId("ref_code")}`,
+    definitionPath("core.field", fieldId("ref_code")),
     { name: "ref_uuid" }
   );
-  await patchRecord(
+  await patchDefinition(
     origin,
     token,
-    `/tables/core.field/records/${fieldId("frozen")}`,
-    { read_only: true }
+    definitionPath("core.field", fieldId("frozen")),
+    { readOnly: true }
   );
-  await patchRecord(
+  await patchDefinition(
     origin,
     token,
-    `/tables/core.field/records/${fieldId("frozen_rule")}`,
-    { read_only: true }
+    definitionPath("core.field", fieldId("frozen_rule")),
+    { readOnly: true }
   );
 
   return { child, full };
@@ -335,8 +340,8 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
 
 const isRelatedResponse = (response: Response): boolean =>
   isListResponse(response) &&
-  (new URL(response.url()).searchParams.get("filter") ?? "").startsWith(
-    "parent_incident "
+  (new URL(response.url()).searchParams.get("condition") ?? "").startsWith(
+    "parentIncident "
   );
 
 /**
@@ -364,17 +369,20 @@ const relatedListShowsTheApiValues = async (
   const request = new URL(response.url());
 
   assert.strictEqual(
-    request.searchParams.get("filter"),
-    `parent_incident = "${full}"`
+    request.searchParams.get("condition"),
+    `parentIncident = "${full}"`
   );
-  assert.strictEqual(request.searchParams.get("labels"), "true");
 
   const metadata = decodeMetadata(
-    await getAsPage(page, `${origin}/api/v1/meta/tables/${INCIDENTS}`)
+    await getAsPage(
+      page,
+      `${origin}${API_PREFIX}/tableMetadata/${collectionOf(INCIDENTS)}`
+    )
   );
 
   const columns = fieldsOfLayout(metadata, "list");
-  const answer = decodeList(await getAsPage(page, request.toString()));
+
+  const answer = decodeList(await getAsPage(page, request.toString()), columns);
 
   const section = page.locator(".related-list").filter({
     has: page.getByRole("button", { exact: true, name: RELATED_LIST }),
@@ -411,32 +419,41 @@ const HistoryFieldSchema = Schema.Struct({
   }),
 });
 
-const decodeHistory = Schema.decodeUnknownSync(
+const decodeChangeEntries = Schema.decodeUnknownSync(
   Schema.fromJsonString(
-    Schema.Struct({
-      entries: Schema.Array(
-        Schema.Struct({
-          actor: Schema.String,
-          changes: Schema.Record(Schema.String, Schema.Json),
-          fields: Schema.Record(Schema.String, HistoryFieldSchema),
-          kind: Schema.Literals(["create", "update", "delete"]),
-          occurredAt: Schema.String,
-          version: Schema.Int,
-        })
-      ),
-    })
+    Schema.Array(
+      Schema.Struct({
+        actor: Schema.Struct({ id: Schema.String }),
+        changes: Schema.Record(Schema.String, Schema.Json),
+        fields: Schema.Record(Schema.String, HistoryFieldSchema),
+        kind: Schema.Literals(["create", "update", "delete"]),
+        occurredAt: Schema.String,
+        revision: Schema.Int,
+      })
+    )
   )
 );
+
+/**
+ * A history list (`ChangeEntry` resources, Contracts 10.4) as the rules
+ * read it: the acting user's ID and the record's version after the change.
+ *
+ * @param text - The body.
+ * @returns The entries, oldest first.
+ */
+const decodeHistory = (text: string) => ({
+  entries: decodeChangeEntries(text).map((entry) => ({
+    ...entry,
+    actor: entry.actor.id,
+    version: entry.revision,
+  })),
+});
 
 type HistoryEntry = ReturnType<typeof decodeHistory>["entries"][number];
 
 const decodeUserName = Schema.decodeUnknownSync(
   Schema.fromJsonString(
-    Schema.Struct({
-      record: Schema.Struct({
-        values: Schema.Struct({ name: Schema.optionalKey(Schema.String) }),
-      }),
-    })
+    Schema.Struct({ name: Schema.optionalKey(Schema.String) })
   )
 );
 
@@ -472,10 +489,12 @@ const userNameOf = async (
 ): Promise<string> => {
   const response = await page
     .context()
-    .request.get(`${origin}/api/v1/tables/${USER_TABLE}/records/${id}`);
+    .request.get(
+      `${origin}${API_PREFIX}/${collectionOf(USER_TABLE)}/${id}?fields=name`
+    );
 
   return response.ok()
-    ? (decodeUserName(await response.text()).record.values.name ?? id)
+    ? (decodeUserName(await response.text()).name ?? id)
     : id;
 };
 
@@ -745,8 +764,8 @@ const COVERED = [
   // renamed field under its current name with its old label, a write-only
   // change, a change by the agent.
   "history priority: Priority: 2 - High → 1 - Critical",
-  "history big_count: Big count: 9007199254740993 → 1234567890123456789",
-  "history ref_uuid: Ref code: 3f2504e0-4f89-41d3-9a0c-0305e82c3301 → 0f0e0d0c-0b0a-4000-8000-00000000abcd",
+  "history bigCount: Big count: 9007199254740993 → 1234567890123456789",
+  "history refUuid: Ref code: 3f2504e0-4f89-41d3-9a0c-0305e82c3301 → 0f0e0d0c-0b0a-4000-8000-00000000abcd",
   "history pin: PIN: Changed (the value is never shown)",
   // Long text: in the list, the related list's empty cells, the textarea
   // and the history, line breaks and spaces kept.

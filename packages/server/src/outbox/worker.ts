@@ -54,7 +54,7 @@ import type { SubscriptionDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import { hasPermission } from "@std/definitions/requester";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { PERMISSION_IDS } from "@std/definitions/well-known";
+import { PERMISSION_IDS, SERVICE_USER_IDS } from "@std/definitions/well-known";
 import {
   Cause,
   Clock,
@@ -309,14 +309,25 @@ const IDENTITY_UNAVAILABLE =
  */
 const identityOf = Effect.fn("Outbox.identity")(function* identityOf(
   snapshot: ConfigSnapshot,
-  identityId: DefinitionId,
-  hub: boolean
+  subscription: SubscriptionDefinition
 ) {
+  const { identityId } = subscription;
+
+  if (
+    subscription.owner.layer === "local" &&
+    SERVICE_USER_IDS.has(identityId)
+  ) {
+    return yield* new DeliveryFailed({
+      reason:
+        "Local subscriptions cannot run as a reserved service identity; choose an ordinary user.",
+    });
+  }
+
   const users = yield* readUserRoles(snapshot, [identityId]);
   const user = users.get(identityId);
 
   if (user === undefined || !user.active) {
-    if (hub) {
+    if (subscription.hub !== null && subscription.hub !== undefined) {
       return yield* new EventNotAuthorized();
     }
 
@@ -359,11 +370,7 @@ const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
 
   const { subscription } = served;
 
-  const actor = yield* identityOf(
-    snapshot,
-    subscription.identityId,
-    subscription.hub !== null && subscription.hub !== undefined
-  );
+  const actor = yield* identityOf(snapshot, subscription);
 
   if (
     subscription.hub !== null &&

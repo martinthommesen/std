@@ -1,6 +1,6 @@
 import { knowsTable } from "@std/access/rules";
-import { GENERIC_API_PREFIX } from "@std/api/v2/paths";
-import { EventCreate } from "@std/api/v2/tmf688";
+import { API_PREFIX } from "@std/api/api";
+import { EventCreate } from "@std/api/tmf688";
 import { dependenciesOf } from "@std/definitions/dependencies";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import { apiAttributeNameOf } from "@std/definitions/names";
@@ -11,7 +11,7 @@ import { isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Schema, Result } from "effect";
 
-import { collectionNameOf, typeNameOf } from "../http/v2/table-names.ts";
+import { collectionNameOf, typeNameOf } from "../http/api/table-names.ts";
 import type {
   Delivery,
   ExternalDeliveryEffect,
@@ -206,7 +206,7 @@ const resourceImage = (
 
   const resource: ResourceImage = {
     "@type": typeNameOf(snapshot, payload.classId),
-    href: `${origin}${GENERIC_API_PREFIX}/${collection}/${payload.recordId}`,
+    href: `${origin}${API_PREFIX}/${collection}/${payload.recordId}`,
     id: payload.recordId,
   };
 

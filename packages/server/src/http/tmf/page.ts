@@ -5,8 +5,8 @@ import { isJsonArray, isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
-import { alternativesOf } from "../v2/query.ts";
-import { jsonAnswer } from "../v2/records.ts";
+import { alternativesOf } from "../api/query.ts";
+import { jsonAnswer } from "../api/records.ts";
 
 const CONTROL = new Set([
   "fields",

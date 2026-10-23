@@ -14,7 +14,7 @@
  * layout does.) Through the whole run there must be no uncaught
  * exception, no console error and no failed same-origin request: none
  * that fails to load and no 4xx or 5xx answer, under `/api/` too. The one
- * allowed exception: the app's session check, `GET /api/v1/auth/me`,
+ * allowed exception: the app's session check, `GET /session/current`,
  * answered `401` before the sign-in form is submitted, and Chromium's
  * console line for it.
  *
@@ -36,6 +36,7 @@ import type {
 
 import type { CellState } from "../browser/app.ts";
 import {
+  API_PREFIX,
   formFieldState,
   isListResponse,
   listColumnCells,
@@ -59,18 +60,18 @@ const FAILED_RESOURCE =
 const CLIENT_ERROR = 400;
 
 /**
- * The app's session check (`GET /api/v1/auth/me`): before sign-in its
+ * The app's session check (`GET /session/current`): before sign-in its
  * `401 Unauthenticated` is the expected answer, which sends the app to the
  * sign-in page (`apps/web/src/command.ts`).
  */
-const SESSION_CHECK = "/api/v1/auth/me";
+const SESSION_CHECK = `${API_PREFIX}/session/current`;
 
 const UNAUTHENTICATED = 401;
 
 /** The column agents may never read (`examples/helpdesk/v2/access.yaml`). */
 const INTERNAL_COST = "Internal cost";
 
-/** Its API name, which the form marks its row with (`data-field`). */
+/** Its definition name, which the form marks its row with (`data-field`). */
 const INTERNAL_COST_FIELD = "internal_cost";
 
 /** How a form shows a field the caller may not read. */
@@ -323,11 +324,13 @@ describe("compose smoke", () => {
     assert.isTrue(isFailedAnswer(answer(SESSION_CHECK, 401)));
     assert.isTrue(isFailedAnswer(answer(SESSION_CHECK, 401, true, "POST")));
     assert.isTrue(isFailedAnswer(answer(SESSION_CHECK, 403, true)));
-    assert.isTrue(isFailedAnswer(answer("/api/v1/auth/me/", 401, true)));
+    assert.isTrue(isFailedAnswer(answer(`${SESSION_CHECK}/`, 401, true)));
     assert.isTrue(
-      isFailedAnswer(answer("/api/v1/tables/helpdesk.incident/records", 403))
+      isFailedAnswer(answer(`${API_PREFIX}/helpdeskIncident`, 403))
     );
-    assert.isTrue(isFailedAnswer(answer("/api/v1/meta/tables", 401, true)));
+    assert.isTrue(
+      isFailedAnswer(answer(`${API_PREFIX}/tableMetadata`, 401, true))
+    );
     assert.isTrue(isFailedAnswer(answer("/assets/index-x.js", 404, true)));
     assert.isTrue(isFailedAnswer(answer("/", 500)));
     assert.isFalse(isFailedAnswer(answer("/assets/index-x.js", 200)));

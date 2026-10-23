@@ -64,9 +64,13 @@ import {
 import type { NameProblem } from "./names.ts";
 import { problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
-import { recordRuleProblems } from "./rule-validation.ts";
+import { recordRuleProblems, runIdentityOf } from "./rule-validation.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
-import { CONFIG_SUBSCRIPTION_CLASS_IDS, USER_FIELD_IDS } from "./well-known.ts";
+import {
+  CONFIG_SUBSCRIPTION_CLASS_IDS,
+  SERVICE_USER_IDS,
+  USER_FIELD_IDS,
+} from "./well-known.ts";
 
 /** Field kinds that can be created in Step 1 (Contracts plan, Step 1). */
 export const SUPPORTED_FIELD_KINDS: ReadonlySet<FieldKind> = new Set<FieldKind>(
@@ -1345,7 +1349,7 @@ const checkUniqueness = (
 };
 
 /**
- * The `/api/v2` table name rule (Contracts 10.1, Martin 2026-10-22): a
+ * The `/api/v1` table name rule (Contracts 10.1, Martin 2026-10-22): a
  * table's collection name (`apiTableNameOf`, `helpdesk.ticket_note` is
  * `helpdeskTicketNote`) must not equal a fixed resource's
  * (`FIXED_RESOURCE_NAMES`) or another live table's (`foo_bar.baz` and
@@ -1410,14 +1414,14 @@ export const apiTableNameProblems = (
 };
 
 /**
- * The `/api/v2` name rule (Contracts 10.2): a field's API name (its name in
+ * The `/api/v1` name rule (Contracts 10.2): a field's API name (its name in
  * lowerCamelCase) must not be a reserved attribute name (`href`,
  * `withheld`, ...) or equal the API name of another live field of its
  * hierarchy. Fields whose definition names are equal are `duplicateName`
  * already and are not reported again.
  *
  * Only the fields a change set creates or changes are checked, so a clash
- * that predates the rule never blocks an unrelated change set; `/api/v2`
+ * that predates the rule never blocks an unrelated change set; `/api/v1`
  * resolves neither of two clashing names instead.
  *
  * @param snapshot - The configuration after the change.
@@ -1433,7 +1437,7 @@ export const apiNameProblems = (
 
   const clashOf = (field: FieldDefinition): DefinitionProblem | undefined => {
     // A core platform field keeps its definition name and takes its
-    // platform v2 name (`type` is `fieldType`); any other field's v2 name
+    // platform API name (`type` is `fieldType`); any other field's API name
     // is checked as derived.
     const apiName =
       field.owner.layer === "core"
@@ -1674,6 +1678,62 @@ const checkDefinition = (
   }
 };
 
+/** Refuses new local reserved identities without blocking legacy definitions.
+ * @param problems - The collected problems.
+ * @param snapshot - The configuration after the change.
+ * @param definition - The definition being checked.
+ * @param before - The configuration before the change, when available.
+ * @returns Nothing.
+ */
+const checkReservedIdentity = (
+  problems: Problems,
+  snapshot: ConfigSnapshot,
+  definition: Definition,
+  before: ConfigSnapshot | undefined
+): void => {
+  if (definition.owner.layer !== "local") {
+    return;
+  }
+
+  if (definition.kind === "recordRule") {
+    const identity = runIdentityOf(snapshot, definition);
+    const previous = before?.get(definition.id);
+
+    const unchanged =
+      before !== undefined &&
+      previous?.kind === "recordRule" &&
+      runIdentityOf(before, previous) === identity;
+
+    if (identity !== null && SERVICE_USER_IDS.has(identity) && !unchanged) {
+      problems.push(
+        problem(
+          "invalidRecordRule",
+          definition.id,
+          `Local rules cannot run as reserved service identity ${identity}; choose an ordinary user.`
+        )
+      );
+    }
+  } else if (definition.kind === "subscription") {
+    const previous = before?.get(definition.id);
+
+    if (
+      SERVICE_USER_IDS.has(definition.identityId) &&
+      !(
+        previous?.kind === "subscription" &&
+        previous.identityId === definition.identityId
+      )
+    ) {
+      problems.push(
+        problem(
+          "invalidSubscription",
+          definition.id,
+          `Local subscriptions cannot run as reserved service identity ${definition.identityId}; choose an ordinary user.`
+        )
+      );
+    }
+  }
+};
+
 /**
  * Validates every live definition of a snapshot.
  *
@@ -1685,12 +1745,14 @@ const checkDefinition = (
  *   definitions are checked as being stored (they may not read retired
  *   fields); the others were stored earlier and keep working when a field
  *   they read is retired. Every condition counts as stored by default.
+ * @param before - When applying a change, the previous snapshot; unchanged reserved identities remain loadable.
  * @returns Every problem found, in definition order.
  */
 export const validateSnapshot = (
   snapshot: ConfigSnapshot,
   only?: ReadonlySet<DefinitionId>,
-  storedConditions?: ReadonlySet<DefinitionId>
+  storedConditions?: ReadonlySet<DefinitionId>,
+  before?: ConfigSnapshot
 ): readonly DefinitionProblem[] => {
   const problems: Problems = [];
 
@@ -1699,6 +1761,7 @@ export const validateSnapshot = (
       const stored =
         storedConditions === undefined || storedConditions.has(definition.id);
 
+      checkReservedIdentity(problems, snapshot, definition, before);
       checkDefinition(
         problems,
         snapshot,

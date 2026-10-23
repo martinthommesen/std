@@ -309,6 +309,11 @@ const DRIFTS: readonly Drift[] = [
     statements: ["DROP TABLE core.namespace CASCADE"],
   },
   {
+    expected: expect(2, "error", "tableMissing", "core.user"),
+    name: "a dropped user table without aborting the service identity check",
+    statements: ['DROP TABLE core."user" CASCADE'],
+  },
+  {
     expected: expect(
       2,
       "error",

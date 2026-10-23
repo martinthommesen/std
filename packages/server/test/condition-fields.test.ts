@@ -18,7 +18,6 @@ import { randomUUID } from "node:crypto";
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { AccessRuleDraft } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
-import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
 
@@ -27,11 +26,12 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import {
+  codeOf,
   readsTestLayer,
-  recordOf,
   recordPath,
-  tagOf,
+  resourceOf,
 } from "./reads-support.ts";
+import { postChangeSet } from "./schema-paths-support.ts";
 import {
   ACME,
   addField,
@@ -42,14 +42,12 @@ import {
 } from "./schema-support.ts";
 import { ASSET, create, patch, versionOf } from "./writes-support.ts";
 
-const CHANGE_SETS = "/api/v1/schema/change-sets";
-
 /** The condition field's name. */
 const MATCHES = "matches";
 
 const ValidationFailedBody = Schema.Struct({
-  _tag: Schema.Literal("ValidationFailed"),
-  errors: Schema.Array(
+  code: Schema.Literal("ValidationFailed"),
+  fieldErrors: Schema.Array(
     Schema.Struct({
       _tag: Schema.String,
       field: Schema.String,
@@ -60,22 +58,6 @@ const ValidationFailedBody = Schema.Struct({
 });
 
 const decodeValidation = Schema.decodeUnknownEffect(ValidationFailedBody);
-
-/**
- * Posts a change set.
- * @param token - An administrator's session.
- * @param operations - The operations.
- * @returns The response.
- */
-const postChangeSet = Effect.fn("ConditionFields.postChangeSet")(
-  function* postChangeSet(token: string, operations: readonly Operation[]) {
-    const http = yield* TestHttpClient;
-    const parsed = parseJson(JSON.stringify({ operations }));
-    const body: JsonValue = parsed.ok ? parsed.value : null;
-
-    return yield* http.request("POST", CHANGE_SETS, { body, token });
-  }
-);
 
 /**
  * Posts a change set that must apply.
@@ -138,7 +120,7 @@ const refusalOf = Effect.fn("ConditionFields.refusalOf")(function* refusalOf(
 
   const body = yield* decodeValidation(response.json).pipe(Effect.orDie);
 
-  return body.errors.map((error) => ({
+  return body.fieldErrors.map((error) => ({
     field: error.field,
     reason: error.reason ?? error._tag,
   }));
@@ -258,13 +240,13 @@ describe("condition-fields", () => {
             assert.strictEqual(saved.status, 200, saved.text);
           }
 
-          const stored = yield* recordOf(
+          const stored = yield* resourceOf(
             yield* (yield* TestHttpClient).get(recordPath(ASSET, id), {
               token: tokens.alice,
             })
           );
 
-          assert.deepStrictEqual(stored.values[MATCHES], valid.at(-1));
+          assert.deepStrictEqual(stored[MATCHES], valid.at(-1));
 
           const invalid: readonly (readonly [string, JsonValue, string])[] = [
             ["unknown field", eq(randomUUID(), "x"), "unknownField"],
@@ -321,7 +303,7 @@ describe("condition-fields", () => {
               Effect.orDie
             );
 
-            assert.include(body.errors[0]?.hint ?? "", issue, label);
+            assert.include(body.fieldErrors[0]?.hint ?? "", issue, label);
           }
 
           assert.strictEqual(yield* versionOf(id), before);
@@ -405,7 +387,7 @@ describe("condition-fields", () => {
 
           const read = http
             .get(recordPath(ASSET, id), { token: tokens.alice })
-            .pipe(Effect.flatMap(recordOf));
+            .pipe(Effect.flatMap(resourceOf));
 
           const write = (body: Readonly<Record<string, JsonValue>>) =>
             patchCurrent(tokens.alice, id, body);
@@ -425,7 +407,7 @@ describe("condition-fields", () => {
             },
           ]);
 
-          assert.deepStrictEqual((yield* read).values[MATCHES], condition);
+          assert.deepStrictEqual((yield* read)[MATCHES], condition);
           assert.strictEqual(
             (yield* write({ [MATCHES]: eq(grade.id, "b") })).status,
             200
@@ -444,7 +426,7 @@ describe("condition-fields", () => {
 
           const after = yield* read;
 
-          assert.deepStrictEqual(after.values[MATCHES], current);
+          assert.deepStrictEqual(after[MATCHES], current);
 
           // A whole-record form re-sends it unchanged: not written, accepted.
           const unchanged = yield* write({
@@ -460,7 +442,7 @@ describe("condition-fields", () => {
           assert.deepStrictEqual(yield* refusalOf(rewritten), [
             { field: MATCHES, reason: "invalidCondition" },
           ]);
-          assert.deepStrictEqual((yield* read).values[MATCHES], current);
+          assert.deepStrictEqual((yield* read)[MATCHES], current);
         })
     );
 
@@ -495,7 +477,7 @@ describe("condition-fields", () => {
           const refused = yield* retireArea;
 
           assert.strictEqual(refused.status, 409, refused.text);
-          assert.strictEqual(yield* tagOf(refused), "DependencyConflict");
+          assert.strictEqual(yield* codeOf(refused), "DependencyConflict");
           assert.include(refused.text, rule.id);
 
           // Retire the condition field first; then the class may go.
@@ -521,7 +503,7 @@ describe("condition-fields", () => {
           ]);
 
           assert.strictEqual(reactivated.status, 409, reactivated.text);
-          assert.strictEqual(yield* tagOf(reactivated), "DependencyConflict");
+          assert.strictEqual(yield* codeOf(reactivated), "DependencyConflict");
 
           const another = yield* postChangeSet(tokens.admin, [
             addField(ACME.asset, "area_rule_2", {
@@ -532,7 +514,7 @@ describe("condition-fields", () => {
           ]);
 
           assert.strictEqual(another.status, 422, another.text);
-          assert.strictEqual(yield* tagOf(another), "DefinitionInvalid");
+          assert.strictEqual(yield* codeOf(another), "DefinitionInvalid");
 
           // Only filter conditions can be stored on a record.
           const ruleProfile = yield* postChangeSet(tokens.admin, [
@@ -544,7 +526,7 @@ describe("condition-fields", () => {
           ]);
 
           assert.strictEqual(ruleProfile.status, 422, ruleProfile.text);
-          assert.strictEqual(yield* tagOf(ruleProfile), "DefinitionInvalid");
+          assert.strictEqual(yield* codeOf(ruleProfile), "DefinitionInvalid");
         })
     );
   });
