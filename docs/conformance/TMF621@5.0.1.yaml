@@ -27,7 +27,7 @@ sources:
 kit:
   name: tmf621-v5.0.0-ctk-1.0.1
   note: >-
-    kitCases are empty. The kit zip holds only README.md, run.sh, run.bat, config.json, .env and docker-compose.yaml; the test cases are a Cypress suite inside the image tmforumorg/tmf621-v5.0.0-ctk:1.0.1, so their titles are not readable without the image. Two ways to get them, both for the CTK-runner workstream: run the kit once (against STD or TM Forum's reference implementation) and read the titles from reports/index.json (mochawesome), or pull the pinned image by digest and list its spec files without running it. Either way the result is one KIT row per mandatory case with its exact title in kitCases, replacing KIT/mandatory-cases.
+    The kit's cases are a Cypress suite in its image (tmforumorg/tmf621-v5.0.0-ctk:1.0.1, digest in pins.json): one spec, cypress/e2e/production/ctk.cy.js, which generates 44 tests from the kit's own case list, read from a real run's reports/index.json (mochawesome) against a fixture server on 2026-10-23 (decision 0033). The kit marks no case mandatory; the 27 cases on TroubleTicket's mandatory operations (CP v5.0.0 p.6: POST, GET list and retrieve with and without fields, DELETE) are the KIT rows with kitCases below. The other 17 cases (troubleTicketSpecification POST, PATCH, GET and DELETE, optional in the profile) are not rows, but the runner passes a kit only when every test passed, so they must pass too. Titles are recorded normalized as the runner compares them (tooling/lib/ctk-report.ts): the configured base URL as {url}, each run of white space one space. The kit has no hub, listener or ticket PATCH cases. Its "Each attribute" checks compare dotted keys that are never set, so they pass whatever the server returns; STD does not count them as evidence for the attributes (the CP and OAS rows do).
 rows:
   - id: TMF621@5.0.1/CP/resources/troubleTicket
     source: "TMF621 CP v5.0.0 API Mandatory Resources p.2"
@@ -468,9 +468,192 @@ rows:
     level: optional
     requirement: "A PATCH may change ticketType, and STD accepts it (decision 0021, decisions 34 and 53); any ITIL behavior behind it is a default and a form rule."
     status: pending
-  - id: TMF621@5.0.1/KIT/mandatory-cases
-    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1)"
+  - id: TMF621@5.0.1/KIT/post/status
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
     level: mandatory
-    requirement: "Every mandatory test case of the pinned kit passes under the CTK runner's criteria (Contracts 11.1); this row is replaced by one row per case, with kitCases, once the titles are known."
-    note: "The titles are not readable without the kit's image; see kit.note."
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): POST /troubleTicket answers 201 or 202 with a body valid against the TroubleTicket schema; this case checks its status."
+    kitCases:
+      - "Tests method POST and path /troubleTicket TMF621 Conformance Profile v5.0.0 - API POST Operation Conformance - For TroubleTicket Resource Tests status EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/post/schema
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): POST /troubleTicket answers 201 or 202 with a body valid against the TroubleTicket schema; this case checks its schema."
+    kitCases:
+      - "Tests method POST and path /troubleTicket TMF621 Conformance Profile v5.0.0 - API POST Operation Conformance - For TroubleTicket Resource Test schema EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/list/status
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket answers 200 with items valid against the TroubleTicket schema and the mandatory attributes as created; this case checks its status."
+    kitCases:
+      - "Tests method GET and path /troubleTicket TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource Tests status EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/list/schema
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket answers 200 with items valid against the TroubleTicket schema and the mandatory attributes as created; this case checks its schema."
+    kitCases:
+      - "Tests method GET and path /troubleTicket TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource Test schema EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/list/attributes
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket answers 200 with items valid against the TroubleTicket schema and the mandatory attributes as created; this case checks each mandatory attribute's value."
+    kitCases:
+      - "Tests method GET and path /troubleTicket TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource Each attribute Test EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/list-fields-description/status
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket?fields=description answers 200 with items valid against the schema carrying description, @type, id and href; this case checks its status."
+    kitCases:
+      - "Tests method GET and path /troubleTicket and ?fields=description TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=description Tests status EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/list-fields-description/schema
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket?fields=description answers 200 with items valid against the schema carrying description, @type, id and href; this case checks its schema."
+    kitCases:
+      - "Tests method GET and path /troubleTicket and ?fields=description TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=description Test schema EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/list-fields-description/attributes
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket?fields=description answers 200 with items valid against the schema carrying description, @type, id and href; this case checks each mandatory attribute's value."
+    kitCases:
+      - "Tests method GET and path /troubleTicket and ?fields=description TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=description Each attribute Test EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/list-fields-severity/status
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket?fields=severity answers 200 with items valid against the schema carrying severity, @type, id and href; this case checks its status."
+    kitCases:
+      - "Tests method GET and path /troubleTicket and ?fields=severity TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=severity Tests status EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/list-fields-severity/schema
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket?fields=severity answers 200 with items valid against the schema carrying severity, @type, id and href; this case checks its schema."
+    kitCases:
+      - "Tests method GET and path /troubleTicket and ?fields=severity TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=severity Test schema EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/list-fields-severity/attributes
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket?fields=severity answers 200 with items valid against the schema carrying severity, @type, id and href; this case checks each mandatory attribute's value."
+    kitCases:
+      - "Tests method GET and path /troubleTicket and ?fields=severity TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=severity Each attribute Test EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/list-fields-ticketType/status
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket?fields=ticketType answers 200 with items valid against the schema carrying ticketType, @type, id and href; this case checks its status."
+    kitCases:
+      - "Tests method GET and path /troubleTicket and ?fields=ticketType TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=ticketType Tests status EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/list-fields-ticketType/schema
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket?fields=ticketType answers 200 with items valid against the schema carrying ticketType, @type, id and href; this case checks its schema."
+    kitCases:
+      - "Tests method GET and path /troubleTicket and ?fields=ticketType TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=ticketType Test schema EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/list-fields-ticketType/attributes
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket?fields=ticketType answers 200 with items valid against the schema carrying ticketType, @type, id and href; this case checks each mandatory attribute's value."
+    kitCases:
+      - "Tests method GET and path /troubleTicket and ?fields=ticketType TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=ticketType Each attribute Test EndPoint: {url}/troubleTicket"
+    status: pending
+  - id: TMF621@5.0.1/KIT/retrieve/status
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket/{id} answers 200 with a body valid against the TroubleTicket schema and the mandatory attributes as created; this case checks its status."
+    kitCases:
+      - "Tests method GET and path /troubleTicket/{id} TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource Tests status EndPoint: {url}/troubleTicket/{id}"
+    status: pending
+  - id: TMF621@5.0.1/KIT/retrieve/schema
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket/{id} answers 200 with a body valid against the TroubleTicket schema and the mandatory attributes as created; this case checks its schema."
+    kitCases:
+      - "Tests method GET and path /troubleTicket/{id} TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource Test schema EndPoint: {url}/troubleTicket/{id}"
+    status: pending
+  - id: TMF621@5.0.1/KIT/retrieve/attributes
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket/{id} answers 200 with a body valid against the TroubleTicket schema and the mandatory attributes as created; this case checks each mandatory attribute's value."
+    kitCases:
+      - "Tests method GET and path /troubleTicket/{id} TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource Each attribute Test EndPoint: {url}/troubleTicket/{id}"
+    status: pending
+  - id: TMF621@5.0.1/KIT/retrieve-fields-description/status
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket/{id}?fields=description answers 200 with a body valid against the schema carrying description, @type, id and href; this case checks its status."
+    kitCases:
+      - "Tests method GET and path /troubleTicket/{id} and ?fields=description TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=description Tests status EndPoint: {url}/troubleTicket/{id}"
+    status: pending
+  - id: TMF621@5.0.1/KIT/retrieve-fields-description/schema
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket/{id}?fields=description answers 200 with a body valid against the schema carrying description, @type, id and href; this case checks its schema."
+    kitCases:
+      - "Tests method GET and path /troubleTicket/{id} and ?fields=description TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=description Test schema EndPoint: {url}/troubleTicket/{id}"
+    status: pending
+  - id: TMF621@5.0.1/KIT/retrieve-fields-description/attributes
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket/{id}?fields=description answers 200 with a body valid against the schema carrying description, @type, id and href; this case checks each mandatory attribute's value."
+    kitCases:
+      - "Tests method GET and path /troubleTicket/{id} and ?fields=description TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=description Each attribute Test EndPoint: {url}/troubleTicket/{id}"
+    status: pending
+  - id: TMF621@5.0.1/KIT/retrieve-fields-severity/status
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket/{id}?fields=severity answers 200 with a body valid against the schema carrying severity, @type, id and href; this case checks its status."
+    kitCases:
+      - "Tests method GET and path /troubleTicket/{id} and ?fields=severity TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=severity Tests status EndPoint: {url}/troubleTicket/{id}"
+    status: pending
+  - id: TMF621@5.0.1/KIT/retrieve-fields-severity/schema
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket/{id}?fields=severity answers 200 with a body valid against the schema carrying severity, @type, id and href; this case checks its schema."
+    kitCases:
+      - "Tests method GET and path /troubleTicket/{id} and ?fields=severity TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=severity Test schema EndPoint: {url}/troubleTicket/{id}"
+    status: pending
+  - id: TMF621@5.0.1/KIT/retrieve-fields-severity/attributes
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket/{id}?fields=severity answers 200 with a body valid against the schema carrying severity, @type, id and href; this case checks each mandatory attribute's value."
+    kitCases:
+      - "Tests method GET and path /troubleTicket/{id} and ?fields=severity TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=severity Each attribute Test EndPoint: {url}/troubleTicket/{id}"
+    status: pending
+  - id: TMF621@5.0.1/KIT/retrieve-fields-ticketType/status
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket/{id}?fields=ticketType answers 200 with a body valid against the schema carrying ticketType, @type, id and href; this case checks its status."
+    kitCases:
+      - "Tests method GET and path /troubleTicket/{id} and ?fields=ticketType TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=ticketType Tests status EndPoint: {url}/troubleTicket/{id}"
+    status: pending
+  - id: TMF621@5.0.1/KIT/retrieve-fields-ticketType/schema
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket/{id}?fields=ticketType answers 200 with a body valid against the schema carrying ticketType, @type, id and href; this case checks its schema."
+    kitCases:
+      - "Tests method GET and path /troubleTicket/{id} and ?fields=ticketType TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=ticketType Test schema EndPoint: {url}/troubleTicket/{id}"
+    status: pending
+  - id: TMF621@5.0.1/KIT/retrieve-fields-ticketType/attributes
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): GET /troubleTicket/{id}?fields=ticketType answers 200 with a body valid against the schema carrying ticketType, @type, id and href; this case checks each mandatory attribute's value."
+    kitCases:
+      - "Tests method GET and path /troubleTicket/{id} and ?fields=ticketType TMF621 Conformance Profile v5.0.0 - API GET Operation Conformance - For TroubleTicket Resource - ?fields=ticketType Each attribute Test EndPoint: {url}/troubleTicket/{id}"
+    status: pending
+  - id: TMF621@5.0.1/KIT/delete/status
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1), spec cypress/e2e/production/ctk.cy.js"
+    level: mandatory
+    requirement: "Kit case on a mandatory operation (TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6): DELETE /troubleTicket/{id} answers 202 or 204; this case checks its status."
+    kitCases:
+      - "Tests method DELETE and path /troubleTicket/{id} TMF621 Conformance Profile v5.0.0 - API DELETE Operation Conformance - For TroubleTicket Resource Tests status EndPoint: {url}/troubleTicket/{id}"
     status: pending

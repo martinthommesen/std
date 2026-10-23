@@ -208,9 +208,18 @@ export const tmfErrorOf = (failure: TaggedFailure): TmfError => {
   return { body, status };
 };
 
-// Headers an error carries: `Retry-After` (503s), `Allow` (405),
-// `Accept-Patch` (415), and the current `ETag` of a stale `If-Match`.
-const headersOf = (tag: string, body: JsonObject): Map<string, string> => {
+/**
+ * The headers an error carries: `Retry-After` (503s), `Allow` (405),
+ * `Accept-Patch` (415), and the current `ETag` of a stale `If-Match`.
+ *
+ * @param tag - The error's tag.
+ * @param body - The error's body.
+ * @returns The headers, by lower-case name.
+ */
+export const headersOf = (
+  tag: string,
+  body: JsonObject
+): Map<string, string> => {
   const headers = new Map<string, string>();
   const { accepted, allow, currentVersion, retryAfterSeconds } = body;
 

@@ -78,7 +78,7 @@ const IDENTITY_ATTRIBUTES: ReadonlySet<string> = new Set([
 const COMPARISONS = ["eq", "gt", "ge", "lt", "le"] as const;
 
 /** A comparison of an attribute filter. */
-type Comparison = (typeof COMPARISONS)[number];
+export type Comparison = (typeof COMPARISONS)[number];
 
 /** Dot suffixes (TMF630 v5.0.0 Part 1 §4.4 pp.58-60). */
 const DOT_SUFFIXES: ReadonlyMap<string, Comparison> = new Map([
@@ -206,7 +206,7 @@ const dotSuffix = (parameter: string): SplitParameter => {
  *   `assignedTo.id`.
  * @returns The path and the comparison.
  */
-const splitParameter = Effect.fn("V2Query.splitParameter")(
+export const splitParameter = Effect.fn("V2Query.splitParameter")(
   function* splitParameter(parameter: string) {
     const name = parameter.startsWith(".") ? parameter.slice(1) : parameter;
 
@@ -234,7 +234,7 @@ const splitParameter = Effect.fn("V2Query.splitParameter")(
 );
 
 /** An attribute path resolved for a filter. */
-interface ResolvedAttribute {
+export interface ResolvedAttribute {
   readonly path: Path;
   /** The field whose type the values take. */
   readonly field: ReadField;
@@ -338,7 +338,16 @@ const comparisonOf = (
   };
 };
 
-const atomOf = (
+/**
+ * One attribute's condition for the given values: an `in` for repeated plain
+ * equality, else one comparison per value, joined by `or`.
+ *
+ * @param attribute - The resolved attribute.
+ * @param comparison - The comparison operator.
+ * @param values - The parameter values (alternatives and repeats).
+ * @returns The condition.
+ */
+export const atomOf = (
   attribute: ResolvedAttribute,
   comparison: Comparison,
   values: readonly string[]

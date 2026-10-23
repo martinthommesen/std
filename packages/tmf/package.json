@@ -12,6 +12,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@std/conditions": "workspace:*",
+    "@std/definitions": "workspace:*",
+    "@std/values": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

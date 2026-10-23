@@ -99,6 +99,7 @@ Every profile raises the six Effect diagnostics (`unstableApiUsage`, `experiment
 | `pnpm ci:local` | Every `run:` step of `.github/workflows/ci.yml`, in order |
 | `pnpm release-compat:ci` | Release compatibility, below |
 | `pnpm oda-probe:summary` | Summarizes the last runs of the `oda-canvas-probe` workflow (downloaded with `gh`) or local probe results as Markdown (decision 0027) |
+| `pnpm ctk <api> --url <base URL> --token <bearer>` | The CTK runner (Contracts 11.1, decision 0033): downloads the pinned TM Forum kit (SHA-256 checked, cached outside the repository), checks the image digest, runs the kit against a running STD and passes only under the runner's criteria |
 
 The fixture packages in `tooling/canaries/` are not workspace packages and are excluded from `pnpm typecheck`; they resolve `effect` and `@effect/vitest` from the root `node_modules`. CI (`.github/workflows/ci.yml`) runs Node 26.12.0, pnpm 12.14.0 and a Postgres 18 service on port 54329; `pnpm ci:local` runs the same steps here, where GitHub Actions cannot run.
 
@@ -119,7 +120,7 @@ The fixture packages in `tooling/canaries/` are not workspace packages and are e
 | `config/` | owner layers, definition sets, base and overrides, conflicts, the config service, `std upgrade` plan and apply | 8 |
 | `auth/` | users, password hashing, sessions, roles and permissions, acting-user service, API tokens (Step 4) | 3.1 |
 | `records/` | read compiler (visibility, masking, projection, cursors, references, counts), save pipeline, history, outbox producer, the party rules (a user's individual, an individual's name; decision 0024), aggregates (owner-chain locks, the touched set, finalization and the aggregate save; `aggregateOperation`, `lockAggregates`; decision 0029), `saveBatch` (Step 3) | 2, 3, 4, 11.3 |
-| `http/` | generic record routes, `HttpApi` handlers, error mapping, schema-revision header, stale-request checks | 3.8, 6 |
+| `http/` | generic record routes, `HttpApi` handlers, error mapping, schema-revision header, stale-request checks; `http/v2/` the TMF630 API; `http/tmf/` the TMF Open API routes built from `@std/tmf` mappings (decision 0033) | 3.8, 6, 10, 11 |
 | `cli/` | the `std` command: `serve`, `worker` (Step 3), `wait-upgraded` (Step 5), `upgrade`, `doctor`, `schema status | resume | abandon`, `bootstrap-admin`(decision 0016),`schema pull`, `codegen` | 1.10, 8.5, 8.7 |
 | `doctor/` | `runDoctor`: the 17 read-only checks of `std doctor`, as a library function returning typed findings and the exit code | 1.10 |
 | `hooks/` | record rules (Step 3): selection, `before` rules (with the settled mode and `applyDeriveRules` for aggregates), `after` rules as nested saves, run-as identities, `afterCommit` carriers and their executor, `aggregate` rules settling in memory (decision 0029), the `RecordRuleSaveHooks` layer (decision 0022) | 4.1, 4.9, 4.10 |

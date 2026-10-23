@@ -28,6 +28,7 @@
       "ctk": {
         "defaultUrl": "http://tmf621-ri:8621/tmf-api/troubleTicket/v5",
         "image": "tmforumorg/tmf621-v5.0.0-ctk:1.0.1",
+        "imageDigest": "sha256:5705c271d2c1f870cd798cb8b0ef3bb71638a93085dbfd1d2e746c0dd73163e1",
         "name": "tmf621-v5.0.0-ctk-1.0.1",
         "zipSha256": "1cb94be01e416de781409a272bb5db80811ed6a3e7d461432da7018f4a28f274",
         "zipUrl": "https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF621_Trouble_Ticket/5.0.0/ctk/tmf621-v5.0.0-ctk-1.0.1.zip"

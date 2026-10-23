@@ -22,6 +22,9 @@ import { MetadataHandlers } from "./metadata-handlers.ts";
 import { RequestDecodingLayer } from "./request-decoding.ts";
 import { SchemaChangeHandlers } from "./schema-change-handlers.ts";
 import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
+import { SHIPPED_TMF_APIS } from "./tmf/apis.ts";
+import type { TmfRegistry } from "./tmf/context.ts";
+import { tmfRoutesLayer } from "./tmf/routes.ts";
 import { V1DeprecationLayer } from "./v1-frozen.ts";
 import { V2RoutesLayer } from "./v2/routes.ts";
 
@@ -58,12 +61,24 @@ export const ApiRoutes = HttpApiBuilder.layer(StdApi).pipe(
 );
 
 /**
+ * The routes of TMF Open APIs (Contracts 11) with the save services. The
+ * app serves the shipped ones; tests add fixture mappings with
+ * `TestHttpClient.layerWith`.
+ *
+ * @param registry - The API mappings.
+ * @returns The routes layer.
+ */
+export const tmfRoutes = (registry: TmfRegistry) =>
+  tmfRoutesLayer(registry).pipe(Layer.provide(SaveServices));
+
+/**
  * The routes plus the global revision header, `Cache-Control: no-store`
  * and the `/api/v1` deprecation headers.
  */
 export const HttpAppLayer = Layer.mergeAll(
   ApiRoutes,
   V2RoutesLayer.pipe(Layer.provide(SaveServices)),
+  tmfRoutes(SHIPPED_TMF_APIS),
   SchemaRevisionHeaderLayer,
   ApiNoStoreLayer,
   V1DeprecationLayer
