@@ -9,6 +9,7 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { AggregateNotSettled } from "@std/api/errors/aggregate-not-settled";
 import { RuleRefused } from "@std/api/errors/rule-refused";
+import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { SYSTEM_USER_ID } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
 import { Cause, Effect, Exit, Option, Schema } from "effect";
@@ -25,6 +26,7 @@ import {
   finalizeTouchedAggregates,
 } from "../src/records/save-pipeline.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
+import type { WriteAccessApi } from "../src/records/write-access.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
@@ -41,6 +43,7 @@ import {
   REQUEST_RULES,
   setUpAggregates,
   TABLE,
+  TICKET_RULES,
   TICKET_WATCH,
   update,
   valuesOf,
@@ -249,6 +252,30 @@ const noteThenCaughtFinalization = Effect.fn("Finalize.caught")(
     );
   }
 );
+
+/**
+ * An access layer that can read no ticket field on a proposed record.
+ * @param access - The access layer it narrows.
+ * @returns The narrowed layer.
+ */
+const blindToTickets = (access: WriteAccessApi): WriteAccessApi =>
+  WriteAccess.of({
+    ...access,
+    readableOnProposal: (input) =>
+      input.classId === C.ticket.id
+        ? Effect.succeed(new Set<string>())
+        : access.readableOnProposal(input),
+  });
+
+/**
+ * The field errors of a refusal, as `field:tag`.
+ * @param error - A save's error.
+ * @returns The errors, or the tag when it is no `ValidationFailed`.
+ */
+const fieldErrorsOf = (error: { readonly _tag: string }) =>
+  error instanceof ValidationFailed
+    ? error.errors.map((found) => `${found.field}:${found._tag}`)
+    : [error._tag];
 
 describe("aggregate-finalize", () => {
   it("an aggregate save's cause reads as a system cause with its parts and rules", () => {
@@ -997,6 +1024,56 @@ describe("aggregate-finalize", () => {
             id: other.id,
             version: yield* versionOf(TABLE.request, other.id),
           });
+        })
+    );
+
+    dbTest.effect(
+      "a reference a rule follows reads the settling image, also a change an earlier pass proposed",
+      () =>
+        Effect.gen(function* liveReference() {
+          const ticket = yield* create(C.ticket.id, { name: "t-ref" });
+
+          yield* create(C.note.id, { body: "approve", ticket: ticket.id });
+
+          // Pass 1 approves the ticket after link_seen ran; pass 2's
+          // link_seen follows the note's ticket reference to the approved
+          // image, not to the row as it was before settling.
+          assert.deepStrictEqual(
+            [
+              yield* columnOf(TABLE.ticket, "status", ticket.id),
+              yield* columnOf(TABLE.ticket, "flag", ticket.id),
+            ],
+            ["approved", "linked"]
+          );
+          assert.deepStrictEqual(
+            aggregateOf(yield* lastEntry(ticket.id))?.rules,
+            [TICKET_RULES.approve.id, TICKET_RULES.linkSeen.id]
+          );
+        })
+    );
+
+    dbTest.effect(
+      "a system write's validation errors name only fields the acting user can read",
+      () =>
+        Effect.gen(function* systemErrors() {
+          const access = yield* WriteAccess;
+
+          for (const [who, seen, expected] of [
+            ["a reader", access, ["name:Required"]],
+            ["a blind caller", blindToTickets(access), []],
+          ] as const) {
+            const ticket = yield* create(C.ticket.id, { name: `t-${who}` });
+
+            // The rule clears the ticket's required name: the caller
+            // supplied only the note.
+            const refused = yield* create(C.note.id, {
+              body: "clear-name",
+              ticket: ticket.id,
+            }).pipe(Effect.provideService(WriteAccess, seen), Effect.flip);
+
+            assert.deepStrictEqual(fieldErrorsOf(refused), [...expected], who);
+            assert.strictEqual(yield* versionOf(TABLE.ticket, ticket.id), 1);
+          }
         })
     );
 

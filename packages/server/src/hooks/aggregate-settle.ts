@@ -106,7 +106,11 @@ const startImageOf = (owner: SettleOwner): RecordImage | null =>
 
 /**
  * Loads the reference targets a path crosses from an image, as system: a
- * missing target reads as an empty reference.
+ * missing target reads as an empty reference. A target in the settling
+ * set is its settling image, the very object proposals change, so a rule
+ * that follows a reference to an owner or part sees every proposal made
+ * so far, in this pass and earlier ones; only records outside the
+ * settling set are read from the database, once per settling.
  *
  * @param settling - The settling.
  * @param path - The path.
@@ -125,6 +129,14 @@ const preloadPath = Effect.fn("Aggregates.preloadPath")(function* preload(
 
     if (image === null || !isString(id) || field.type.kind !== "reference") {
       return;
+    }
+
+    const live = settling.set.images.get(id);
+
+    if (live !== undefined) {
+      settling.targets.set(id, live.image);
+      ({ image } = live);
+      continue;
     }
 
     const known = settling.targets.get(id);
@@ -548,6 +560,11 @@ const derive = Effect.fn("Aggregates.derive")(function* derive(
     classId: image.classId,
     context: settling.context,
     image: image.image,
+    live: new Map(
+      [...settling.set.images.values()].flatMap((other) =>
+        other.id === null ? [] : [[other.id, other.image] as const]
+      )
+    ),
     operation: image.stored === null ? "create" : "update",
     previous: image.stored === null ? null : imageOf(image.stored),
     snapshot: settling.snapshot,

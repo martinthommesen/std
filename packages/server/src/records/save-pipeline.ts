@@ -324,6 +324,24 @@ const refusePlatformTable = Effect.fn("Records.refusePlatformTable")(
 );
 
 /**
+ * The fields the caller supplied, which validation errors may name
+ * whatever the caller can read (3.8). A system-effect save (4.9: what
+ * settling persists) has no caller body: the acting user supplied none of
+ * its values, so its errors name only fields the acting user can read on
+ * the proposed record, and an error on a field they cannot read is
+ * `ValidationFailed` with no field named. [judgment, decision 0029]
+ *
+ * @param input - The save.
+ * @param body - Its resolved body.
+ * @returns The caller-supplied field IDs.
+ */
+const callerSupplied = (
+  input: SaveInput,
+  body: WriteBody
+): ReadonlySet<DefinitionId> =>
+  input.system === "aggregate" ? new Set() : new Set(body.entries.keys());
+
+/**
  * Validates the final candidate, then names only fields the caller
  * supplied or could read on the proposed record (3.8). When every failing
  * field is hidden the error lists none: that reveals only that some hidden
@@ -844,7 +862,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       existing: null,
       proposal,
       rules,
-      supplied: new Set(resolved.entries.keys()),
+      supplied: callerSupplied(input, resolved),
       written,
     });
     yield* checkReferences(snapshot, fields, proposal.values, supplied);
@@ -1200,7 +1218,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       existing: record,
       proposal,
       rules,
-      supplied: new Set(evaluated.entries.keys()),
+      supplied: callerSupplied(input, evaluated),
       written,
     });
     yield* checkReferences(snapshot, fields, proposal.values, written);

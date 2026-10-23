@@ -95,6 +95,7 @@ export const F = {
   noteTicket: addField(C.note.id, "ticket", owner(C.ticket.id)),
   requestName: addField(C.request.id, "name", text()),
   requestStatus: addField(C.request.id, "status", text()),
+  ticketFlag: addField(C.ticket.id, "flag", text()),
   ticketName: addField(C.ticket.id, "name", text(), { required: true }),
   ticketStatus: addField(C.ticket.id, "status", text()),
 } as const;
@@ -642,6 +643,48 @@ const approvedNow = (prefix: string): Condition =>
     { left: at(F.requestName), op: "startsWith", right: prefix }
   );
 
+const noteBody = (body: string): Condition =>
+  anyPart(C.note.id, eq(F.noteBody, body));
+
+/**
+ * The ticket's aggregate rules, fired only by notes with a marker body:
+ *
+ * - `linkSeen` (order 5): a note whose ticket, followed through its owner
+ *   reference, is approved sets the ticket's flag. It runs before
+ *   `approve`, so it sees the approval only in the next pass, through the
+ *   ticket's settling image, never a stale database read (finding 4).
+ * - `approve` (order 10): a note `approve` approves the ticket.
+ * - `clearName` (order 50): a note `clear-name` clears the ticket's
+ *   required name, which persisting refuses.
+ */
+export const TICKET_RULES = {
+  approve: aggregateRule(
+    C.ticket.id,
+    "approve_ticket",
+    10,
+    noteBody("approve"),
+    [set([F.ticketStatus, literal("approved")])]
+  ),
+  clearName: aggregateRule(
+    C.ticket.id,
+    "clear_name",
+    50,
+    noteBody("clear-name"),
+    [set([F.ticketName, literal(null)])]
+  ),
+  linkSeen: aggregateRule(
+    C.ticket.id,
+    "link_seen",
+    5,
+    anyPart(C.note.id, {
+      left: { path: [F.noteTicket.id, F.ticketStatus.id] },
+      op: "eq",
+      right: { value: "approved" },
+    }),
+    [set([F.ticketFlag, literal("linked")])]
+  ),
+} as const;
+
 /**
  * `after` rules on the request's aggregate save (4.9 step 3, cascades):
  * a request named `cascade-…` that becomes approved adds a note to the
@@ -733,6 +776,7 @@ export const setUpAggregates = Effect.gen(function* setUpAggregates() {
     PLAN_INVARIANT.op,
     LOOP_RULE.op,
     ...Object.values(CASCADE_RULES).map((rule) => rule.op),
+    ...Object.values(TICKET_RULES).map((rule) => rule.op),
     {
       definition: {
         classId: C.ticket.id,

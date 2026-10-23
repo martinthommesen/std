@@ -61,6 +61,8 @@ export interface DeriveInput {
    * user-mode saves of the record named: `suppliedFieldsOf(recordId)`.
    */
   readonly supplied: ReadonlySet<DefinitionId>;
+  /** While settling: the settling images, which paths read first (4.9). */
+  readonly live?: ReadonlyMap<string, RecordImage>;
 }
 
 /** What `derive` rules did. */
@@ -133,7 +135,9 @@ export const applyDeriveRules = Effect.fn("Rules.applyDerive")(
       const holds = yield* ruleConditionHolds(
         input.snapshot,
         rule,
-        { previous: input.previous, record: image },
+        input.live === undefined
+          ? { previous: input.previous, record: image }
+          : { live: input.live, previous: input.previous, record: image },
         input.context
       );
 
