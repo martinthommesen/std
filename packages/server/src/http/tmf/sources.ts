@@ -211,10 +211,20 @@ const partsByOwner = Effect.fn("Tmf.partsByOwner")(function* partsByOwner(
   };
 
   const filter = yield* compileFilterExpr(scope, view, condition);
-  const created = readFieldOf(view, "system:created_at");
 
-  const sortKeys: SortKey[] =
-    created === undefined ? [] : [{ descending: false, field: created }];
+  // The array's order: the item mapping's order field when the caller can
+  // read it, then creation (decision 0033).
+  const { orderField } = attribute.item;
+
+  const order =
+    orderField === undefined ? undefined : readFieldOf(view, orderField);
+
+  const sortKeys: SortKey[] = [
+    order,
+    readFieldOf(view, "system:created_at"),
+  ].flatMap((field) =>
+    field === undefined ? [] : [{ descending: false, field }]
+  );
 
   const selection = selectionOf(
     view,

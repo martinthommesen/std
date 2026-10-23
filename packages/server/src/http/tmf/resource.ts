@@ -15,8 +15,9 @@
  * Writes run as one aggregate operation (Contracts 4.9): the resource's
  * aggregate is locked first, the record is read as the caller under the
  * lock, its own fields are saved at most once and its parts as the body's
- * arrays say, and the aggregate is finalized once, so the resource changes
- * by exactly one aggregate version when any part changed. The response is
+ * arrays say, and the aggregate is finalized once: the resource gets one
+ * version for its own fields' save, if any, and one aggregate version if
+ * any part changed (Contracts 4.9, 11.1). The response is
  * read afterwards, as the caller (`reloadSaved`'s rule: the committed
  * state, projected with the caller's read rights).
  *
@@ -57,7 +58,9 @@ import {
   lockAggregates,
   updateRecord,
 } from "../../records/save-pipeline.ts";
+import type { ConfigState } from "../../sql/request-revision.ts";
 import { expectedVersionOf } from "../record-writes.ts";
+import { checkRequestRevision } from "../stale-request.ts";
 import { applyJsonPatch, mergePatch, parseJsonPatch } from "../v2/patch.ts";
 import { jsonAnswer, linkHeader, writeFailures } from "../v2/records.ts";
 import { jsonBodyOf, mediaTypeOf, queryOf } from "../v2/request.ts";
@@ -65,6 +68,7 @@ import { classOfType } from "../v2/table-names.ts";
 import {
   attributesOf,
   classAccessOf,
+  extensionsOf,
   extraKeysOf,
   hrefOf,
   renderContextOf,
@@ -95,7 +99,87 @@ export interface TmfInput {
   readonly origin: string;
   readonly mapped: MappedResource;
   readonly registry: TmfRegistry;
+  /** The schema revision the client states (`STD-Schema-Revision`), if any. */
+  readonly stated: Option.Option<ConfigState>;
 }
+
+/**
+ * The stale-request check (Contracts 6.4) for the names a TMF request
+ * takes from STD's definitions. A mapping names fields by stable ID, so
+ * its attributes need none; a local class's attributes are its fields'
+ * API names (11.1), and a name renamed or reused since the revision the
+ * client states is `SchemaChanged`, as on `/api/v2`. Like `/api/v2`, a
+ * request that states no revision is resolved at the current one
+ * (decision 0033).
+ *
+ * @param input - The request.
+ * @param scope - The caller's scope.
+ * @param classId - The concrete class whose names the request uses.
+ * @param names - The non-mapped names the request uses (body members,
+ *   `fields`), or undefined for a read's default selection: every local
+ *   attribute of the class.
+ * @param write - The write action, for a body.
+ * @returns Nothing, or `SchemaChanged`.
+ */
+const checkLocalNames = Effect.fn("Tmf.checkLocalNames")(
+  function* checkLocalNames(
+    input: TmfInput,
+    scope: ReadScope,
+    classId: DefinitionId,
+    names?: readonly string[],
+    write?: { readonly action: "create" | "update" }
+  ) {
+    const local =
+      names ??
+      extensionsOf(scope.snapshot, input.mapped.resource, classId).map(
+        (attribute) => attribute.name
+      );
+
+    const table = scope.snapshot.qualifiedNameOf(classId);
+
+    if (
+      local.length === 0 ||
+      table === undefined ||
+      Option.isNone(input.stated)
+    ) {
+      return;
+    }
+
+    yield* checkRequestRevision(
+      input.stated,
+      table,
+      write === undefined
+        ? { fields: local.join(","), labels: "true", naming: "api" }
+        : { fields: local.join(","), naming: "api" },
+      write
+    );
+  }
+);
+
+/**
+ * The members of a body that are not the mapping's attributes (nor
+ * identity or type members): local attributes, or names the planner will
+ * refuse.
+ *
+ * @param mapped - The resource.
+ * @param body - The body.
+ * @returns The names.
+ */
+const localNamesOf = (mapped: MappedResource, body: JsonObject): string[] => {
+  const mappedNames = new Set([
+    "id",
+    "href",
+    ...TYPE_MEMBERS,
+    ...mapped.resource.attributes.map((attribute) => attribute.name),
+  ]);
+
+  return Object.keys(body).filter((name) => !mappedNames.has(name));
+};
+
+// The classes of the records a read returns, each once.
+const classesOf = (records: readonly SourceRecord[]): DefinitionId[] => [
+  ...new Set(records.map((record) => record.classId)),
+];
 
 const etagOf = (version: number): string => `"${version}"`;
 
@@ -244,6 +328,10 @@ export const listTmf = Effect.fn("Tmf.list")(function* listTmf(
     page.records
   );
 
+  for (const classId of classesOf(records)) {
+    yield* checkLocalNames(input, scope, classId);
+  }
+
   const render = {
     fields: parsed.fields,
     mapped,
@@ -293,6 +381,8 @@ export const retrieveTmf = Effect.fn("Tmf.retrieve")(function* retrieveTmf(
   );
 
   const current = yield* readCurrent(scope, input.mapped, id);
+
+  yield* checkLocalNames(input, scope, current.classId);
 
   return jsonAnswer(
     renderFor(
@@ -436,7 +526,9 @@ const withoutTypeMembers = (body: JsonObject): JsonObject =>
  * @param mapped - The resource.
  * @param classId - The concrete class.
  * @param body - The body without type members.
- * @param current - For a merge-patch, the record under the lock.
+ * @param jsonMerge - Whether json objects merge into stored values (a
+ *   merge-patch) rather than replace them (a create, a JSON Patch).
+ * @param current - For an update, the record under the lock.
  * @returns The plan.
  */
 const planFor = Effect.fn("Tmf.planFor")(function* planFor(
@@ -444,6 +536,7 @@ const planFor = Effect.fn("Tmf.planFor")(function* planFor(
   mapped: MappedResource,
   classId: DefinitionId,
   body: JsonObject,
+  jsonMerge: boolean,
   current?: Parameters<typeof planWrite>[0]["current"]
 ) {
   const { snapshot } = scope;
@@ -454,9 +547,13 @@ const planFor = Effect.fn("Tmf.planFor")(function* planFor(
     ]),
     attributes: attributesOf(snapshot, mapped.resource, classId),
     body,
-    // A part may be created or updated in either case.
-    partAccess: (item: ItemMapping) =>
-      classAccessOf(scope, item.classId, ["create", "update"]),
+    jsonMerge,
+    // An existing part is updated as its own concrete class; a new one is
+    // created as the item's class.
+    partAccess: (item: ItemMapping, existing: SourceRecord | undefined) =>
+      existing === undefined
+        ? classAccessOf(scope, item.classId, ["create"])
+        : classAccessOf(scope, existing.classId, ["update"]),
   };
 
   const planned =
@@ -553,11 +650,22 @@ export const createTmf = Effect.fn("Tmf.create")(function* createTmf(
 
   const classId = yield* createdClass(scope, input.mapped, body);
 
+  yield* checkLocalNames(
+    input,
+    scope,
+    classId,
+    localNamesOf(input.mapped, body),
+    {
+      action: "create",
+    }
+  );
+
   const plan = yield* planFor(
     scope,
     input.mapped,
     classId,
-    withoutTypeMembers(body)
+    withoutTypeMembers(body),
+    false
   );
 
   const created = yield* aggregateOperation(
@@ -767,12 +875,22 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
       const body = yield* patchBody(patch, image.rendered);
 
       yield* checkTypeMembers(body, image.rendered);
+      yield* checkLocalNames(
+        input,
+        scope,
+        current.classId,
+        localNamesOf(input.mapped, body),
+        { action: "update" }
+      );
 
+      // A JSON Patch's result is the exact new value of every attribute it
+      // changed; only a merge-patch merges json objects (RFC 7396).
       const plan = yield* planFor(
         scope,
         input.mapped,
         current.classId,
         withoutTypeMembers(body),
+        !patch.jsonPatch,
         image
       );
 

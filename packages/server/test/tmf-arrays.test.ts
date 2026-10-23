@@ -11,7 +11,12 @@
  *   aggregate save: one version, one change entry;
  * - a JSON Patch on the same array is written the same way;
  * - an owner field and parts in one write give the owner's own version and
- *   one aggregate version.
+ *   one aggregate version: two owner versions (Contracts 11.1);
+ * - the array's order persists (the item mapping's order field): a reorder,
+ *   by merge-patch or a JSON Patch `move`, is a change with a new version;
+ * - an existing part is written as its own concrete class: a field the
+ *   caller cannot name there is `UnknownField`, and a replacement never
+ *   clears it.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
@@ -20,6 +25,7 @@ import { Effect } from "effect";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { count, entriesOf, versionOf } from "./aggregates-support.ts";
+import { values } from "./schema-support.ts";
 import { FIXTURE_TICKETS, tmfTestLayer } from "./tmf-fixture.ts";
 import { asArray, asObject, textOf, v2Callers } from "./v2-support.ts";
 
@@ -259,6 +265,152 @@ describe("tmf-arrays", () => {
           assert.strictEqual(asObject(failed.json).code, "PatchTestFailed");
           assert.strictEqual(yield* versionOf(TICKETS, id), 4);
           assert.strictEqual(yield* notesOf(id), 1);
+        })
+    );
+
+    dbTest.effect(
+      "a reordered array persists its order and is a change: merge-patch and JSON Patch move",
+      () =>
+        Effect.gen(function* reorder() {
+          const http = yield* TestHttpClient;
+          const { alice } = yield* v2Callers;
+
+          const ticket = yield* newTicket(alice, {
+            note: [
+              { "@type": "Note", text: "one" },
+              { "@type": "Note", text: "two" },
+            ],
+          });
+
+          const id = textOf(ticket.id);
+          const [one = {}, two = {}] = asArray(ticket.note).map(asObject);
+
+          assert.deepStrictEqual(noteTexts(ticket), ["one", "two"]);
+
+          const before = yield* versionOf(TICKETS, id);
+
+          const swapped = yield* http.request(
+            "PATCH",
+            `${FIXTURE_TICKETS}/${id}`,
+            patchOptions(alice, "application/merge-patch+json", {
+              note: [two, one],
+            })
+          );
+
+          assert.strictEqual(swapped.status, 200, swapped.text);
+          assert.deepStrictEqual(noteTexts(asObject(swapped.json)), [
+            "two",
+            "one",
+          ]);
+          assert.strictEqual(yield* versionOf(TICKETS, id), before + 1);
+          assert.strictEqual(swapped.headers.get("etag"), `"${before + 1}"`);
+
+          const read = yield* http.get(`${FIXTURE_TICKETS}/${id}`, alice);
+
+          assert.deepStrictEqual(noteTexts(asObject(read.json)), [
+            "two",
+            "one",
+          ]);
+
+          const moved = yield* http.request(
+            "PATCH",
+            `${FIXTURE_TICKETS}/${id}`,
+            patchOptions(alice, "application/json-patch+json", [
+              { from: "/note/0", op: "move", path: "/note/1" },
+            ])
+          );
+
+          assert.strictEqual(moved.status, 200, moved.text);
+          assert.deepStrictEqual(noteTexts(asObject(moved.json)), [
+            "one",
+            "two",
+          ]);
+          assert.strictEqual(yield* versionOf(TICKETS, id), before + 2);
+
+          const same = yield* http.request(
+            "PATCH",
+            `${FIXTURE_TICKETS}/${id}`,
+            patchOptions(alice, "application/merge-patch+json", {
+              note: asArray(asObject(moved.json).note),
+            })
+          );
+
+          // The same array again changes nothing.
+          assert.strictEqual(same.status, 200, same.text);
+          assert.strictEqual(yield* versionOf(TICKETS, id), before + 2);
+        })
+    );
+
+    dbTest.effect(
+      "an existing part is written as its own class: a field the caller cannot name there is UnknownField and never cleared",
+      () =>
+        Effect.gen(function* lockedNote() {
+          const http = yield* TestHttpClient;
+          const { alice, bob } = yield* v2Callers;
+          const ticket = yield* newTicket(alice);
+          const id = textOf(ticket.id);
+
+          const locked = yield* http.request(
+            "POST",
+            "/api/v2/tmffxLockedNote",
+            {
+              ...alice,
+              body: { author: "Alice", text: "locked", ticket: { id } },
+            }
+          );
+
+          assert.strictEqual(locked.status, 201, locked.text);
+
+          const noteId = textOf(asObject(locked.json).id);
+
+          const asBob = asObject(
+            (yield* http.get(`${FIXTURE_TICKETS}/${id}`, bob)).json
+          );
+
+          const [item = {}] = asArray(asBob.note).map(asObject);
+
+          assert.strictEqual(item.id, noteId);
+          assert.notProperty(item, "author");
+
+          const named = yield* http.request(
+            "PATCH",
+            `${FIXTURE_TICKETS}/${id}`,
+            patchOptions(bob, "application/merge-patch+json", {
+              note: [{ ...item, author: "Bob" }],
+            })
+          );
+
+          const missing = yield* http.request(
+            "PATCH",
+            `${FIXTURE_TICKETS}/${id}`,
+            patchOptions(bob, "application/merge-patch+json", {
+              note: [{ ...item, nosuch: "Bob" }],
+            })
+          );
+
+          assert.strictEqual(named.status, 400, named.text);
+          assert.strictEqual(asObject(named.json).code, "UnknownField");
+          assert.strictEqual(
+            named.text,
+            missing.text.replaceAll("nosuch", "author")
+          );
+
+          const replaced = yield* http.request(
+            "PATCH",
+            `${FIXTURE_TICKETS}/${id}`,
+            patchOptions(bob, "application/merge-patch+json", {
+              note: [{ ...item, text: "edited by Bob" }],
+            })
+          );
+
+          assert.strictEqual(replaced.status, 200, replaced.text);
+
+          const [author] = yield* values(
+            `SELECT coalesce(author, '') AS value FROM ${NOTES} WHERE id = $1::uuid`,
+            [noteId]
+          );
+
+          assert.strictEqual(author, "Alice");
         })
     );
   });

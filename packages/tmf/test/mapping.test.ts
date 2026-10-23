@@ -320,6 +320,131 @@ describe("tmf-mapping", () => {
     ]);
   });
 
+  it("refuses a reorder of an array without an order field, and new items before kept ones", () => {
+    const current = {
+      record: RECORD,
+      rendered: render(RECORD),
+      renderedParts: new Map(),
+    };
+
+    const plan = (items: readonly object[]) =>
+      planWrite({
+        access: ALL_ACCESS,
+        attributes: RESOURCE.attributes,
+        body: { note: items.map((item) => ({ ...item })) },
+        current,
+        partAccess: () => ALL_ACCESS,
+      });
+
+    const issue = {
+      attribute: "note",
+      kind: "invalidValue",
+      message:
+        "note keeps its items in creation order: list the kept items in their order, new items after them.",
+    };
+
+    expect(
+      plan([
+        { id: "n2", text: "two" },
+        { id: "n1", text: "one" },
+      ])
+    ).toStrictEqual(Result.fail([issue]));
+    expect(plan([{ text: "new" }, { id: "n1", text: "one" }])).toStrictEqual(
+      Result.fail([issue])
+    );
+    expect(
+      Result.isSuccess(plan([{ id: "n1", text: "one" }, { text: "new" }]))
+    ).toBeTruthy();
+  });
+
+  it("stores positions with an order field, plans existing parts with their own class's access, and fails a clear its writer refuses", () => {
+    const strict = derivedAttribute({
+      name: "kind",
+      render: (values) => values.get(F.json)?.value ?? undefined,
+      sources: [F.json],
+      write: (written) =>
+        written === null
+          ? Result.fail({ kind: "invalidValue", message: "kind is required" })
+          : Result.succeed(new Map([[F.json, written]])),
+    });
+
+    const notes = partsAttribute("note", {
+      attributes: [fieldAttribute("text", F.noteText), strict],
+      classId: NOTE,
+      orderField: F.status,
+      ownerField: F.noteOwner,
+      type: "Note",
+    });
+
+    const seen: (string | undefined)[] = [];
+
+    const plan = (items: readonly object[], hidden: readonly string[] = []) =>
+      planWrite({
+        access: ALL_ACCESS,
+        attributes: [notes],
+        body: { note: items.map((item) => ({ ...item })) },
+        current: { record: RECORD, rendered: {}, renderedParts: new Map() },
+        partAccess: (_item, existing) => {
+          seen.push(existing?.id);
+
+          return {
+            ...ALL_ACCESS,
+            canName: (key) => !hidden.includes(key),
+            canRead: (key) => !hidden.includes(key),
+          };
+        },
+      });
+
+    const ordered = plan([
+      { id: "n2", kind: "b", text: "two" },
+      { id: "n1", kind: "a", text: "one" },
+    ]);
+
+    // Once for whether the part class is known, then once per item.
+    expect(seen).toStrictEqual([undefined, "n2", "n1"]);
+    expect(
+      Result.isSuccess(ordered) ? ordered.success.parts[0]?.items : []
+    ).toStrictEqual([
+      {
+        existingId: "n2",
+        values: new Map<string, unknown>([
+          [F.noteText, "two"],
+          [F.json, "b"],
+          [F.status, 0],
+        ]),
+      },
+      {
+        existingId: "n1",
+        values: new Map<string, unknown>([
+          [F.noteText, "one"],
+          [F.json, "a"],
+          [F.status, 1],
+        ]),
+      },
+    ]);
+
+    // The kind the item leaves out cannot be cleared: the write fails.
+    expect(plan([{ id: "n1", text: "one" }])).toStrictEqual(
+      Result.fail([
+        {
+          attribute: "note.kind",
+          kind: "invalidValue",
+          message: "kind cannot be cleared; send its value.",
+        },
+      ])
+    );
+
+    // A field the caller cannot name on the part is neither cleared nor
+    // named, and the order is then kept as it is.
+    const hiddenKind = plan([{ id: "n1", text: "one" }], [F.json, F.status]);
+
+    expect(
+      Result.isSuccess(hiddenKind) ? hiddenKind.success.parts[0]?.items : []
+    ).toStrictEqual([
+      { existingId: "n1", values: new Map([[F.noteText, "one"]]) },
+    ]);
+  });
+
   it("turns a patched resource into the equivalent merge-patch body", () => {
     expect(
       mergeBodyOf(

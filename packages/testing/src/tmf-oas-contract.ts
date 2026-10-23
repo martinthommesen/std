@@ -20,7 +20,8 @@
  *   mapping does not name (a local child class, Contracts 11.1, or an STD
  *   `Error` subtype, 10.6) validates against the declaring schema, any
  *   branch of a `oneOf` [judgment: the TMF630 extension pattern].
- *   Formats are checked for `date-time` and `uri`.
+ *   Formats are checked for `date-time` (RFC 3339 with calendar and time
+ *   ranges, `rfc3339.ts`) and `uri`.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -36,6 +37,8 @@ import { Ajv } from "ajv";
 import type { ValidateFunction } from "ajv";
 import { Effect } from "effect";
 import { parse } from "yaml";
+
+import { isRfc3339DateTime } from "./rfc3339.ts";
 
 /** A TMF API whose responses are checked: its base path and document. */
 export interface TmfContract {
@@ -196,9 +199,6 @@ const polymorphic = (name: string, schema: JsonObject): JsonValue => {
   return dispatch;
 };
 
-const DATE_TIME =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u;
-
 const DECLARED_STATUS = /^\d{3}$/u;
 
 const documents = new Map<string, LoadedDocument>();
@@ -225,7 +225,7 @@ const loadDocument = (file: string): LoadedDocument => {
 
   const ajv = new Ajv({ allErrors: false, strict: false });
 
-  ajv.addFormat("date-time", DATE_TIME);
+  ajv.addFormat("date-time", isRfc3339DateTime);
   ajv.addFormat("uri", (text: string) => URL.canParse(text));
   ajv.addFormat("float", true);
   ajv.addFormat("base64", true);

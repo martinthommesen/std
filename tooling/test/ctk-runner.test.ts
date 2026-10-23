@@ -1,9 +1,21 @@
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { setTimeout } from "node:timers/promises";
 import { deflateRawSync } from "node:zlib";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { judgeKitRun, normalizeCaseTitle } from "../lib/ctk-report.ts";
 import type { KitExpectation, KitRunEvidence } from "../lib/ctk-report.ts";
+import { withKitSession } from "../lib/ctk-session.ts";
+import type { KitSession, KitSignal, SessionDeps } from "../lib/ctk-session.ts";
 import { readZipEntry, zipEntryNames } from "../lib/zip.ts";
 
 // Contracts 11.6, `ctk-runner`: the CTK runner's verdict on fabricated
@@ -11,7 +23,9 @@ import { readZipEntry, zipEntryNames } from "../lib/zip.ts";
 // A clean report passes; one failing test, one skipped, one pending, a
 // missing expected case, a malformed index.json, a missing report, a report
 // older than the run, a reports directory that was not empty and a wrong
-// ctk_version.txt each fail.
+// ctk_version.txt each fail. The session cleans up the container and the
+// bearer configuration on success, on an error and on a signal, with the
+// docker calls stubbed (no kit runs).
 
 const URL_UNDER_TEST = "http://127.0.0.1:8080/tmf-api/troubleTicket/v5";
 const IMAGE = "tmforumorg/tmf621-v5.0.0-ctk:1.0.1";
@@ -142,6 +156,110 @@ const zipOf = (files: Readonly<Record<string, string>>): Buffer => {
   return Buffer.concat([...locals, directoryBytes, end]);
 };
 
+/** A session's surroundings with docker stubbed and signals simulated. */
+interface SessionStub {
+  readonly deps: SessionDeps;
+  readonly calls: (readonly string[])[];
+  readonly exits: number[];
+  readonly handlers: Map<() => void, KitSignal>;
+  readonly signal: (signal: KitSignal) => void;
+  readonly done: () => void;
+}
+
+const sessionStub = (): SessionStub => {
+  const root = mkdtempSync(path.join(tmpdir(), "std-ctk-session-"));
+  const handlers = new Map<() => void, KitSignal>();
+  const calls: (readonly string[])[] = [];
+  const exits: number[] = [];
+
+  return {
+    calls,
+    deps: {
+      docker: async (args) => {
+        calls.push(args);
+
+        return await Promise.resolve({ code: 0, output: "" });
+      },
+      exit: (code) => {
+        exits.push(code);
+      },
+      signals: {
+        off: (_signal, handler) => {
+          handlers.delete(handler);
+        },
+        on: (signal, handler) => {
+          handlers.set(handler, signal);
+        },
+      },
+      tempRoot: root,
+    },
+    done: () => {
+      expect(readdirSync(root)).toStrictEqual([]);
+      rmSync(root, { force: true, recursive: true });
+    },
+    exits,
+    handlers,
+    signal: (signal) => {
+      for (const [handler, registered] of handlers) {
+        if (registered === signal) {
+          handler();
+        }
+      }
+    },
+  };
+};
+
+// A run whose report copy fails after the bearer configuration is written.
+const failingRun = async (stub: SessionStub): Promise<KitSession> => {
+  let seen: KitSession | undefined;
+
+  await expect(
+    withKitSession(stub.deps, "tmf621", IMAGE, async (session) => {
+      seen = session;
+      writeFileSync(session.config, '{"headers":{"Authorization":"Bearer x"}}');
+
+      return await Promise.reject<KitSession>(
+        new Error("copying the reports failed")
+      );
+    })
+  ).rejects.toThrow("copying the reports failed");
+
+  if (seen === undefined) {
+    throw new Error("the session did not start");
+  }
+
+  return seen;
+};
+
+// A run that a signal interrupts while the kit is still running.
+const interruptedRun = async (
+  stub: SessionStub,
+  signal: KitSignal
+): Promise<KitSession> => {
+  let seen: KitSession | undefined;
+
+  void withKitSession(stub.deps, "tmf621", IMAGE, async (session) => {
+    seen = session;
+    writeFileSync(session.config, "{}");
+    stub.signal(signal);
+
+    // The kit keeps running; only the signal ends the process.
+    await setTimeout(60_000, undefined, { ref: false });
+
+    return session;
+  });
+
+  await vi.waitFor(() => {
+    expect(stub.exits).toHaveLength(1);
+  });
+
+  if (seen === undefined) {
+    throw new Error("the session did not start");
+  }
+
+  return seen;
+};
+
 describe("ctk-runner", () => {
   it("passes a clean, fresh report from the pinned image with every expected case", () => {
     const verdict = judgeKitRun(evidence(), EXPECTED);
@@ -265,5 +383,63 @@ describe("ctk-runner", () => {
     );
     expect(readZipEntry(zip, "README.md").toString("utf-8")).toBe("# kit");
     expect(() => readZipEntry(zip, "run.sh")).toThrow("no run.sh");
+  });
+
+  it("cleans up the container after a run that fails", async () => {
+    const stub = sessionStub();
+    const seen = await failingRun(stub);
+
+    expect(stub.calls).toContainEqual(["rm", "-f", seen.container]);
+    expect(stub.calls.some((args) => args.includes("find"))).toBeTruthy();
+    stub.done();
+  });
+
+  it("deletes the configuration and leaves no signal handler after a run that fails", async () => {
+    const stub = sessionStub();
+    const seen = await failingRun(stub);
+
+    expect(existsSync(seen.work)).toBeFalsy();
+    expect(stub.handlers.size).toBe(0);
+    stub.done();
+  });
+
+  it("cleans up after a successful run too, and leaves no signal handler", async () => {
+    const stub = sessionStub();
+
+    const result = await withKitSession(
+      stub.deps,
+      "tmf621",
+      IMAGE,
+      async (session) => {
+        writeFileSync(session.config, "{}");
+
+        return await Promise.resolve(session);
+      }
+    );
+
+    expect(existsSync(result.config)).toBeFalsy();
+    expect(stub.calls[0]).toStrictEqual(["rm", "-f", result.container]);
+    expect(stub.handlers.size).toBe(0);
+    stub.done();
+  });
+
+  it("on SIGINT stops the container, deletes the configuration and exits 130", async () => {
+    const stub = sessionStub();
+    const seen = await interruptedRun(stub, "SIGINT");
+
+    expect(stub.exits).toStrictEqual([130]);
+    expect(stub.calls[0]).toStrictEqual(["rm", "-f", seen.container]);
+    expect(existsSync(seen.work)).toBeFalsy();
+    stub.done();
+  });
+
+  it("on SIGTERM stops the container, deletes the configuration and exits 143", async () => {
+    const stub = sessionStub();
+    const seen = await interruptedRun(stub, "SIGTERM");
+
+    expect(stub.exits).toStrictEqual([143]);
+    expect(stub.calls[0]).toStrictEqual(["rm", "-f", seen.container]);
+    expect(existsSync(seen.work)).toBeFalsy();
+    stub.done();
   });
 });

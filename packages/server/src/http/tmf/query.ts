@@ -54,7 +54,7 @@ import { alternativesOf, atomOf, splitParameter } from "../v2/query.ts";
 import type { Comparison } from "../v2/query.ts";
 import type { QueryParameters } from "../v2/request.ts";
 import type { MappedResource } from "./context.ts";
-import { knownOn, typeAttributesFor } from "./context.ts";
+import { extensionsOf, knownOn, typeAttributesFor } from "./context.ts";
 import { readFieldOf } from "./sources.ts";
 
 /** The directives of a TMF list. */
@@ -138,6 +138,43 @@ export const knownAttributes = (
   mapped.resource.attributes.filter((attribute) =>
     knownOn(scope, classId, attribute)
   );
+
+/**
+ * The attributes `fields` may select: the mapping's that the caller knows,
+ * and the local attributes of every class of the subtree the caller can
+ * read there, which reads return by default (Contracts 11.1).
+ *
+ * @param scope - The caller's scope.
+ * @param mapped - The resource.
+ * @param classId - The class the request reads through.
+ * @returns The attributes, each name once.
+ */
+export const selectableAttributes = (
+  scope: ReadScope,
+  mapped: MappedResource,
+  classId: string
+): readonly Attribute[] => {
+  const byName = new Map(
+    knownAttributes(scope, mapped, classId).map((attribute) => [
+      attribute.name,
+      attribute,
+    ])
+  );
+
+  for (const concrete of scope.view(classId).classIds) {
+    for (const attribute of extensionsOf(
+      scope.snapshot,
+      mapped.resource,
+      concrete
+    )) {
+      if (!byName.has(attribute.name) && knownOn(scope, concrete, attribute)) {
+        byName.set(attribute.name, attribute);
+      }
+    }
+  }
+
+  return [...byName.values()];
+};
 
 /**
  * Parses `fields` for the attributes the caller knows.
@@ -513,7 +550,10 @@ export const parseTmfListQuery = Effect.fn("TmfQuery.parseList")(
         beforeText === undefined
           ? undefined
           : yield* decodeCursor(sortKeys, beforeText),
-      fields: yield* parseFieldsOf(query, known),
+      fields: yield* parseFieldsOf(
+        query,
+        selectableAttributes(scope, mapped, view.classId)
+      ),
       filter:
         atoms.length === 0
           ? Option.none()
@@ -551,6 +591,9 @@ export const parseTmfReadQuery = Effect.fn("TmfQuery.parseRead")(
       );
     }
 
-    return yield* parseFieldsOf(query, knownAttributes(scope, mapped, classId));
+    return yield* parseFieldsOf(
+      query,
+      selectableAttributes(scope, mapped, classId)
+    );
   }
 );

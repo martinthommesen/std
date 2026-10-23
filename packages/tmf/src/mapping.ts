@@ -192,6 +192,14 @@ export interface ItemMapping {
   readonly classId: string;
   /** The part class's owner reference (`aggregate: true`, Contracts 4.9). */
   readonly ownerField: string;
+  /**
+   * An integer field of the part class that keeps the array's order: a
+   * write stores each item's position, so a reorder is a change of the
+   * parts (and of the owner's version). Without one the parts are in
+   * creation order, and a write that would reorder them is refused
+   * (decision 0033).
+   */
+  readonly orderField?: SourceKey;
   readonly attributes: readonly Attribute[];
 }
 

@@ -14,6 +14,7 @@ import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import { isRfc3339DateTime } from "../../testing/src/rfc3339.ts";
 import {
   contractAt,
   declaredStatusesOf,
@@ -172,6 +173,41 @@ describe("tmf-oas-contract", () => {
     );
 
     assert.include(noOperation, "no such operation");
+  });
+
+  it("checks date-times as RFC 3339 with calendar and time ranges", () => {
+    for (const valid of [
+      "2026-10-23T10:00:00.000Z",
+      "2024-02-29T23:59:59+01:00",
+      "2026-10-23t10:00:00z",
+      "2016-12-31T23:59:60Z",
+      "2017-01-01T00:59:60+01:00",
+    ]) {
+      assert.isTrue(isRfc3339DateTime(valid), valid);
+    }
+
+    for (const invalid of [
+      "2026-99-99T99:99:99Z",
+      "2026-02-29T10:00:00Z",
+      "2026-04-31T10:00:00Z",
+      "2026-10-23T24:00:00Z",
+      "2026-10-23T10:60:00Z",
+      "2026-10-23T10:00:60Z",
+      "2026-10-23T10:00:00+24:00",
+      "2026-10-23 10:00:00Z",
+      "2026-10-23T10:00:00",
+    ]) {
+      assert.isFalse(isRfc3339DateTime(invalid), invalid);
+    }
+
+    const impossible = problemOf(
+      exchange("GET", `${FIXTURE_TICKETS}/${TICKET_ID}`, 200, {
+        ...TICKET,
+        creationDate: "2026-99-99T99:99:99Z",
+      })
+    );
+
+    assert.isString(impossible);
   });
 
   it("maps STD's statuses onto the declared ones", () => {

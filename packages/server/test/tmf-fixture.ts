@@ -90,6 +90,15 @@ export const VIP = createClass("vip", {
   parentId: FX.incident.id,
 });
 
+/**
+ * A child class of the note whose `author` an employee may neither read
+ * nor write: an existing locked note is updated as its own class.
+ */
+export const LOCKED_NOTE = createClass("locked_note", {
+  namespaceId: NAMESPACE.id,
+  parentId: FX.note.id,
+});
+
 const text = (maxLength: number): FieldType => ({ kind: "text", maxLength });
 
 /** The fixture's fields. */
@@ -99,6 +108,7 @@ export const FF = {
     targetClassId: USER_CLASS_ID,
   }),
   characteristic: addField(FX.ticket.id, "characteristic", { kind: "json" }),
+  customData: addField(FX.ticket.id, "custom_data", { kind: "json" }),
   description: addField(FX.ticket.id, "description", text(4000), {
     required: true,
   }),
@@ -113,6 +123,7 @@ export const FF = {
       default: false,
     }
   ),
+  notePosition: addField(FX.note.id, "position", { kind: "integer" }),
   noteText: addField(FX.note.id, "text", text(4000), { required: true }),
   noteTicket: addField(FX.note.id, "ticket", {
     aggregate: true,
@@ -132,6 +143,7 @@ export const FF = {
   status: addField(FX.ticket.id, "status", text(40), {
     default: "new",
   }),
+  statusReason: addField(FX.ticket.id, "status_reason", text(200)),
   ticketType: addField(FX.ticket.id, "ticket_type", text(40)),
   urgency: addField(FX.incident.id, "urgency", { kind: "integer" }),
   vipLevel: addField(VIP.id, "vip_level", { kind: "integer" }),
@@ -338,6 +350,8 @@ export const FIXTURE_RESOURCE: TmfResourceMapping = {
     fieldAttribute("lastUpdate", SYSTEM_SOURCES.updatedAt, { readOnly: true }),
     fieldAttribute("urgency", FF.urgency.id),
     fieldAttribute("restricted", FF.restricted.id),
+    jsonAttribute("customData", FF.customData.id),
+    fieldAttribute("statusChangeReason", FF.statusReason.id),
     partsAttribute("note", {
       attributes: [
         fieldAttribute("text", FF.noteText.id, { requiredOnCreate: true }),
@@ -345,6 +359,7 @@ export const FIXTURE_RESOURCE: TmfResourceMapping = {
         fieldAttribute("date", SYSTEM_SOURCES.createdAt, { readOnly: true }),
       ],
       classId: FX.note.id,
+      orderField: FF.notePosition.id,
       ownerField: FF.noteTicket.id,
       type: "Note",
     }),
@@ -422,6 +437,7 @@ export const setUpTmfFixture = Effect.gen(function* setUpTmfFixture() {
     FX.incident.op,
     FX.note.op,
     VIP.op,
+    LOCKED_NOTE.op,
     ...Object.values(FF).map((entry) => entry.op),
   ]);
 
@@ -445,6 +461,7 @@ export const setUpTmfFixture = Effect.gen(function* setUpTmfFixture() {
     FF.holdReason.id,
     FF.assignedTo.id,
     FF.characteristic.id,
+    FF.customData.id,
   ];
 
   const rules: AccessRuleDraft[] = [
@@ -484,6 +501,15 @@ export const setUpTmfFixture = Effect.gen(function* setUpTmfFixture() {
     accessRule(FX.note.id, both, {
       actions: ["read", "create", "update"],
       fields: "*",
+    }),
+    accessRule(LOCKED_NOTE.id, both, {
+      actions: ["read", "create", "update"],
+      fields: "*",
+    }),
+    accessRule(LOCKED_NOTE.id, [employee], {
+      actions: ["read", "create", "update"],
+      effect: "deny",
+      fields: [FF.noteAuthor.id],
     }),
   ];
 

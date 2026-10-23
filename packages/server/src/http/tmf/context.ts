@@ -245,7 +245,8 @@ export const classAccessOf = (
 
   return {
     canName: (key) =>
-      snapshot.field(key) !== undefined &&
+      // A purged field is gone: unknown, as one that never existed.
+      (snapshot.field(key)?.state ?? "purged") !== "purged" &&
       (canRead(key) ||
         actions.some(
           (action) =>

@@ -21,16 +21,13 @@
  * `--payloads FILE`, `--network DOCKER_NETWORK` and `--reports DIR`, for
  * example `pnpm ctk tmf621 --url http://127.0.0.1:8080/tmf-api/troubleTicket/v5 --token "$TOKEN" --network host`.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
-  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -43,12 +40,10 @@ import { Predicate, Result } from "effect";
 import { parse as parseYaml } from "yaml";
 
 import { judgeKitRun, normalizeCaseTitle } from "../lib/ctk-report.ts";
+import { withKitSession } from "../lib/ctk-session.ts";
 import { runCommand } from "../lib/run.ts";
 import { repoRoot } from "../lib/workspace.ts";
 import { readZipEntry } from "../lib/zip.ts";
-
-/** The container user of the TM Forum kits writes the reports. */
-const WORLD_WRITABLE = 0o777;
 
 const sha256 = (bytes: Buffer): string =>
   createHash("sha256").update(bytes).digest("hex");
@@ -188,12 +183,9 @@ const main = async (): Promise<void> => {
   });
 
   const [api] = positionals;
+  const { network, reports: keep, token, url } = values;
 
-  if (
-    api === undefined ||
-    values.url === undefined ||
-    values.token === undefined
-  ) {
+  if (api === undefined || url === undefined || token === undefined) {
     throw new Error(
       "usage: pnpm ctk <api> --url <base URL> --token <bearer token>"
     );
@@ -228,90 +220,77 @@ const main = async (): Promise<void> => {
 
   const image = await pulledImage(pin.ctk);
 
-  const work = mkdtempSync(
-    path.join(tmpdir(), `std-ctk-${pin.spec.toLowerCase()}-`)
-  );
-
-  const reports = path.join(work, "reports");
-  const config = path.join(work, "config.json");
-
-  mkdirSync(reports);
-  chmodSync(reports, WORLD_WRITABLE);
-
-  writeFileSync(
-    config,
-    JSON.stringify(
-      {
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${values.token}`,
-          "Content-Type": "application/json",
-        },
-        payloads,
-        url: values.url,
-      },
-      null,
-      2
-    )
-  );
-
-  const reportsWereEmpty = readdirSync(reports).length === 0;
-
-  const startedAt = Date.now();
-  const container = `std-ctk-${pin.spec.toLowerCase()}-${randomUUID().slice(0, 8)}`;
-
-  // The exit code says nothing: the kit's entrypoint ignores test failures.
-  await docker(
-    [
-      "run",
-      "--rm",
-      "--name",
-      container,
-      "--network",
-      values.network,
-      "-v",
-      `${reports}:/reports`,
-      "-v",
-      `${config}:/config/config.json:ro`,
-      image,
-    ],
-    true
-  );
-
-  const verdict = judgeKitRun(
+  const verdict = await withKitSession(
     {
-      ctkVersion: readIfPresent(path.join(reports, "ctk_version.txt")),
-      indexJson: readIfPresent(path.join(reports, "index.json")),
-      reportsWereEmpty,
-      startedAt,
+      docker: async (args) => await docker(args),
+      exit: (code) => process.exit(code),
+      signals: process,
+      tempRoot: tmpdir(),
     },
-    { expectedCases, image: pin.ctk.image, url: values.url }
-  );
-
-  if (values.reports !== undefined) {
-    cpSync(reports, values.reports, { recursive: true });
-  }
-
-  // The kit's user owns what it wrote: delete it through the same image.
-  await docker([
-    "run",
-    "--rm",
-    "--name",
-    `${container}-cleanup`,
-    "--entrypoint",
-    "find",
-    "-v",
-    `${reports}:/reports`,
+    pin.spec.toLowerCase(),
     image,
-    "/reports",
-    "-mindepth",
-    "1",
-    "-delete",
-  ]);
-  rmSync(work, { force: true, recursive: true });
+    async (session) => {
+      writeFileSync(
+        session.config,
+        JSON.stringify(
+          {
+            headers: {
+              Accept: "application/json",
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            payloads,
+            url,
+          },
+          null,
+          2
+        )
+      );
+
+      const reportsWereEmpty = readdirSync(session.reports).length === 0;
+      const startedAt = Date.now();
+
+      // The exit code says nothing: the kit's entrypoint ignores test
+      // failures.
+      await docker(
+        [
+          "run",
+          "--rm",
+          "--name",
+          session.container,
+          "--network",
+          network,
+          "-v",
+          `${session.reports}:/reports`,
+          "-v",
+          `${session.config}:/config/config.json:ro`,
+          image,
+        ],
+        true
+      );
+
+      const judged = judgeKitRun(
+        {
+          ctkVersion: readIfPresent(
+            path.join(session.reports, "ctk_version.txt")
+          ),
+          indexJson: readIfPresent(path.join(session.reports, "index.json")),
+          reportsWereEmpty,
+          startedAt,
+        },
+        { expectedCases, image: pin.ctk.image, url }
+      );
+
+      if (keep !== undefined) {
+        cpSync(session.reports, keep, { recursive: true });
+      }
+
+      return judged;
+    }
+  );
 
   for (const title of verdict.passedCases) {
-    process.stdout.write(`passed: ${normalizeCaseTitle(title, values.url)}\n`);
+    process.stdout.write(`passed: ${normalizeCaseTitle(title, url)}\n`);
   }
 
   for (const problem of verdict.problems) {

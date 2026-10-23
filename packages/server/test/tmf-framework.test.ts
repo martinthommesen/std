@@ -205,6 +205,22 @@ describe("tmf-framework", () => {
           assert.strictEqual(vip.vipLevel, 3);
           assert.strictEqual(vip.urgency, 1);
 
+          // A local attribute can be selected like a mapped one.
+          const selected = yield* http.get(
+            `${FIXTURE_TICKETS}?@type=TmffxVip&fields=vipLevel`,
+            alice
+          );
+
+          assert.deepStrictEqual(asArray(selected.json), [
+            {
+              "@baseType": "TroubleTicket",
+              "@type": "TmffxVip",
+              href: vip.href ?? null,
+              id: vip.id ?? null,
+              vipLevel: 3,
+            },
+          ]);
+
           const listed = yield* http.get(
             `${FIXTURE_TICKETS}?@type=TmffxVip`,
             alice
@@ -400,7 +416,7 @@ describe("tmf-framework", () => {
           assert.strictEqual(put.status, 405, put.text);
           assert.strictEqual(
             put.headers.get("allow"),
-            "GET, HEAD, PATCH, DELETE, OPTIONS"
+            "GET, HEAD, PATCH, DELETE"
           );
 
           const media = yield* http.request(
@@ -425,6 +441,55 @@ describe("tmf-framework", () => {
           const anonymous = yield* http.get(FIXTURE_TICKETS);
 
           assert.strictEqual(anonymous.status, 401, anonymous.text);
+        })
+    );
+
+    dbTest.effect(
+      "a JSON Patch writes the exact resulting json value; only a merge-patch merges",
+      () =>
+        Effect.gen(function* exactJson() {
+          const http = yield* TestHttpClient;
+          const { alice } = yield* v2Callers;
+
+          const created = yield* createTicket(alice, {
+            customData: { keep: 1, remove: 2 },
+            description: "Json",
+          });
+
+          const path = `${FIXTURE_TICKETS}/${textOf(created.id)}`;
+
+          const patchWith = (contentType: string, body: JsonValue) =>
+            http.request("PATCH", path, {
+              ...alice,
+              headers: { "content-type": contentType },
+              rawBody: JSON.stringify(body),
+            });
+
+          const removed = yield* patchWith("application/json-patch+json", [
+            { op: "remove", path: "/customData/remove" },
+          ]);
+
+          assert.strictEqual(removed.status, 200, removed.text);
+          assert.deepStrictEqual(asObject(removed.json).customData, {
+            keep: 1,
+          });
+
+          const replaced = yield* patchWith("application/json-patch+json", [
+            { op: "replace", path: "/customData", value: { only: 3 } },
+          ]);
+
+          assert.deepStrictEqual(asObject(replaced.json).customData, {
+            only: 3,
+          });
+
+          const merged = yield* patchWith("application/merge-patch+json", {
+            customData: { added: 4 },
+          });
+
+          assert.deepStrictEqual(asObject(merged.json).customData, {
+            added: 4,
+            only: 3,
+          });
         })
     );
   });

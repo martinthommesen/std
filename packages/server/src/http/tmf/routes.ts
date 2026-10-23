@@ -6,16 +6,17 @@
  *
  * Every route runs as `/api/v2`'s do: the session (no token is
  * `Unauthenticated`), then one request transaction as the session's
- * `Actor`, then the record service. TMF names come from the mapping, which
- * names fields by stable ID, so a TMF request takes no stated revision
- * (`STD-Schema-Revision`) [judgment]. Every failure with an API tag is a
- * TMF `Error` with a status the pinned document declares for the
- * operation (`errors.ts`).
+ * `Actor`, then the record service. A mapping names fields by stable ID;
+ * the names a request takes from definitions (a local class's attributes)
+ * are checked against the revision the request states
+ * (`STD-Schema-Revision`, Contracts 6.4) as on `/api/v2` (decision 0033).
+ * Every failure with an API tag is a TMF `Error` with a status the pinned
+ * document declares for the operation (`errors.ts`).
  *
  * - A method a resource path does not offer is `405` with `Allow` (TMF630
  *   v5.0.0 Part 1 §3.3.3 p.31), decided by the path's shape before any
  *   record is looked up; the TMF documents declare no `OPTIONS`, so it is
- *   answered the same way [judgment].
+ *   answered the same way, and `Allow` never lists it [judgment].
  * - `/hub` and `/hub/{id}` are the hub seam (Contracts 12.2): workstream 3H
  *   wires its hub service there (`HUB_PATHS`); until then they answer
  *   `404`, as every resource an API does not serve (11.1).
@@ -38,7 +39,8 @@ import type { WriteOnlyValues } from "../../records/write-only-values.ts";
 import { Transactions } from "../../sql/transactions.ts";
 import type { TransactionsApi } from "../../sql/transactions.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
-import { allowOf, getAndHead, withoutBody } from "../v2/methods.ts";
+import { parseRequestRevision } from "../stale-request.ts";
+import { getAndHead, withoutBody } from "../v2/methods.ts";
 import { jsonBodyOf, withSession } from "../v2/request.ts";
 import { originOf } from "../v2/resource.ts";
 import type { MappedResource, TmfRegistry } from "./context.ts";
@@ -99,6 +101,27 @@ const anyDeclared = (mapped: MappedResource): readonly number[] => [
   ...new Set(Object.values(mapped.resource.declaredStatuses).flat()),
 ];
 
+/** The order of methods in `Allow`. */
+const ALLOW_ORDER = ["GET", "HEAD", "POST", "PATCH", "DELETE"] as const;
+
+/**
+ * `Allow` on a TMF route: the methods the path offers, and `HEAD` wherever
+ * `GET` is (RFC 9110 §9.3.2). Unlike `/api/v2`'s, it never lists
+ * `OPTIONS`, which TMF routes answer with `405` (decision 0033).
+ *
+ * @param offered - The methods the path's routes serve.
+ * @returns The header value.
+ */
+export const tmfAllowOf = (offered: readonly string[]): string => {
+  const methods = new Set(offered);
+
+  if (methods.has("GET")) {
+    methods.add("HEAD");
+  }
+
+  return ALLOW_ORDER.filter((method) => methods.has(method)).join(", ");
+};
+
 /** One resource path: its resource and the methods it offers. */
 interface ResourcePath {
   readonly offered: readonly string[];
@@ -154,6 +177,7 @@ const routeWork =
           origin,
           registry: environment.registry,
           request,
+          stated: yield* parseRequestRevision(request),
         };
 
         return yield* inSession(
@@ -177,7 +201,7 @@ const notOffered =
         environment,
         request,
         Effect.fail(
-          new MethodNotAllowed({ allow: allowOf([...pathResource.offered]) })
+          new MethodNotAllowed({ allow: tmfAllowOf(pathResource.offered) })
         )
       ),
       anyDeclared(pathResource.mapped)

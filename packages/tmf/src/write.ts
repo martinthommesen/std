@@ -19,10 +19,20 @@
  *   part (an `id` naming no visible part is not used); a visible part no
  *   item names is deleted. Parts the caller cannot see are left alone
  *   [judgment: a caller cannot delete what it cannot see].
+ * - An item updates a part of exactly the part's own class, and only with
+ *   the fields the caller may name for an update there; a new item creates
+ *   a part with the fields the caller may name for a create. A field the
+ *   caller cannot name is never named, and never cleared by a replacement.
+ *   A replacement clears what it leaves out or fails: a writable attribute
+ *   whose writer refuses `null` is an issue, never silently kept.
+ * - The array's order is kept in the item mapping's `orderField` when it
+ *   has one (each item's position); without one, the parts stay in
+ *   creation order and a body that would reorder them is refused.
  * - A JSON Patch (RFC 6902) is applied by the server to the resource as the
  *   caller reads it under the aggregate's lock; `mergeBodyOf` turns the
- *   result into the equivalent merge-patch body, so both formats write the
- *   same way.
+ *   result into the equivalent merge-patch body, written with the exact
+ *   resulting values (`jsonMerge` false: a json value is replaced, never
+ *   merged into the stored one).
  */
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import {
@@ -93,8 +103,20 @@ export interface WriteInput {
   /** The body without `@type`, `@baseType` and `@schemaLocation`. */
   readonly body: JsonObject;
   readonly access: ClassAccess;
-  /** The access of each part class. */
-  readonly partAccess: (item: ItemMapping) => ClassAccess;
+  /**
+   * The caller's access to a part: for an existing part (an update), of its
+   * own concrete class; for a new one (a create), of the item's class.
+   */
+  readonly partAccess: (
+    item: ItemMapping,
+    existing?: SourceRecord
+  ) => ClassAccess;
+  /**
+   * Whether a json object value is merged into the stored one (RFC 7396:
+   * a merge-patch); false for a create and a JSON Patch, whose values are
+   * the exact results.
+   */
+  readonly jsonMerge?: boolean;
   /**
    * For a merge-patch: the record as the caller reads it under the lock,
    * and its rendering (read-only attributes may repeat their value).
@@ -188,6 +210,7 @@ interface MemberInput {
   readonly current: SourceRecord | undefined;
   readonly rendered: JsonObject | undefined;
   readonly collector: ValueCollector;
+  readonly jsonMerge: boolean;
 }
 
 // A value attribute's member: read-only repeats, then the attribute's own
@@ -218,6 +241,7 @@ const valueMember = (
   }
 
   const merging =
+    input.jsonMerge &&
     attribute.mergeJson === true &&
     current !== undefined &&
     isJsonObject(value);
@@ -237,7 +261,11 @@ interface MembersInput {
   readonly issues: WriteIssue[];
   /** Prefix of attribute names in issues (`note.`). */
   readonly prefix: string;
+  /** Whether json objects merge into stored values (a merge-patch). */
+  readonly jsonMerge: boolean;
   readonly onParts?: (attribute: PartsAttribute, value: JsonValue) => void;
+  /** Whether the caller knows an array's part class. */
+  readonly partsKnown?: (attribute: PartsAttribute) => boolean;
 }
 
 // The attribute a body member names, when the caller knows it.
@@ -247,30 +275,61 @@ const memberAttribute = (
 ): Attribute | undefined => {
   const attribute = input.attributes.get(name);
 
+  if (attribute === undefined) {
+    return undefined;
+  }
+
   const usable =
-    attribute !== undefined &&
-    knownToCaller(attribute, input.access) &&
-    (attribute.kind === "value" || input.onParts !== undefined);
+    attribute.kind === "value"
+      ? knownToCaller(attribute, input.access)
+      : input.onParts !== undefined && input.partsKnown?.(attribute) === true;
 
   return usable ? attribute : undefined;
 };
 
-// Clears the writable attributes a replacing item leaves out.
-const clearAbsent = (input: MembersInput, collector: ValueCollector): void => {
+// Clears the writable attributes a replacing item leaves out, among those
+// the caller may name: either every one clears, or the issues say why not.
+const clearAbsent = (
+  input: MembersInput,
+  collector: ValueCollector
+): WriteIssue[] => {
+  const issues: WriteIssue[] = [];
+
   for (const attribute of input.attributes.values()) {
-    if (
+    const writable =
       attribute.kind === "value" &&
       !attribute.readOnly &&
-      !(attribute.name in input.body) &&
-      knownToCaller(attribute, input.access)
-    ) {
-      const cleared = attribute.write?.(null, input.current?.values);
+      attribute.write !== undefined;
 
-      if (cleared !== undefined && Result.isSuccess(cleared)) {
-        collector.add(attribute, cleared.success, false);
+    const clearable =
+      writable &&
+      !(attribute.name in input.body) &&
+      knownToCaller(attribute, input.access);
+
+    const cleared =
+      clearable && attribute.kind === "value"
+        ? attribute.write?.(null, input.current?.values)
+        : undefined;
+
+    if (cleared !== undefined && attribute.kind === "value") {
+      const issue = Result.isSuccess(cleared)
+        ? collector.add(attribute, cleared.success, false)
+        : {
+            attribute: attribute.name,
+            kind: "invalidValue" as const,
+            message: `${attribute.name} cannot be cleared; send its value.`,
+          };
+
+      if (issue !== null) {
+        issues.push({
+          ...issue,
+          attribute: `${input.prefix}${attribute.name}`,
+        });
       }
     }
   }
+
+  return issues;
 };
 
 // The required attributes a new object leaves out, among those the caller
@@ -305,6 +364,7 @@ const planMembers = (input: MembersInput): ValueCollector => {
       const issue = valueMember(attribute, {
         collector,
         current: input.current,
+        jsonMerge: input.jsonMerge,
         name,
         rendered: input.rendered,
         value,
@@ -317,7 +377,7 @@ const planMembers = (input: MembersInput): ValueCollector => {
   }
 
   if (input.clearAbsent) {
-    clearAbsent(input, collector);
+    issues.push(...clearAbsent(input, collector));
   }
 
   if (input.current === undefined) {
@@ -362,11 +422,84 @@ const planItem = (input: ItemInput): ItemPlan => {
     clearAbsent: existing !== undefined,
     current: existing,
     issues,
+    // An item replaces its part: its values are the exact new ones.
+    jsonMerge: false,
     prefix: `${attribute.name}.`,
     rendered: input.rendered,
   });
 
   return { existingId: existing?.id, values: values.values };
+};
+
+/** One planned item with the access it was planned under. */
+interface PlannedItem {
+  readonly plan: ItemPlan;
+  readonly access: ClassAccess;
+}
+
+const reordered = (attribute: PartsAttribute): WriteIssue => ({
+  attribute: attribute.name,
+  kind: "invalidValue",
+  message: `${attribute.name} keeps its items in creation order: list the kept items in their order, new items after them.`,
+});
+
+/**
+ * The array's order (decision 0033): with an order field the caller may
+ * name on every item, each item's position is written to it; otherwise
+ * the parts stay in creation order, so the kept items must keep their
+ * relative order and new items must follow them.
+ *
+ * @param attribute - The array attribute.
+ * @param items - The planned items, in the body's order.
+ * @param visible - The visible parts, in their current order.
+ * @param issues - Collects issues.
+ * @returns The items, with their positions where the order is stored.
+ */
+const ordered = (
+  attribute: PartsAttribute,
+  items: readonly PlannedItem[],
+  visible: readonly SourceRecord[],
+  issues: WriteIssue[]
+): ItemPlan[] => {
+  const { orderField } = attribute.item;
+
+  const storable =
+    orderField !== undefined &&
+    items.every((item) => item.access.canName(orderField));
+
+  if (storable) {
+    return items.map(({ plan }, position) => ({
+      ...plan,
+      values: new Map([...plan.values, [orderField, position]]),
+    }));
+  }
+
+  const kept = items.flatMap(({ plan }) =>
+    plan.existingId === undefined ? [] : [plan.existingId]
+  );
+
+  const keptIds = new Set(kept);
+
+  const current = visible.flatMap((part) =>
+    keptIds.has(part.id) ? [part.id] : []
+  );
+
+  const firstNew = items.findIndex(({ plan }) => plan.existingId === undefined);
+
+  const lastKept = items.findLastIndex(
+    ({ plan }) => plan.existingId !== undefined
+  );
+
+  const keepsOrder =
+    kept.length === current.length &&
+    kept.every((id, index) => current[index] === id) &&
+    (firstNew === -1 || firstNew > lastKept);
+
+  if (!keepsOrder) {
+    issues.push(reordered(attribute));
+  }
+
+  return items.map(({ plan }) => plan);
 };
 
 /**
@@ -384,7 +517,6 @@ const planItems = (
   input: WriteInput,
   issues: WriteIssue[]
 ): PartsPlan | null => {
-  const access = input.partAccess(attribute.item);
   const visible = input.current?.record.parts.get(attribute.name) ?? [];
   const byId = new Map(visible.map((part) => [part.id, part]));
   const items = value ?? [];
@@ -395,7 +527,7 @@ const planItems = (
     return null;
   }
 
-  const planned: ItemPlan[] = [];
+  const planned: PlannedItem[] = [];
   const kept = new Set<string>();
 
   for (const entry of items) {
@@ -411,8 +543,11 @@ const planItems = (
         kept.add(existing.id);
       }
 
-      planned.push(
-        planItem({
+      const access = input.partAccess(attribute.item, existing);
+
+      planned.push({
+        access,
+        plan: planItem({
           access,
           attribute,
           entry,
@@ -422,8 +557,8 @@ const planItems = (
             existing === undefined
               ? undefined
               : input.current?.renderedParts.get(existing.id),
-        })
-      );
+        }),
+      });
     } else {
       issues.push(notAnArray(attribute));
     }
@@ -432,7 +567,7 @@ const planItems = (
   return {
     attribute,
     deleted: visible.flatMap((part) => (kept.has(part.id) ? [] : [part.id])),
-    items: planned,
+    items: ordered(attribute, planned, visible, issues),
   };
 };
 
@@ -473,6 +608,7 @@ export const planWrite = (
     clearAbsent: false,
     current: current?.record,
     issues,
+    jsonMerge: input.jsonMerge === true,
     onParts: (attribute, value) => {
       const planned = attribute.readOnly
         ? null
@@ -486,6 +622,7 @@ export const planWrite = (
         parts.push(planned);
       }
     },
+    partsKnown: (attribute) => input.partAccess(attribute.item).knows,
     prefix: "",
     rendered: current?.rendered,
   });
