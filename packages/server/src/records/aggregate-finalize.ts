@@ -331,25 +331,27 @@ export const poisonOnAnyFailure =
  * never commits, whoever catches the error.
  *
  * @param ops - The pipeline's saves as the system effect `aggregate`.
- * @returns Nothing.
+ * @returns Whether any owner was settled: then the records the operation
+ *   saved may have changed since their saves returned.
  */
 export const finalizeAggregates = <E, R>(ops: PersistOps<E, R>) =>
   Effect.gen(function* finalize() {
     const transaction = yield* Effect.serviceOption(CurrentTransaction);
 
     if (Option.isNone(transaction)) {
-      return;
+      return false;
     }
 
     const state = aggregateStateOf(transaction.value);
 
     // Most transactions touch no aggregate: nothing more to read.
     if (state.owners.size === 0) {
-      return;
+      return false;
     }
 
     const hooks = yield* SaveHooks;
     const snapshot = yield* (yield* Catalog).current;
+    let settled = false;
 
     for (;;) {
       const touched = [...state.owners.values()].filter(
@@ -357,8 +359,10 @@ export const finalizeAggregates = <E, R>(ops: PersistOps<E, R>) =>
       );
 
       if (touched.length === 0) {
-        return;
+        return settled;
       }
+
+      settled = true;
 
       for (const entry of touched) {
         entry.status = "finalizing";

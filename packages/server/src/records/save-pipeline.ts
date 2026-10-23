@@ -1457,16 +1457,63 @@ const persistOps = {
 export const finalizeTouchedAggregates = finalizeAggregates(persistOps);
 
 /**
- * Finalizes at the end of a save when it is the outermost one of its
- * operation: on an empty save stack and outside an aggregate operation.
+ * A saved record as the transaction now holds it, projected with the
+ * acting user's read rights (3.9): finalization (4.9) may have changed it
+ * after its save returned, through an aggregate save of it or of its
+ * owner, so a response built before finalization would show a version and
+ * values that were never committed, or a record the caller can no longer
+ * see. A deleted record is returned as it is.
+ *
+ * @param saved - The save's result.
+ * @param endpointClassId - The endpoint the response is projected for.
+ * @returns The result with the record's current version and projection.
  */
-const finishSave = Effect.gen(function* finishSave() {
+export const reloadSaved = Effect.fn("Records.reloadSaved")(
+  function* reloadSaved(saved: SaveResult, endpointClassId: DefinitionId) {
+    if (saved.outcome === "deleted") {
+      return saved;
+    }
+
+    const snapshot = yield* (yield* Catalog).current;
+    const current = yield* loadRecord(snapshot, saved.classId, saved.id);
+
+    if (Option.isNone(current)) {
+      return saved;
+    }
+
+    const reloaded: SaveResult = {
+      ...saved,
+      record: yield* project(snapshot, endpointClassId, current.value),
+      version: current.value.version,
+    };
+
+    return reloaded;
+  }
+);
+
+/**
+ * Finalizes at the end of a save when it is the outermost one of its
+ * operation (on an empty save stack and outside an aggregate operation),
+ * then answers with the saved record as finalization left it.
+ *
+ * @param saved - The save's result.
+ * @param endpointClassId - The endpoint the response is projected for.
+ * @returns The result, reloaded when finalization settled anything.
+ */
+const finishSave = Effect.fn("Records.finishSave")(function* finishSave(
+  saved: SaveResult,
+  endpointClassId: DefinitionId
+) {
   const stack = yield* SaveStack;
   const scope = yield* AggregateScope;
 
-  if (stack.depth === 0 && !scope.deferred) {
-    yield* finalizeTouchedAggregates;
+  if (stack.depth > 0 || scope.deferred) {
+    return saved;
   }
+
+  return (yield* finalizeTouchedAggregates)
+    ? yield* reloadSaved(saved, endpointClassId)
+    : saved;
 });
 
 /**
@@ -1482,7 +1529,9 @@ export const createRecord = Effect.fn("Records.create")(function* createRecord(
   const { request } = yield* Transactions;
 
   return yield* request(
-    createInTransaction(input, body).pipe(Effect.tap(() => finishSave))
+    createInTransaction(input, body).pipe(
+      Effect.flatMap((saved) => finishSave(saved, input.endpointClassId))
+    )
   );
 }, poisonIfNested);
 
@@ -1500,7 +1549,9 @@ export const updateRecord = Effect.fn("Records.update")(function* updateRecord(
   const { request } = yield* Transactions;
 
   return yield* request(
-    updateInTransaction(input, body).pipe(Effect.tap(() => finishSave))
+    updateInTransaction(input, body).pipe(
+      Effect.flatMap((saved) => finishSave(saved, input.endpointClassId))
+    )
   );
 }, poisonIfNested);
 
@@ -1517,7 +1568,9 @@ export const deleteRecord = Effect.fn("Records.delete")(function* deleteRecord(
   const { request } = yield* Transactions;
 
   return yield* request(
-    deleteInTransaction(input).pipe(Effect.tap(() => finishSave))
+    deleteInTransaction(input).pipe(
+      Effect.flatMap((saved) => finishSave(saved, input.endpointClassId))
+    )
   );
 }, poisonIfNested);
 
@@ -1529,6 +1582,11 @@ export const deleteRecord = Effect.fn("Records.delete")(function* deleteRecord(
  * a batch use it, with `lockAggregates` first. Nested in another
  * operation or in a save's hooks, it runs its saves and leaves
  * finalization to the enclosing one.
+ *
+ * The results of the saves inside are built before finalization, which
+ * may change those records (an aggregate save of an owner, a part a rule
+ * moved): a caller that answers with a saved record projects it after the
+ * operation completes, with `reloadSaved`.
  *
  * @param effect - The saves.
  * @returns Their result, after finalization.

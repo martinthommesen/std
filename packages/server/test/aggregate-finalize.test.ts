@@ -24,6 +24,7 @@ import {
   deleteRecord,
   finalizeTouchedAggregates,
 } from "../src/records/save-pipeline.ts";
+import { WriteAccess } from "../src/records/write-access.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
@@ -42,6 +43,7 @@ import {
   TABLE,
   TICKET_WATCH,
   update,
+  valuesOf,
   versionOf,
   versionsOf,
 } from "./aggregates-support.ts";
@@ -927,6 +929,74 @@ describe("aggregate-finalize", () => {
             aggregateOf(yield* lastEntry(ticket.id))?.parts,
             [(yield* lastEntry(note ?? ""))?.changeId ?? ""]
           );
+        })
+    );
+
+    dbTest.effect(
+      "a save answers with the committed state after finalization, projected with the caller's read rights",
+      () =>
+        Effect.gen(function* response() {
+          const request = yield* create(C.request.id, {
+            name: "resp-1",
+            status: "draft",
+          });
+
+          yield* create(C.item.id, {
+            name: "pen",
+            request: request.id,
+            state: "draft",
+          });
+
+          // Settling approves the request: the response shows it so.
+          const submitted = yield* update(
+            C.request.id,
+            TABLE.request,
+            request.id,
+            {
+              status: "submitted",
+            }
+          );
+
+          assert.strictEqual(
+            submitted.version,
+            yield* versionOf(TABLE.request, request.id)
+          );
+          assert.strictEqual(valuesOf(submitted).status, "approved");
+
+          // A caller who cannot read approved requests gets only the ID and
+          // the version (3.9), however the save itself left it.
+          const access = yield* WriteAccess;
+
+          const blind = WriteAccess.of({
+            ...access,
+            project: (input) =>
+              input.record.values.get(F.requestStatus.id) === "approved"
+                ? Effect.succeed({
+                    id: input.record.id,
+                    version: input.record.version,
+                  })
+                : access.project(input),
+          });
+
+          const other = yield* create(C.request.id, {
+            name: "resp-2",
+            status: "draft",
+          });
+
+          yield* create(C.item.id, {
+            name: "pen",
+            request: other.id,
+            state: "draft",
+          });
+
+          const hidden = yield* update(C.request.id, TABLE.request, other.id, {
+            status: "submitted",
+          }).pipe(Effect.provideService(WriteAccess, blind));
+
+          assert.deepStrictEqual(hidden.record, {
+            id: other.id,
+            version: yield* versionOf(TABLE.request, other.id),
+          });
         })
     );
 
