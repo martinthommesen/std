@@ -84,9 +84,8 @@ const argumentList = (
 ): { readonly argv: string[]; readonly truncated: boolean } | undefined => {
   const argv: string[] = [];
   let truncated = false;
-  let valid = true;
 
-  while (valid && !cursor.skip("]")) {
+  while (!cursor.skip("]")) {
     cursor.skip(", ");
 
     if (cursor.skip("...")) {
@@ -94,13 +93,16 @@ const argumentList = (
     } else {
       const argument = cursor.string();
 
-      valid = argument !== undefined;
-      truncated ||= argument?.truncated ?? false;
-      argv.push(argument?.text ?? "");
+      if (argument === undefined) {
+        return undefined;
+      }
+
+      truncated ||= argument.truncated;
+      argv.push(argument.text);
     }
   }
 
-  return valid ? { argv, truncated } : undefined;
+  return { argv, truncated };
 };
 
 /**

@@ -73,7 +73,14 @@ export class Cursor {
     const bytes: number[] = [];
 
     while (this.index < this.#text.length && this.#text[this.index] !== '"') {
-      bytes.push(...this.#byte());
+      const code = this.#text.codePointAt(this.index) ?? 0;
+
+      if (code < 0x80 && code !== 0x5c) {
+        bytes.push(code);
+        this.index += 1;
+      } else {
+        bytes.push(...this.#byte());
+      }
     }
 
     if (!this.skip('"')) {

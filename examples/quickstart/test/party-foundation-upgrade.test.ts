@@ -25,12 +25,14 @@ import { TestDatabase, testDatabaseLayer } from "@std/testing/test-database";
 import { Deferred, Effect, Fiber, Schedule, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { PREVIOUS_RELEASE } from "../src/previous-release.ts";
-import { cleanEnv, CURRENT, previousRelease, std } from "../src/release.ts";
+import { cleanEnv, CURRENT, extractRelease, std } from "../src/release.ts";
 import { listeningAt, run, startServer } from "../src/steps.ts";
 
 /** Users of the old database, the system user and the administrator included. */
 const OLD_USERS = 1000;
+
+/** The release before the party foundation (decision 0024). */
+const PARTY_RELEASE = "v0.0.2";
 
 /** Users created while the migration runs, in each of two waves. */
 const CONCURRENT_USERS = 6;
@@ -297,8 +299,8 @@ const backfillEntries = count(
 const changes = count("SELECT count(*)::text AS value FROM core.change");
 
 describe("party-foundation", () => {
-  it(`upgrades from ${PREVIOUS_RELEASE}, the release before the party foundation`, () => {
-    assert.strictEqual(PREVIOUS_RELEASE, "v0.0.2");
+  it(`upgrades from ${PARTY_RELEASE}, the release before the party foundation`, () => {
+    assert.strictEqual(PARTY_RELEASE, "v0.0.2");
   });
 
   layer(testDatabaseLayer({ empty: true }), {
@@ -312,7 +314,9 @@ describe("party-foundation", () => {
           Effect.gen(function* upgradeFromRelease() {
             const database = yield* TestDatabase;
             const env = envFor(database.url);
-            const release = yield* previousRelease;
+            const release = yield* extractRelease(PARTY_RELEASE);
+
+            assert.strictEqual(release.name, "v0.0.2");
 
             // The release's own database: its upgrade, administrator and
             // 998 more users through its own server.

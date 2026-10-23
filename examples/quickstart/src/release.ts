@@ -1,10 +1,10 @@
 /**
- * The previous release and this branch as runnable versions of STD, shared
+ * Released versions and this branch as runnable versions of STD, shared
  * by `pnpm release-compat:ci` (`release-compat.ts`) and the tests that
- * need a database made by the previous release (`party-foundation`,
+ * need a database made by a release (`party-foundation`,
  * decision 0024).
  *
- * `previousRelease` extracts the tree of the tag in `previous-release.ts`
+ * `extractRelease` extracts the tree of an explicit release tag
  * with `git archive` (without the vendored `repos/`) into a temporary
  * directory, removed when its scope closes, and installs it there.
  */
@@ -15,7 +15,6 @@ import { fileURLToPath } from "node:url";
 
 import { Effect } from "effect";
 
-import { PREVIOUS_RELEASE } from "./previous-release.ts";
 import { run } from "./steps.ts";
 
 /** The repository this branch is checked out in. */
@@ -51,48 +50,51 @@ export const cleanEnv = (): NodeJS.ProcessEnv =>
   );
 
 /**
- * Extracts and installs the previous release in a temporary directory,
+ * Extracts and installs a release in a temporary directory,
  * removed when the scope closes.
+ * @param tag - The release tag.
  * @returns The release.
  */
-export const previousRelease = Effect.gen(function* previousRelease() {
-  const directory = yield* Effect.acquireRelease(
-    Effect.sync(() => mkdtempSync(path.join(tmpdir(), "std-release-"))),
-    (created) =>
-      Effect.sync(() => {
-        rmSync(created, { force: true, recursive: true });
-      })
-  );
+export const extractRelease = Effect.fn("Release.extractRelease")(
+  function* extractRelease(tag: string) {
+    const directory = yield* Effect.acquireRelease(
+      Effect.sync(() => mkdtempSync(path.join(tmpdir(), "std-release-"))),
+      (created) =>
+        Effect.sync(() => {
+          rmSync(created, { force: true, recursive: true });
+        })
+    );
 
-  const env = cleanEnv();
+    const env = cleanEnv();
 
-  yield* run(
-    `extract ${PREVIOUS_RELEASE}`,
-    "/bin/sh",
-    [
-      "-c",
-      `git archive "${PREVIOUS_RELEASE}" -- . ':(exclude)repos' | tar -x -C "${directory}"`,
-    ],
-    env,
-    REPO
-  );
+    yield* run(
+      `extract ${tag}`,
+      "/bin/sh",
+      [
+        "-c",
+        `git archive "${tag}" -- . ':(exclude)repos' | tar -x -C "${directory}"`,
+      ],
+      env,
+      REPO
+    );
 
-  yield* run(
-    `install ${PREVIOUS_RELEASE}`,
-    "pnpm",
-    ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"],
-    env,
-    directory
-  );
+    yield* run(
+      `install ${tag}`,
+      "pnpm",
+      ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"],
+      env,
+      directory
+    );
 
-  const release: Release = {
-    cli: path.join(directory, ...CLI_PATH),
-    name: PREVIOUS_RELEASE,
-    script: path.join(directory, ...SCRIPT_PATH),
-  };
+    const release: Release = {
+      cli: path.join(directory, ...CLI_PATH),
+      name: tag,
+      script: path.join(directory, ...SCRIPT_PATH),
+    };
 
-  return release;
-});
+    return release;
+  }
+);
 
 /**
  * Runs a release's `std` subcommand.
