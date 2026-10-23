@@ -320,7 +320,10 @@ const preferenceProblemView = (
     onNone: () => h.empty,
     onSome: (problem) =>
       h.p(
-        [h.Role("status"), h.Class("control-hint sidebar-section")],
+        [
+          h.Role("status"),
+          h.Class("control-hint sidebar-section sidebar-notice"),
+        ],
         [PREFERENCE_PROBLEM_TEXTS[problem]]
       ),
   });

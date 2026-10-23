@@ -512,6 +512,11 @@ a {
   margin-top: var(--space-4);
 }
 
+/* A storage problem, aligned with the navigation's labels. */
+.sidebar-notice {
+  padding: 0 var(--space-3);
+}
+
 .sidebar-heading {
   padding: 0 var(--space-3) var(--space-1);
   font-size: var(--text-xs);
