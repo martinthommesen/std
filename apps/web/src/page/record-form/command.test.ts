@@ -254,6 +254,7 @@ const REFUSALS = [
     expected: failedSave(
       WriteError.Refused({
         message: "Close the tasks first.",
+        problems: [],
         tag: "RuleRefused",
       })
     ),
@@ -320,7 +321,7 @@ describe("form Commands against the server", () => {
     }
   );
 
-  it("a definition change set's refusal is shown with its message", async () => {
+  it("a definition change set's refusal is shown with its message and every problem", async () => {
     const { result } = await runUpdate(
       tmfError("DefinitionInvalid", 422, {
         message: "The definitions are invalid; nothing was applied",
@@ -338,6 +339,13 @@ describe("form Commands against the server", () => {
       failedSave(
         WriteError.Refused({
           message: "The definitions are invalid; nothing was applied",
+          problems: [
+            {
+              code: "unsupportedChange",
+              definitionId: "f1",
+              message: "type cannot change",
+            },
+          ],
           tag: "DefinitionInvalid",
         })
       )

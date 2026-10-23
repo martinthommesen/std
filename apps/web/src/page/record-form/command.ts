@@ -15,6 +15,7 @@ import { Command, Dom } from "foldkit";
 import { today } from "foldkit/calendar";
 import { replaceUrl } from "foldkit/navigation";
 
+import { DefinitionProblem } from "../../domain/definition-problems.ts";
 import { WriteOnlyValue, sentBody } from "../../domain/form-input.ts";
 import { MetaFieldSchema } from "../../domain/metadata.ts";
 import type { MetaField } from "../../domain/metadata.ts";
@@ -271,6 +272,10 @@ const decodeChanges = Schema.decodeUnknownOption(
   Schema.Array(SchemaChangeSchema)
 );
 
+const decodeProblems = Schema.decodeUnknownOption(
+  Schema.Array(DefinitionProblem)
+);
+
 /**
  * A detail of a TMF `Error` that is text.
  *
@@ -395,6 +400,10 @@ const writeErrorOf = (
   return isTmfError(...REFUSAL_TAGS)(error)
     ? WriteError.Refused({
         message: error.message ?? error.reason,
+        problems: Option.getOrElse(
+          Option.flatMap(errorDetail(error, "problems"), decodeProblems),
+          () => []
+        ),
         tag: error.code,
       })
     : WriteError.Unavailable();

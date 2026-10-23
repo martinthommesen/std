@@ -5,9 +5,11 @@ import {
   Mount,
   click,
   expect,
+  expectIgnored,
   expectOutMessage,
   given,
   inside,
+  keydown,
   label,
   role,
   scene,
@@ -217,6 +219,129 @@ describe("the record form", () => {
       expectOutMessage(OutMessage.SawRevision({ revision: REVISION_5 })),
       expect(text("Saved.")).toExist(),
       expect(text("Ticket · version 4")).toExist()
+    );
+  });
+
+  it("Ctrl+S and Cmd+S in the form save it, as Save does, and the action bar says what happened", () => {
+    const update4 = UpdateRecord({
+      fields: TICKET_WIRE,
+      generation: 2,
+      isDefinitionTable: false,
+      recordId: TICKET_ID,
+      revision: REVISION_5,
+      secrets: {},
+      selected: TICKET_SELECTION,
+      table: TICKET,
+      values: { short_description: "Black screen" },
+      version: 3,
+    });
+
+    scene(
+      { update, view },
+      given(ready),
+      acknowledgePicker,
+      type(label("Short description (required)"), "Black screen"),
+      expect(selector(".action-status")).toContainText("Unsaved changes"),
+      // The form holds the handler; a key pressed in any field reaches it.
+      keydown(role("form"), "s", { ctrlKey: true }),
+      Command.expectExact(update4),
+      Command.resolve(
+        UpdateRecord,
+        Message.SucceededSaveRecord({
+          generation: 2,
+          maybeRevision: Option.some(REVISION_5),
+          saved: {
+            ...ticketRecord,
+            values: {
+              ...ticketRecord.values,
+              short_description: "Black screen",
+            },
+            version: 4,
+          },
+        })
+      ),
+      expectOutMessage(OutMessage.SawRevision({ revision: REVISION_5 })),
+      inside(
+        selector(".action-bar"),
+        expect(role("status")).toHaveText("Saved.")
+      ),
+      type(label("Short description (required)"), "Black screen again"),
+      keydown(role("form"), "S", { metaKey: true }),
+      Command.expectHas(UpdateRecord),
+      Command.resolve(
+        UpdateRecord,
+        Message.FailedSaveRecord({
+          error: WriteError.Unavailable(),
+          generation: 3,
+          maybeRevision: Option.none(),
+        })
+      ),
+      expect(selector(".action-status")).toContainText(
+        "Not saved: the reason is at the top of the form."
+      ),
+      // Any other key, or S alone, is the field's own.
+      keydown(role("form"), "s"),
+      expectIgnored()
+    );
+  });
+
+  it("a refused definition change lists every problem, and shows one beside the field it names", () => {
+    const refused = after(
+      ready,
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.shortDescription,
+        text: "Black screen",
+      }),
+      Message.ClickedSave(),
+      Message.FailedSaveRecord({
+        error: WriteError.Refused({
+          message: "The definitions are invalid; nothing was applied",
+          problems: [
+            {
+              code: "unsupportedChange",
+              definitionId: TICKET_ID,
+              message:
+                "shortDescription of a shipped class cannot be overridden; it changes only with a new version of its set.",
+            },
+            {
+              code: "invalidLayout",
+              definitionId: "019a0000-0000-7000-8000-0000000d0001",
+              message: "The layout names a field that does not exist.",
+            },
+          ],
+          tag: "DefinitionInvalid",
+        }),
+        generation: 2,
+        maybeRevision: Option.none(),
+      })
+    );
+
+    scene(
+      { update, view },
+      given(refused),
+      acknowledgePicker,
+      inside(
+        role("alert"),
+        expect(
+          text(
+            "The server refused the change: The definitions are invalid; nothing was applied"
+          )
+        ).toExist(),
+        expect(role("listitem", { name: /^Short description:/u })).toExist(),
+        expect(text("The layout names a field that does not exist.")).toExist()
+      ),
+      inside(
+        fieldRow("short_description"),
+        expect(
+          text(
+            "shortDescription of a shipped class cannot be overridden; it changes only with a new version of its set."
+          )
+        ).toExist()
+      ),
+      expect(label("Short description (required)")).toHaveAttr(
+        "aria-invalid",
+        "true"
+      )
     );
   });
 

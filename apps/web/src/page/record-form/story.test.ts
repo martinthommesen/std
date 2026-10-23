@@ -412,9 +412,13 @@ describe("editing and saving", () => {
             sentEdits: page.edits,
           })
         );
-        // A second click while the save is in flight sends nothing.
+        // A second click while the save is in flight sends nothing, nor
+        // does the save shortcut.
         expect(
           update(page, Message.ClickedSave()).commands ?? []
+        ).toStrictEqual([]);
+        expect(
+          update(page, Message.PressedSaveShortcut()).commands ?? []
         ).toStrictEqual([]);
       }),
       Command.resolve(

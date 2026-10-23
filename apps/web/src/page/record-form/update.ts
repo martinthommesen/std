@@ -3101,6 +3101,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     GotPickerMessage: ({ fieldId, message: pickerMessage }) =>
       updatePicker(model, fieldId, pickerMessage),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    PressedSaveShortcut: () => save(model),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SelectedChoice: ({ fieldId, key }) =>
       editField(model, fieldId, () => FieldInput.Choice({ key })),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag

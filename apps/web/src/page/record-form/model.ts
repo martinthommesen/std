@@ -24,6 +24,7 @@ import { AsyncData } from "foldkit";
 import { CalendarDate } from "foldkit/calendar";
 import { defineTaggedUnion } from "foldkit/schema";
 
+import { DefinitionProblem } from "../../domain/definition-problems.ts";
 import { FieldInput } from "../../domain/form-input.ts";
 import { MetaFieldSchema, MetaTableSchema } from "../../domain/metadata.ts";
 import { HistoryEntrySchema, RecordJsonSchema } from "../../domain/record.ts";
@@ -94,7 +95,8 @@ export type ClassMetadata = typeof ClassMetadata.schema.Type;
  * - `UnknownField`: a field the server does not know for the caller.
  * - `NotAllowed`, `NotFound`, `Referenced` (deletes only).
  * - `Refused`: any other refusal, such as a definition change set's; its
- *   message names no value.
+ *   message names no value. A refused change set (`DefinitionInvalid`)
+ *   lists its `problems`, which the form shows one by one.
  * - `Unavailable`: no answer.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
@@ -103,7 +105,11 @@ export const WriteError = defineTaggedUnion({
   NotAllowed: {},
   NotFound: {},
   Referenced: {},
-  Refused: { message: Schema.String, tag: Schema.String },
+  Refused: {
+    message: Schema.String,
+    problems: Schema.Array(DefinitionProblem),
+    tag: Schema.String,
+  },
   SchemaChanged: {
     changes: Schema.Array(SchemaChangeSchema),
     currentRevision: Schema.String,

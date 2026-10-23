@@ -4,12 +4,13 @@
  * (Foldkit UI Dialog), and on an existing record its related lists and
  * history (Foldkit UI Disclosure each).
  */
-import { Dialog, Fieldset } from "@foldkit/ui";
+import { Button, Dialog, Fieldset } from "@foldkit/ui";
 import { isJsonString } from "@std/values/json-value";
 import { Match, Option, Record } from "effect";
 import { AsyncData, Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
+import { problemFieldOf } from "../../domain/definition-problems.ts";
 import { formSections } from "../../domain/form-fields.ts";
 import type { FormSection } from "../../domain/form-fields.ts";
 import type { MetaField } from "../../domain/metadata.ts";
@@ -17,6 +18,7 @@ import type { RecordJson } from "../../domain/record.ts";
 import { changeText, droppedText } from "../../domain/stale-edits.ts";
 import { homeRouter, recordRouter, tableListRouter } from "../../route.ts";
 import { buttonView } from "../../view/controls.ts";
+import { check } from "../../view/icons.ts";
 import { view as notFoundView } from "../not-found.ts";
 import type { TableMeta } from "../table-list/model.ts";
 import { fieldView, shownProblemsOf } from "./fields-view.ts";
@@ -277,9 +279,10 @@ const schemaChangedView = (
  */
 const droppedEditsView = (model: Model, h: HtmlBuilder<Message>): Html =>
   // NOTE: the live region stays mounted, so notes that appear in it are
-  // announced.
+  // announced. A polite live region without the status role: the form's
+  // status is the save's, in the action bar.
   h.div(
-    [h.Class("form-dropped"), h.Role("status")],
+    [h.Class("form-dropped"), h.AriaLive("polite")],
     [
       model.droppedEdits.length === 0
         ? h.empty
@@ -294,44 +297,81 @@ const droppedEditsView = (model: Model, h: HtmlBuilder<Message>): Html =>
     ]
   );
 
-const submissionView = (model: Model, h: HtmlBuilder<Message>): Html =>
+/**
+ * A refusal's alert: what was refused, and for a refused change set each
+ * of its problems, the field it names first where the form can tell.
+ *
+ * @param model - The page.
+ * @param error - The refusal.
+ * @param h - The builder.
+ * @returns The alert.
+ */
+const refusalAlertView = (
+  model: Model,
+  error: WriteError,
+  h: HtmlBuilder<Message>
+): Html => {
+  const problems = WriteError.guards.Refused(error) ? error.problems : [];
+
+  const fieldLabelOf = (problem: (typeof problems)[number]) =>
+    Option.flatMap(editedRecordOf(model), (record) =>
+      Option.fromNullishOr(
+        problemFieldOf(problem, record.id, fieldsOf(model))?.label
+      )
+    );
+
+  // NOTE: a refusal's problems are replaced as a whole by the next save's
+  // outcome, never reordered, so the list's items need no keys.
+  return h.div(
+    [h.Role("alert"), h.Class(ALERT_CLASS)],
+    [
+      h.p([], [writeErrorText(error)]),
+      problems.length === 0
+        ? h.empty
+        : h.ul(
+            [h.Class("problem-list")],
+            problems.map((problem) =>
+              h.li(
+                [],
+                Option.match(fieldLabelOf(problem), {
+                  onNone: () => [problem.message],
+                  onSome: (label) => [
+                    h.strong([], [`${label}: `]),
+                    problem.message,
+                  ],
+                })
+              )
+            )
+          ),
+    ]
+  );
+};
+
+/**
+ * What the last save's refusal says, at the top of the form, where it
+ * stays in place while the user corrects the input: the stale-form
+ * conflict with its reload, a definition change, any other refusal.
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The alert, or nothing.
+ */
+const submissionAlertView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Match.value(model.submission).pipe(
-    Match.tag("Idle", () => h.empty),
     Match.tag("Outdated", () => outdatedView(model, h)),
-    Match.tag("Saving", () => h.p([h.Role("status")], ["Saving…"])),
-    Match.tag("Saved", () =>
-      h.p([h.Role("status"), h.Class("notice")], ["Saved."])
-    ),
-    Match.tag("SavedUnread", () =>
-      h.p(
-        [h.Role("status"), h.Class("notice")],
-        [
-          "Saved. The record could not be read back: reload it to see what it holds before saving again.",
-        ]
-      )
-    ),
-    Match.tag("Unchanged", () =>
-      h.p(
-        [h.Role("status"), h.Class("notice")],
-        ["There are no changes to save."]
-      )
-    ),
     Match.tag("Failed", ({ error }) =>
       WriteError.guards.SchemaChanged(error)
         ? schemaChangedView(model, error, h)
         : h.div(
             [h.Class(FAILURE_CLASS)],
             [
-              h.p(
-                [h.Role("alert"), h.Class(ALERT_CLASS)],
-                [writeErrorText(error)]
-              ),
+              refusalAlertView(model, error, h),
               WriteError.guards.VersionConflict(error)
                 ? buttonView(
                     {
                       onClick: Message.ClickedReloadRecord(),
                       text: "Reload the record, keeping my changes",
-                      variant: "quiet",
+                      variant: "primary",
                     },
                     h
                   )
@@ -339,8 +379,75 @@ const submissionView = (model: Model, h: HtmlBuilder<Message>): Html =>
             ]
           )
     ),
+    Match.orElse(() => h.empty)
+  );
+
+/**
+ * The save's progress and outcome, as the action bar says it beside the
+ * button the user pressed.
+ *
+ * @param model - The page.
+ * @returns The status text, empty when there is none.
+ */
+const submissionStatusText = (model: Model): string =>
+  Match.value(model.submission).pipe(
+    Match.tag("Saving", () => "Saving…"),
+    Match.tag("Saved", () => "Saved."),
+    Match.tag(
+      "SavedUnread",
+      () =>
+        "Saved. The record could not be read back: reload it to see what it holds before saving again."
+    ),
+    Match.tag("Unchanged", () => "There are no changes to save."),
+    Match.orElse(() => "")
+  );
+
+/** What the action bar's status shows, for its look (`data-state`). */
+type ActionState = "dirty" | "failed" | "idle" | "saved" | "saving";
+
+const actionStateOf = (model: Model): ActionState =>
+  Match.value(model.submission).pipe(
+    Match.withReturnType<ActionState>(),
+    Match.tag("Failed", "Outdated", () => "failed"),
+    Match.tag("Saving", () => "saving"),
+    Match.tag("Saved", "SavedUnread", () => "saved"),
+    Match.tag("Unchanged", () => "idle"),
+    Match.tag("Idle", () =>
+      Record.isEmptyRecord(model.edits) ? "idle" : "dirty"
+    ),
     Match.exhaustive
   );
+
+/**
+ * The action bar's status: the live save status, and, not announced, that
+ * there are unsaved changes or that the last save was refused (its alert
+ * is at the top of the form).
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The status.
+ */
+const actionStatusView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  const state = actionStateOf(model);
+
+  const quiet =
+    state === "failed"
+      ? "Not saved: the reason is at the top of the form."
+      : "Unsaved changes";
+
+  return h.div(
+    [h.Class("action-status"), h.DataAttribute("state", state)],
+    [
+      Submission.guards.Saved(model.submission) ? check() : h.empty,
+      // NOTE: the live region stays mounted, so each outcome that appears
+      // in it is announced.
+      h.span([h.Role("status")], [submissionStatusText(model)]),
+      state === "failed" || state === "dirty"
+        ? h.span([h.Class("action-status-quiet")], [quiet])
+        : h.empty,
+    ]
+  );
+};
 
 const deleteErrorText = (error: WriteError): string =>
   Match.value(error).pipe(
@@ -512,36 +619,79 @@ const saveText = (model: Model): string => {
   return isCreating(model) ? "Create" : "Save";
 };
 
-const actionsView = (model: Model, h: HtmlBuilder<Message>): Html =>
+/**
+ * The action bar: it stays at the bottom of the window while the form is
+ * on screen, with the save status, "Save" (Ctrl+S or Cmd+S in the form),
+ * "Delete" and the way back to the list.
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The bar.
+ */
+const actionBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.div(
-    [h.Class("form-actions")],
+    [h.Class("action-bar")],
     [
-      buttonView(
-        {
-          isDisabled: isSaveBlocked(model),
-          onClick: Message.ClickedSave(),
-          text: saveText(model),
-          variant: "primary",
-        },
-        h
-      ),
-      isCreating(model)
-        ? h.empty
-        : buttonView(
+      actionStatusView(model, h),
+      h.div(
+        [h.Class("form-actions")],
+        [
+          h.a(
+            [h.Href(listUrlOf(model.table)), h.Class("button button-ghost")],
+            ["Back to the list"]
+          ),
+          isCreating(model)
+            ? h.empty
+            : buttonView(
+                {
+                  isDisabled: Deletion.guards.Deleting(model.deletion),
+                  onClick: Message.ClickedDelete(),
+                  text: "Delete",
+                  variant: "danger",
+                },
+                h
+              ),
+          Button.view(
             {
-              isDisabled: Deletion.guards.Deleting(model.deletion),
-              onClick: Message.ClickedDelete(),
-              text: "Delete",
-              variant: "quiet",
+              isDisabled: isSaveBlocked(model),
+              onClick: Message.ClickedSave(),
+              toView: (attributes) =>
+                h.button(
+                  [
+                    ...attributes.button,
+                    h.Attribute("aria-keyshortcuts", "Control+S Meta+S"),
+                    h.Title("Save (Ctrl+S or ⌘S)"),
+                    h.Class("button button-primary"),
+                  ],
+                  [saveText(model)]
+                ),
             },
             h
           ),
-      h.a(
-        [h.Href(listUrlOf(model.table)), h.Class("link")],
-        ["Back to the list"]
+        ]
       ),
     ]
   );
+
+/**
+ * Ctrl+S, or Cmd+S on a Mac, anywhere in the form saves it, as "Save"
+ * does, instead of the browser saving the page.
+ *
+ * @param key - The key pressed.
+ * @param modifiers - The modifier keys held.
+ * @returns The Message, or none for any other key.
+ */
+const saveShortcut = (
+  key: string,
+  modifiers: { readonly ctrlKey: boolean; readonly metaKey: boolean }
+): Option.Option<Message> => {
+  const isSaveKey = key.toLowerCase() === "s";
+  const isCommand = modifiers.ctrlKey || modifiers.metaKey;
+
+  return isSaveKey && isCommand
+    ? Option.some(Message.PressedSaveShortcut())
+    : Option.none();
+};
 
 const deleteDialogView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.submodel({
@@ -579,17 +729,23 @@ const deleteDialogView = (model: Model, h: HtmlBuilder<Message>): Html =>
                       ]
                     ),
                     h.div(
-                      [h.Class("form-actions")],
+                      [h.Class("dialog-actions")],
                       [
                         h.button(
                           [...closeButton, h.Class("button button-quiet")],
                           ["Cancel"]
                         ),
-                        buttonView(
+                        Button.view(
                           {
                             onClick: Message.ClickedConfirmDelete(),
-                            text: "Delete",
-                            variant: "primary",
+                            toView: (attributes) =>
+                              h.button(
+                                [
+                                  ...attributes.button,
+                                  h.Class("button button-danger-solid"),
+                                ],
+                                ["Delete"]
+                              ),
                           },
                           h
                         ),
@@ -619,18 +775,28 @@ const formBodyView = (
   // NOTE: a `div` with the form role, not a native form: Enter in a field
   // must not save (a JSON or long-text editor, a picker's search), and the
   // pickers' and Date Pickers' own buttons stay outside any submission.
-  // Saving is the "Save" button. No `aria-busy`: it would hold back the
-  // "Saving…" status inside it; the button says a save is running.
+  // Saving is the "Save" button, or Ctrl+S / Cmd+S. No `aria-busy`: it
+  // would hold back the "Saving…" status inside it; the button says a
+  // save is running. A refusal's alert sits above the sections, where the
+  // user reads it before correcting the fields it names; the outcome of a
+  // save shows in the action bar beside "Save".
   return h.div(
-    [h.Role("form"), h.AriaLabelledBy(HEADING_ID), h.Class("record-form")],
     [
+      h.Role("form"),
+      h.AriaLabelledBy(HEADING_ID),
+      h.Class("record-form"),
+      h.OnKeyDownPreventDefault(saveShortcut),
+    ],
+    [
+      h.div(
+        [h.Class("form-messages")],
+        [submissionAlertView(model, h), deletionView(model, h)]
+      ),
+      droppedEditsView(model, h),
       ...sections.map((section, index) =>
         sectionView(model, section, index, problems, h)
       ),
-      submissionView(model, h),
-      droppedEditsView(model, h),
-      deletionView(model, h),
-      actionsView(model, h),
+      actionBarView(model, h),
     ]
   );
 };
@@ -649,16 +815,30 @@ const readyView = (
   h.div(
     [h.Class("page")],
     [
-      h.h1([h.Id(HEADING_ID)], [headingOf(model)]),
-      recordFactsView(model, meta, h),
+      h.div(
+        [h.Class("page-heading")],
+        [
+          h.div(
+            [h.Class("page-heading-text")],
+            [
+              h.h1([h.Id(HEADING_ID)], [headingOf(model)]),
+              recordFactsView(model, meta, h),
+            ]
+          ),
+        ]
+      ),
       staleMetadataView(model, h),
       isCreating(model) ? h.empty : staleRecordView(model, h),
       isCreating(model) && !meta.table.creatable
         ? notCreatableView(meta, h)
         : formBodyView(model, meta, h),
       isCreating(model) ? h.empty : deleteDialogView(model, h),
-      isCreating(model) ? h.empty : relatedListsView(model, h),
-      isCreating(model) ? h.empty : historyView(model, h),
+      isCreating(model)
+        ? h.empty
+        : h.div(
+            [h.Class("record-panels")],
+            [relatedListsView(model, h), historyView(model, h)]
+          ),
     ]
   );
 

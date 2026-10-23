@@ -90,7 +90,6 @@
   --radius-pill: 999px;
 
   --shadow-raised: 0 1px 2px rgb(16 24 40 / 0.06);
-  --shadow-bar: 0 -1px 0 var(--color-border), 0 -4px 12px rgb(16 24 40 / 0.06);
   --shadow-popover:
     0 2px 6px rgb(16 24 40 / 0.08), 0 12px 28px -6px rgb(16 24 40 / 0.2);
 
@@ -153,7 +152,6 @@
     --color-backdrop: rgb(0 0 0 / 0.6);
 
     --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.4);
-    --shadow-bar: 0 -1px 0 var(--color-border), 0 -4px 12px rgb(0 0 0 / 0.35);
     --shadow-popover:
       0 2px 6px rgb(0 0 0 / 0.4), 0 12px 28px -6px rgb(0 0 0 / 0.6);
   }
@@ -999,7 +997,7 @@ select.control-input {
   font-variant-numeric: tabular-nums;
 }
 
-.page-size {
+.page-size .control {
   flex-direction: row;
   align-items: center;
   gap: var(--space-2);
@@ -1451,6 +1449,16 @@ th[aria-sort="descending"] .sort-icon {
   display: none;
 }
 
+/* The dropped-edits live region stays rendered (so what appears in it is
+   announced) but takes no room while it is empty. */
+.form-dropped:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
 .form-messages {
   display: flex;
   flex-direction: column;
@@ -1491,7 +1499,7 @@ th[aria-sort="descending"] .sort-icon {
 }
 
 /* Long values take the whole width of their section. */
-.form-row[data-field-kind="long_text"],
+.form-row[data-field-kind="longText"],
 .form-row[data-field-kind="json"],
 .form-row[data-field-kind="condition"],
 .form-row[data-field-kind="password"],
@@ -1558,16 +1566,18 @@ th[aria-sort="descending"] .sort-icon {
 
 .action-bar {
   position: sticky;
-  bottom: 0;
+  bottom: var(--space-3);
   z-index: 20;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2) var(--space-3);
-  margin: 0 calc(-1 * var(--space-6));
-  padding: var(--space-2) var(--space-6);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
   background: var(--color-surface);
-  box-shadow: var(--shadow-bar);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
 }
 
 .action-status {
@@ -1870,7 +1880,7 @@ th[aria-sort="descending"] .sort-icon {
   }
 
   .action-bar {
-    margin: 0 calc(-1 * var(--space-3));
+    bottom: var(--space-2);
     padding: var(--space-2) var(--space-3);
   }
 

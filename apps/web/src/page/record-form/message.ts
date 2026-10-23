@@ -126,6 +126,7 @@ export const Message = defineMessageUnion({
   },
   GotDeleteDialogMessage: { message: Dialog.Message },
   GotPickerMessage: { fieldId: Schema.String, message: Combobox.Message },
+  PressedSaveShortcut: {},
   SelectedChoice: { fieldId: Schema.String, key: Schema.String },
   SucceededDeleteRecord: { maybeRevision: Schema.Option(SchemaRevision) },
   SucceededLoadClassMetadata: {

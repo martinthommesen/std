@@ -20,6 +20,7 @@ import { AsyncData } from "foldkit";
 import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
 import { childAttributes } from "foldkit/html";
 
+import { problemFieldOf } from "../../domain/definition-problems.ts";
 import { fieldShowOf } from "../../domain/form-fields.ts";
 import type { FieldShow } from "../../domain/form-fields.ts";
 import {
@@ -33,15 +34,18 @@ import { valueText } from "../../domain/value-text.ts";
 import { calendarDateOf } from "../../filter-builder/condition.ts";
 import { buttonView } from "../../view/controls.ts";
 import { datePickerField } from "../../view/date-picker.ts";
+import { check, chevronDown } from "../../view/icons.ts";
 import {
   checkForm,
   controlIdOf,
   editedRecordOf,
+  fieldsOf,
   inputOf,
   isCreating,
   storedLabelOf,
 } from "./form.ts";
 import { Message } from "./message.ts";
+import { Submission, WriteError } from "./model.ts";
 import type { Model, Picker, PickerError } from "./model.ts";
 import { isSearchableByText } from "./picker-search.ts";
 import {
@@ -290,7 +294,7 @@ const checkboxControl = (
                 h.Id(config.controlId),
                 h.Class("checkbox"),
               ],
-              isChecked ? ["✓"] : []
+              isChecked ? [check()] : []
             ),
             h.label(
               [...attributes.label, h.Class(LABEL_CLASS)],
@@ -642,7 +646,7 @@ const referenceControl = (
                 h.Class("combobox-button"),
                 h.AriaLabel(`Show records for ${config.field.label}`),
               ]),
-              buttonContent: h.span([h.AriaHidden(true)], ["▾"]),
+              buttonContent: chevronDown(),
               inputAttributes: childAttributes([
                 h.Class(INPUT_CLASS),
                 ...requiredAttributes(config.field, h),
@@ -898,9 +902,57 @@ const notesOf = (
   problems,
 });
 
+const mergeProblems = (
+  first: readonly string[],
+  second: readonly string[]
+): readonly string[] => [...new Set([...first, ...second])];
+
 /**
- * The problems each field shows: the client's (after a save attempt) and
- * the server's (until the field is edited).
+ * The problems of a refused change set that name a field of the form, by
+ * field ID, while the refusal is the last save's outcome.
+ *
+ * @param model - The page.
+ * @returns The problems' messages, by field ID.
+ */
+export const definitionProblemsByField = (
+  model: Model
+): Readonly<Record<string, readonly string[]>> => {
+  if (
+    !Submission.guards.Failed(model.submission) ||
+    !WriteError.guards.Refused(model.submission.error)
+  ) {
+    return {};
+  }
+
+  const { problems } = model.submission.error;
+
+  return Option.match(editedRecordOf(model), {
+    onNone: () => ({}),
+    onSome: (record) => {
+      const named = problems.flatMap((problem) => {
+        const field = problemFieldOf(problem, record.id, fieldsOf(model));
+
+        return field === undefined
+          ? []
+          : [{ fieldId: field.id, message: problem.message }];
+      });
+
+      return Object.fromEntries(
+        [...new Set(named.map((entry) => entry.fieldId))].map((fieldId) => [
+          fieldId,
+          named.flatMap((entry) =>
+            entry.fieldId === fieldId ? [entry.message] : []
+          ),
+        ])
+      );
+    },
+  });
+};
+
+/**
+ * The problems each field shows: the client's (after a save attempt), the
+ * server's (until the field is edited), and those of a refused change set
+ * that name the field.
  *
  * @param model - The page.
  * @returns Problems by field ID.
@@ -909,9 +961,13 @@ export const shownProblemsOf = (
   model: Model
 ): Readonly<Record<string, readonly string[]>> =>
   Record.union(
-    model.isShowingProblems ? checkForm(model).problems : {},
-    model.serverErrors,
-    (client, server) => [...new Set([...client, ...server])]
+    Record.union(
+      model.isShowingProblems ? checkForm(model).problems : {},
+      model.serverErrors,
+      mergeProblems
+    ),
+    definitionProblemsByField(model),
+    mergeProblems
   );
 
 const fieldShowView = (
@@ -976,7 +1032,13 @@ export const fieldView = (
 ): Html =>
   h.keyed("div")(
     field.id,
-    [h.Class("form-row"), h.DataAttribute("field", field.name)],
+    [
+      h.Class("form-row"),
+      h.DataAttribute("field", field.name),
+      // NOTE: the stylesheet gives long values (long text, JSON,
+      // conditions, write-only fields) the section's whole width.
+      h.DataAttribute("field-kind", field.type.kind),
+    ],
     [
       fieldShowView(
         model,
