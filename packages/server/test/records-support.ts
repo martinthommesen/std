@@ -55,6 +55,9 @@ export const ACME_FIELDS = {
   sizeInches: "9ecc19c5-8401-4887-ac05-d5dbdd937297",
 } as const;
 
+/** `core.user`'s unique index on `login`. */
+export const LOGIN_INDEX_ID = "4941e670-8c9b-4a1a-a758-93854cef07bb";
+
 /**
  * An acting user without roles (the phase 1 seams allow everything).
  * @param userId - The user.

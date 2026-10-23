@@ -6,7 +6,7 @@
  * TMF621 document by the test client (`tmf-oas-contract`), so each test
  * also proves its statuses are declared ones.
  */
-import { assert, describe, it, layer, test } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import { HELPDESK_CLASS_IDS, TICKET_FIELD_IDS } from "@std/tmf/helpdesk-ids";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
@@ -197,8 +197,8 @@ const sorted = (
 ): readonly string[] =>
   ids.map(textOf).toSorted((left, right) => left.localeCompare(right));
 
-layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
-  test("serves troubleTicket and troubleTicketSpecification at the pinned base path", () => {
+describe("tmf621", () => {
+  it("serves troubleTicket and troubleTicketSpecification at the pinned base path", () => {
     assert.deepStrictEqual(
       [TICKETS, SPECIFICATIONS],
       [
@@ -238,7 +238,7 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
       )
   );
 
-  dbTest.effect(
+  it.effect(
     "creates, retrieves, lists, patches and deletes a trouble ticket",
     () =>
       Effect.gen(function* crud() {
@@ -300,10 +300,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
           outcome(yield* admin.get(`${TICKETS}/${id}`)),
           "404 NotFound"
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "ticketType makes the ITIL class on create and is patchable only within it",
     () =>
       Effect.gen(function* ticketTypes() {
@@ -358,10 +358,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
 
           assert.strictEqual(outcome(refused), "400 ValidationFailed");
         }
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "a create without description, severity or ticketType is refused, naming each",
     () =>
       Effect.gen(function* required() {
@@ -383,10 +383,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
             `${name} in ${fields.join(", ")}`
           );
         }
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "severity is free text: Critical, Major and Minor set impact, any other value is kept as given",
     () =>
       Effect.gen(function* severities() {
@@ -434,10 +434,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
         });
 
         assert.strictEqual(outcome(blank), "400 ValidationFailed");
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "priority is free text and patchable: the five labels set priority, others are kept",
     () =>
       Effect.gen(function* priorities() {
@@ -477,10 +477,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
         ).map((item) => item.id);
 
         assert.include(filtered, ticket.id);
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "severity and priority filters compare the rendered labels exactly, while writes take any case",
     () =>
       Effect.gen(function* exactLabels() {
@@ -508,10 +508,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
         assert.deepStrictEqual(yield* ids("severity=MINOR"), []);
         assert.deepStrictEqual(yield* ids("priority=High"), sorted(ticket.id));
         assert.deepStrictEqual(yield* ids("priority=high"), []);
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "value objects that do not fit the pinned schema are refused, naming the member, and nothing is stored",
     () =>
       Effect.gen(function* schemaRefusals() {
@@ -567,7 +567,7 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
           ),
           []
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
   it.effect(
@@ -618,7 +618,7 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "notes and related parties of a colleague's ticket are refused through merge-patch and JSON Patch, changing nothing, while a new ticket's own notes are created",
     () =>
       Effect.gen(function* partOwners() {
@@ -715,7 +715,7 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
           arrayOf(own, "note").map((note) => note.text),
           ["creator content"]
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
   it.effect(
@@ -920,7 +920,7 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
       }).pipe(Effect.provide(midReadLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "statuses follow TMF621's life cycle onto the incident state model, and stored states read back",
     () =>
       Effect.gen(function* lifeCycle() {
@@ -985,10 +985,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
         );
 
         assert.strictEqual(outcome(unknown), "400 ValidationFailed");
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "held keeps a hold reason the holdReason characteristic names, and pending is awaiting the caller",
     () =>
       Effect.gen(function* holds() {
@@ -1026,10 +1026,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
           itemsOf(filtered).map((item) => item.id),
           ticket.id
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "problems map acknowledged and inProgress onto their state groups",
     () =>
       Effect.gen(function* problems() {
@@ -1053,10 +1053,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
           (yield* stored(admin, problem, "helpdeskProblem")).status,
           "root_cause_analysis"
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "statusChangeHistory renders the recorded status changes, after a written value",
     () =>
       Effect.gen(function* history() {
@@ -1097,44 +1097,42 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
         const dated = yield* patch(admin, ticket, { resolutionDate });
 
         assert.strictEqual(dated.resolutionDate, "2026-02-03T04:05:06.000Z");
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
-    "fields selects first-level attributes on list and retrieve",
-    () =>
-      Effect.gen(function* selected() {
-        const admin = yield* tmf621As("admin");
-        const ticket = yield* open(admin, { name: "fields" });
+  it.effect("fields selects first-level attributes on list and retrieve", () =>
+    Effect.gen(function* selected() {
+      const admin = yield* tmf621As("admin");
+      const ticket = yield* open(admin, { name: "fields" });
 
-        for (const name of ["description", "severity", "ticketType"]) {
-          const read = bodyOf(
-            yield* admin.get(`${TICKETS}/${textOf(ticket.id)}?fields=${name}`)
-          );
-
-          assert.deepStrictEqual(
-            Object.keys(read).toSorted(),
-            ["@type", "href", "id", name].toSorted()
-          );
-
-          const listed = itemsOf(
-            yield* admin.get(`${TICKETS}?fields=${name}&name=fields`)
-          );
-
-          assert.deepStrictEqual(
-            listed.map((item) => Object.keys(item).toSorted()),
-            [["@type", "href", "id", name].toSorted()]
-          );
-        }
-
-        assert.strictEqual(
-          outcome(yield* admin.get(`${TICKETS}?fields=nonsense`)),
-          "400 UnknownField"
+      for (const name of ["description", "severity", "ticketType"]) {
+        const read = bodyOf(
+          yield* admin.get(`${TICKETS}/${textOf(ticket.id)}?fields=${name}`)
         );
-      })
+
+        assert.deepStrictEqual(
+          Object.keys(read).toSorted(),
+          ["@type", "href", "id", name].toSorted()
+        );
+
+        const listed = itemsOf(
+          yield* admin.get(`${TICKETS}?fields=${name}&name=fields`)
+        );
+
+        assert.deepStrictEqual(
+          listed.map((item) => Object.keys(item).toSorted()),
+          [["@type", "href", "id", name].toSorted()]
+        );
+      }
+
+      assert.strictEqual(
+        outcome(yield* admin.get(`${TICKETS}?fields=nonsense`)),
+        "400 UnknownField"
+      );
+    }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "filters combine with AND, by status group, ticketType and @type, and page with counts",
     () =>
       Effect.gen(function* filters() {
@@ -1206,10 +1204,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
           outcome(yield* admin.get(`${TICKETS}?filter=$.x`)),
           "501 NotImplemented"
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "notes are parts: a merge-patch array replaces them and the author is the acting user",
     () =>
       Effect.gen(function* notes() {
@@ -1274,10 +1272,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
         const emptied = yield* patch(agent, ticket, { note: [] });
 
         assert.isUndefined(emptied.note);
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "relatedParty maps reporter to caller, assignee to the assigned user's individual, other roles to parts",
     () =>
       Effect.gen(function* parties() {
@@ -1365,10 +1363,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
         });
 
         assert.strictEqual(outcome(unknown), "400 InvalidReference");
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "characteristics replace strictly: urgency and the ITIL fields are written, left-out ones cleared, others kept as given",
     () =>
       Effect.gen(function* mappedCharacteristics() {
@@ -1486,10 +1484,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
             },
           ]
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "troubleTicketRelationship maps causedBy and parent onto an incident's references",
     () =>
       Effect.gen(function* relationships() {
@@ -1538,10 +1536,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
           (yield* stored(admin, child, "helpdeskIncident")).problem ?? null,
           null
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "externalIdentifier starts with the read-only number; attachments and related entities need their attributes",
     () =>
       Effect.gen(function* valueObjects() {
@@ -1609,10 +1607,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
 
           assert.strictEqual(outcome(refused), "400 ValidationFailed");
         }
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "troubleTicketSpecification is served: create with name, patch, reference and delete",
     () =>
       Effect.gen(function* specifications() {
@@ -1698,10 +1696,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
           ),
           "403 NotAllowed"
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "DELETE is allowed to the user who opened the ticket and to admins, parts first",
     () =>
       Effect.gen(function* deletes() {
@@ -1731,10 +1729,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
           textOf(asObject(record.openedBy).id),
           fixture.agent.id
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "If-Match is optional; a stale one answers 409 with the current ETag on PATCH and DELETE",
     () =>
       Effect.gen(function* preconditions() {
@@ -1772,10 +1770,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
             .status,
           204
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "a JSON Patch changes attributes and arrays as the merge-patch would",
     () =>
       Effect.gen(function* jsonPatch() {
@@ -1830,10 +1828,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
         );
 
         assert.strictEqual(bodyOf(plain).name, "plain JSON");
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "pages with after and before cursors as the Link header names them",
     () =>
       Effect.gen(function* cursors() {
@@ -1872,10 +1870,10 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
           itemsOf(yield* admin.get(previous)).map((item) => item.id),
           opened.slice(0, 2)
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  dbTest.effect(
+  it.effect(
     "answers only statuses the pinned document declares: 401, 404, 400 and the TMF Error",
     () =>
       Effect.gen(function* errors() {
@@ -1903,7 +1901,7 @@ layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
           outcome(yield* admin.get(`${TICKETS}?limit=x`)),
           "400 InvalidRequest"
         );
-      })
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 });
 
