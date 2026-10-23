@@ -16,6 +16,7 @@ import { OperationSchema } from "@std/definitions/operation";
 import { Config, Console, Effect, Layer, Schema } from "effect";
 
 import { Catalog } from "../../src/catalog/catalog.ts";
+import { InstanceSettings } from "../../src/config/instance-settings.ts";
 import { applyChangeSet } from "../../src/schema/change-set.ts";
 import { StepBoundary } from "../../src/schema/recovery-settings.ts";
 import { DatabaseConfig } from "../../src/sql/database-config.ts";
@@ -28,7 +29,7 @@ const decodeOperations = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(OperationSchema))
 );
 
-const services = Catalog.layer.pipe(
+const services = Layer.merge(Catalog.layer, InstanceSettings.layer).pipe(
   Layer.provideMerge(SqlLayer),
   Layer.provideMerge(DatabaseConfig.fromEnv(CHILD_APPLICATION_NAME))
 );

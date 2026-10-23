@@ -2,7 +2,7 @@
  * The `data` migration runner (Contracts 1.9, 8.5; decision 0021 item 29,
  * decision 0024): the last step of `std upgrade`, after the core and app
  * sets load, because a `data` migration changes records of classes those
- * sets create.
+ * sets create, or maintains a derived non-record index directly.
  *
  * For each `data` migration whose ledger row is missing or `running`, in
  * ID order:
@@ -12,7 +12,7 @@
  *    batch commits.
  * 2. Batches, each in one request transaction as the system user: lock the
  *    ledger row, read its `progress` (the keyset cursor), run the batch
- *    through the save pipeline (change entries, deliveries), and write the
+ *    through the save pipeline for records (derived indexes use SQL), and write the
  *    new `progress`, or `applied` after the batch that finds nothing left.
  *    The records and the cursor commit together, so a run killed anywhere
  *    resumes after the last committed batch, and a batch that rolled back

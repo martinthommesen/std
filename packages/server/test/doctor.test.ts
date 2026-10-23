@@ -453,6 +453,18 @@ const DRIFTS: readonly Drift[] = [
     ],
   },
   {
+    expected: expect(
+      12,
+      "error",
+      "fkAction",
+      "core.change_image/change_image_change_id_fkey"
+    ),
+    name: "a change image FK without its retention cascade",
+    statements: [
+      "ALTER TABLE core.change_image DROP CONSTRAINT change_image_change_id_fkey, ADD CONSTRAINT change_image_change_id_fkey FOREIGN KEY (change_id) REFERENCES core.change(id)",
+    ],
+  },
+  {
     expected: expect(12, "error", "classIdNullable", "fx.item"),
     name: "a nullable class_id",
     statements: ["ALTER TABLE fx.item ALTER COLUMN class_id DROP NOT NULL"],

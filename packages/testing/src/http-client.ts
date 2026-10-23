@@ -119,6 +119,7 @@ export const setCookieValue = (
 };
 
 const BASE = "http://std.test";
+const CONTENT_TYPE_HEADER = "content-type";
 
 const decodeSignIn = Schema.decodeUnknownEffect(Session);
 
@@ -139,8 +140,8 @@ const requestInit = (
     options.body === undefined ? options.rawBody : JSON.stringify(options.body);
 
   if (text !== undefined) {
-    if (!headers.has("content-type")) {
-      headers.set("content-type", "application/json");
+    if (!headers.has(CONTENT_TYPE_HEADER)) {
+      headers.set(CONTENT_TYPE_HEADER, "application/json");
     }
 
     init.body = text;
@@ -193,6 +194,7 @@ const makeTestHttpClient = Effect.fnUntraced(function* makeTestHttpClient(
     readonly path: string;
     readonly status: number;
     readonly text: string;
+    readonly contentType: string | null;
   }) => {
     const checked = { ...exchange, json: bodyJson(exchange.text) };
 
@@ -234,7 +236,13 @@ const makeTestHttpClient = Effect.fnUntraced(function* makeTestHttpClient(
     const text = yield* Effect.promise(async () => await response.text());
     const json = bodyJson(text);
 
-    yield* checkExchange({ method, path, status: response.status, text });
+    yield* checkExchange({
+      contentType: response.headers.get(CONTENT_TYPE_HEADER),
+      method,
+      path,
+      status: response.status,
+      text,
+    });
 
     return {
       headers: response.headers,
@@ -291,6 +299,7 @@ const makeTestHttpClient = Effect.fnUntraced(function* makeTestHttpClient(
 
     await Effect.runPromise(
       checkExchange({
+        contentType: response.headers.get(CONTENT_TYPE_HEADER),
         method: outgoing.method,
         path: `${url.pathname}${url.search}`,
         status: response.status,

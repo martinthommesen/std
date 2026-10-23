@@ -19,6 +19,7 @@
     "@std/definitions": "workspace:*",
     "@std/postgres": "workspace:*",
     "@std/server": "workspace:*",
+    "@std/tmf": "workspace:*",
     "@std/values": "workspace:*",
     "ajv": "catalog:",
     "effect": "catalog:",

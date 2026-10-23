@@ -766,17 +766,26 @@ const nestedDiagnostic = Effect.die(
   })
 );
 
+// Deparse expression indexes with schema-qualified application functions,
+// independently of the database's search_path; restore it when the transaction ends.
+const diagnosticSetup: TransactionSetup<void> = Effect.fn(
+  "Sql.diagnosticSetup"
+)(function* diagnosticSetup(connection: Connection, state: TransactionState) {
+  yield* maintenanceSetup({ lockTimeout: DIAGNOSTIC_LOCK_TIMEOUT })(
+    connection,
+    state
+  );
+  yield* control(connection, "SET LOCAL search_path = pg_catalog");
+});
+
 const runDiagnostic = <A, E, R>(
   client: PgClient.PgClient,
   effect: Effect.Effect<A, E, R>
 ): Effect.Effect<A, E | SqlError, Exclude<R, MaintenanceServices>> => {
   const state = new TransactionState("diagnostic", client);
 
-  return runOutermost(
-    state,
-    maintenanceSetup({ lockTimeout: DIAGNOSTIC_LOCK_TIMEOUT }),
-    (_, tracked, scope) =>
-      Effect.provideContext(effect, maintenanceContext(state, tracked, scope))
+  return runOutermost(state, diagnosticSetup, (_, tracked, scope) =>
+    Effect.provideContext(effect, maintenanceContext(state, tracked, scope))
   );
 };
 

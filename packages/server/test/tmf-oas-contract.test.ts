@@ -1,3 +1,7 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import filePath from "node:path";
+
 /**
  * `tmf-oas-contract` (Contracts 11.1, 11.6): the generic harness that
  * validates every response of a mapped TMF API against its pinned OpenAPI
@@ -10,7 +14,8 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import type { TmfOperation } from "@std/tmf/mapping";
 import { tmfStatusFor } from "@std/tmf/status";
 import type { JsonValue } from "@std/values/json-value";
-import { Cause, Effect, Exit } from "effect";
+import { Cause, Effect, Exit, Schema } from "effect";
+import { parse } from "yaml";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -24,6 +29,7 @@ import {
 import type { TmfExchange } from "../../testing/src/tmf-oas-contract.ts";
 import { asObject, textOf, apiCallers } from "./api-support.ts";
 import {
+  FIXTURE_API,
   FIXTURE_BASE,
   FIXTURE_RESOURCE,
   FIXTURE_TICKETS,
@@ -64,6 +70,37 @@ const OPERATIONS: readonly (readonly [TmfOperation, string, string])[] = [
   ["patch", "patch", "/troubleTicket/{id}"],
   ["delete", "delete", "/troubleTicket/{id}"],
 ];
+
+// Pair the fixture routes with TMF688's contract deliberately. POST /topic
+// returns 404, which that operation's explicit error declarations exclude.
+const mismatchedContractFailures = Effect.fn("Test.mismatchedContractFailures")(
+  function* mismatchedContractFailures(token: string) {
+    const http = yield* TestHttpClient;
+    const uncheckedPath = `${FIXTURE_BASE}/topic`;
+
+    const requestFailure = yield* Effect.exit(
+      http.request("POST", uncheckedPath, { token })
+    );
+
+    const fetchFailure = yield* Effect.exit(
+      Effect.tryPromise(
+        async () =>
+          await http.fetch(`http://std.test${uncheckedPath}`, {
+            headers: { authorization: `Bearer ${token}` },
+            method: "POST",
+          })
+      )
+    );
+
+    return [requestFailure, fetchFailure] as const;
+  },
+  Effect.provide(
+    TestHttpClient.layerWith({
+      contracts: [contractAt("TMF688", FIXTURE_BASE)],
+      tmfApis: [FIXTURE_API],
+    })
+  )
+);
 
 describe("tmf-oas-contract", () => {
   it("knows every pinned Open API's base path and document", () => {
@@ -174,6 +211,128 @@ describe("tmf-oas-contract", () => {
 
     assert.include(noOperation, "no such operation");
   });
+
+  it("default Error covers hub failures only when no explicit errors are declared", () => {
+    const error = {
+      "@type": "Error",
+      code: "NotFound",
+      reason: "Missing",
+      status: "404",
+    };
+
+    assert.isUndefined(
+      problemOf(exchange("GET", `${FIXTURE_BASE}/hub/${TICKET_ID}`, 404, error))
+    );
+    assert.isString(
+      problemOf(
+        exchange("GET", `${FIXTURE_BASE}/hub/${TICKET_ID}`, 404, {
+          "@type": "Error",
+        })
+      )
+    );
+    assert.include(
+      problemOf(
+        exchange("GET", `${FIXTURE_TICKETS}/${TICKET_ID}`, 418, {
+          ...error,
+          status: "418",
+        })
+      ),
+      "does not declare status 418"
+    );
+    assert.include(
+      problemOf(
+        exchange("DELETE", `${FIXTURE_BASE}/hub/${TICKET_ID}`, 429, error)
+      ),
+      "does not declare status 429"
+    );
+    assert.isUndefined(
+      problemOf(
+        exchange("POST", `${FIXTURE_BASE}/hub`, 429, {
+          ...error,
+          code: "TooManyRequests",
+          status: "429",
+        })
+      )
+    );
+  });
+
+  it.effect(
+    "explicit main-resource errors reject a default-only status even when default Error is present",
+    () =>
+      Effect.gen(function* explicitErrors() {
+        const directory = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            mkdtempSync(filePath.join(tmpdir(), "std-tmf-contract-"))
+          ),
+          (created) =>
+            Effect.sync(() => {
+              rmSync(created, { force: true, recursive: true });
+            })
+        );
+
+        const specs = new URL("../../tmf/specs/", import.meta.url).pathname;
+
+        const stored: unknown = parse(
+          readFileSync(filePath.join(specs, CONTRACT.file), "utf-8")
+        );
+
+        const parsed = yield* Schema.decodeUnknownEffect(Schema.JsonObject)(
+          stored
+        );
+
+        const paths = asObject(parsed.paths);
+        const resource = asObject(paths["/troubleTicket/{id}"]);
+        const operation = asObject(resource.get);
+
+        // This pin lists explicit errors without a default. Add default Error
+        // to a disposable copy to prove the precedence rule when both exist.
+        const document = {
+          ...parsed,
+          paths: {
+            ...paths,
+            "/troubleTicket/{id}": {
+              ...resource,
+              get: {
+                ...operation,
+                responses: {
+                  ...asObject(operation.responses),
+                  default: { $ref: "#/components/responses/Error" },
+                },
+              },
+            },
+          },
+        };
+
+        const file = filePath.join(directory, "contract.json");
+        writeFileSync(file, JSON.stringify(document));
+        const contract = { ...CONTRACT, file: filePath.relative(specs, file) };
+
+        const error = {
+          "@type": "Error",
+          code: "NotFound",
+          reason: "Missing",
+          status: "404",
+        };
+
+        assert.isUndefined(
+          tmfExchangeProblem(
+            [contract],
+            exchange("GET", `${FIXTURE_TICKETS}/${TICKET_ID}`, 404, error)
+          )
+        );
+
+        assert.include(
+          tmfExchangeProblem(
+            [contract],
+            exchange("GET", `${FIXTURE_TICKETS}/${TICKET_ID}`, 418, {
+              ...error,
+              status: "418",
+            })
+          ),
+          "does not declare status 418"
+        );
+      }).pipe(Effect.scoped)
+  );
 
   it("checks date-times as RFC 3339 with calendar and time ranges", () => {
     for (const valid of [
@@ -310,36 +469,62 @@ describe("tmf-oas-contract", () => {
     );
 
     dbTest.effect(
+      "mapped hub paths register, retrieve and unregister through request and fetch",
+      () =>
+        Effect.gen(function* mappedHubs() {
+          const http = yield* TestHttpClient;
+          const { admin, bob } = yield* apiCallers;
+
+          const created = yield* http.request("POST", `${FIXTURE_BASE}/hub`, {
+            ...admin,
+            body: {
+              "@type": "Hub",
+              callback: "https://listener.test/callback",
+              query: "description=Mail",
+            },
+          });
+
+          assert.strictEqual(created.status, 201, created.text);
+          const id = textOf(asObject(created.json).id);
+          const path = `${FIXTURE_BASE}/hub/${id}`;
+          assert.strictEqual(
+            created.headers.get("location"),
+            `http://localhost${path}`
+          );
+          const retrieved = yield* http.get(path, admin);
+          assert.strictEqual(retrieved.status, 200, retrieved.text);
+          assert.deepStrictEqual(retrieved.json, created.json);
+          const hidden = yield* http.get(path, bob);
+          assert.strictEqual(hidden.status, 404);
+
+          const removed = yield* Effect.promise(
+            async () =>
+              await http.fetch(`http://std.test${path}`, {
+                headers: { authorization: `Bearer ${admin.token ?? ""}` },
+                method: "DELETE",
+              })
+          );
+
+          assert.strictEqual(removed.status, 204);
+          assert.strictEqual(
+            yield* Effect.promise(async () => await removed.text()),
+            ""
+          );
+          const missing = yield* http.get(path, admin);
+          assert.strictEqual(missing.status, 404);
+          assert.strictEqual(hidden.text, missing.text);
+        })
+    );
+
+    dbTest.effect(
       "the client's fetch checks every exchange too: an undeclared status fails it",
       () =>
         Effect.gen(function* fetchChecked() {
           const http = yield* TestHttpClient;
           const { alice } = yield* apiCallers;
 
-          // Until workstream 3H wires the hubs, the hub seam answers 404,
-          // which TMF621's hub operations declare only through `default`.
-          const viaRequest = yield* Effect.exit(
-            http.request("POST", `${FIXTURE_BASE}/hub`, {
-              ...alice,
-              body: { "@type": "Hub", callback: "https://listener.test/" },
-            })
-          );
-
-          const viaFetch = yield* Effect.exit(
-            Effect.tryPromise(
-              async () =>
-                await http.fetch(`http://std.test${FIXTURE_BASE}/hub`, {
-                  body: JSON.stringify({
-                    "@type": "Hub",
-                    callback: "https://listener.test/",
-                  }),
-                  headers: {
-                    authorization: `Bearer ${alice.token ?? ""}`,
-                    "content-type": "application/json",
-                  },
-                  method: "POST",
-                })
-            )
+          const [viaRequest, viaFetch] = yield* mismatchedContractFailures(
+            alice.token ?? ""
           );
 
           assert.isTrue(Exit.isFailure(viaRequest));

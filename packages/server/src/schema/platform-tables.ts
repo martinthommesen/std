@@ -16,6 +16,7 @@ import { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
 import { changedFields, writeChangeEntry } from "../records/change-entry.ts";
+import { writeChangeImage } from "../records/change-image.ts";
 import type { StoredRecord } from "../records/stored-record.ts";
 import type { RequestRevision } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
@@ -250,7 +251,7 @@ export const insertSystemUser = Effect.fn("Schema.insertSystemUser")(
       [SYSTEM_USER_ID, USER_CLASS_ID]
     );
 
-    yield* writeChangeEntry(
+    const entry = yield* writeChangeEntry(
       {
         actorId: SYSTEM_USER_ID,
         cause: { kind: "system" },
@@ -262,5 +263,7 @@ export const insertSystemUser = Effect.fn("Schema.insertSystemUser")(
       },
       revision
     );
+
+    yield* writeChangeImage(snapshot, entry, null, systemUserRecord(snapshot));
   }
 );

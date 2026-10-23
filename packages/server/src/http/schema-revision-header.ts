@@ -62,7 +62,8 @@ export const SchemaRevisionHeaderLayer = HttpRouter.middleware(
       HttpEffect.withPreResponseHandler(httpEffect, (request, response) =>
         // The web app's files (`web-app.ts`) are not API responses: no
         // header, and no transaction per file.
-        request.url.startsWith(API_PATH_PREFIX)
+        request.url.startsWith(API_PATH_PREFIX) ||
+        request.url.startsWith("/tmf-api/")
           ? Effect.map(
               Effect.suspend(() => {
                 const state = served.get(request.source);

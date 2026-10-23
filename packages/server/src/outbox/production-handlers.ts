@@ -11,9 +11,11 @@
  *
  * Workstream 3H adds the hub callbacks here.
  */
-import type { Layer } from "effect";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 
+import { CallbackTransport } from "../events/callback.ts";
+import { renderHubEvents } from "../events/render.ts";
+import { authorizeEventTopic } from "../events/topic-authorization.ts";
 import { runAfterCommitRule } from "../hooks/after-commit-rules.ts";
 import { ruleCarriers } from "../records/outbox-producer.ts";
 import { DeliveryHandlers } from "./delivery-effects.ts";
@@ -40,5 +42,34 @@ export const afterCommitRuleHandler: DeliveryHandler = {
 };
 
 /** The handlers `std worker` runs, first match wins. */
-export const ProductionDeliveryHandlers: Layer.Layer<DeliveryHandlers> =
-  DeliveryHandlers.layerOf([afterCommitRuleHandler]);
+export const ProductionDeliveryHandlers = Layer.effect(
+  DeliveryHandlers,
+  Effect.gen(function* ProductionDeliveryHandlers() {
+    const transport = yield* CallbackTransport;
+
+    const hubs: DeliveryHandler = {
+      effectFor: (subscription) =>
+        subscription.hub === null || subscription.hub === undefined
+          ? undefined
+          : {
+              authorize: authorizeEventTopic,
+              kind: "external",
+              render: renderHubEvents,
+              run: Effect.fn("Hubs.deliver")(function* deliverHub(
+                delivery: Delivery
+              ) {
+                for (const event of delivery.events ?? []) {
+                  yield* transport.post(
+                    subscription.hub?.callback ?? "",
+                    event,
+                    delivery.changeId
+                  );
+                }
+              }),
+            },
+      name: "hub callbacks",
+    };
+
+    return DeliveryHandlers.of({ handlers: [afterCommitRuleHandler, hubs] });
+  })
+).pipe(Layer.provide(CallbackTransport.layer));

@@ -59,6 +59,9 @@ import type { SqlError } from "effect/sql/SqlError";
 
 import { installSessionRevocation } from "../auth/session-revocation.ts";
 import { Catalog } from "../catalog/catalog.ts";
+import type { InstanceSettings } from "../config/instance-settings.ts";
+import { writeResourceTopicChanges } from "../events/resource-topics.ts";
+import type { TooManyRequests } from "../events/too-many-requests.ts";
 import type { ChangeCause } from "../records/change-entry.ts";
 import { bumpRevision } from "../sql/config-commit.ts";
 import type {
@@ -184,6 +187,7 @@ export interface ChangeSetRequest {
 
 /** What a change set's `authorize` check can refuse with. */
 export type ChangeSetAuthorizationError =
+  | TooManyRequests
   | DefinitionInvalid
   | NotAllowed
   | NotFound
@@ -252,6 +256,7 @@ export type ChangeSetError =
 
 /** Services a change set needs. */
 export type ChangeSetServices =
+  | InstanceSettings
   | Catalog
   | Transactions
   | DatabaseConfig
@@ -556,6 +561,13 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     yield* writeConfigDeliveries(applied.after, written, requesterId, revision);
     yield* writeEnforcementNotes(plan.enforcementUpdates);
     yield* writeDefinitionRevisions(revision, plan.definitions);
+    yield* writeResourceTopicChanges(
+      applied.before,
+      applied.after,
+      plan.definitions,
+      requesterId,
+      revision
+    );
     yield* writeDependencies(plan.definitions);
 
     const operations = journalOperations(
