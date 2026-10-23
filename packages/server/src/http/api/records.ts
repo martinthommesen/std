@@ -222,14 +222,11 @@ export const collectionNamed =
   <A, E, R>(
     effect: Effect.Effect<A, E, R>
   ): Effect.Effect<A, E | UnknownTable, R> =>
-    // Fixed tasks name their table in the body, so their inner mapping already supplies it.
-    collection === ""
-      ? effect
-      : Effect.catchIf(
-          effect,
-          (failure) => failure instanceof UnknownTable,
-          () => Effect.fail(new UnknownTable({ table: collection }))
-        );
+    Effect.catchIf(
+      effect,
+      (failure) => failure instanceof UnknownTable,
+      () => Effect.fail(new UnknownTable({ table: collection }))
+    );
 
 const linkTo = (
   origin: string,

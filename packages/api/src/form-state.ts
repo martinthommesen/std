@@ -2,6 +2,9 @@
 import { DefinitionIdSchema } from "@std/definitions/ids";
 import { Schema } from "effect";
 
+/** A typed write-only value is present; its plaintext is never part of a preview. */
+export const FormSecretPresence = Schema.Struct({ set: Schema.Literal(true) });
+
 /** A create (null ID/revision) or versioned update proposal; values use API attribute names. */
 export const FormStateRequest = Schema.Struct({
   id: Schema.NullOr(DefinitionIdSchema),

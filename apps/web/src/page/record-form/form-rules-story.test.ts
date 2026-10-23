@@ -6,6 +6,7 @@ import { modifyFields } from "foldkit/struct";
 import { assert, describe, it } from "vitest";
 
 import { FieldInput } from "../../domain/form-input.ts";
+import { wireFieldOf } from "../../domain/wire.ts";
 import { REVISION_5, REVISION_6, TICKET_FIELDS } from "../../form-fixture.ts";
 import { Metadata } from "../table-list/model.ts";
 import { FocusField, LoadFormState } from "./command.ts";
@@ -24,8 +25,8 @@ import {
   showOfField,
 } from "./form.ts";
 import { Message } from "./message.ts";
-import { FormStateVerdict, WriteError } from "./model.ts";
-import { update } from "./update.ts";
+import { FormMode, FormStateVerdict, WriteError } from "./model.ts";
+import { init, update } from "./update.ts";
 
 const trueFlagForm = modifyFields(pendingForm, {
   metadata: () =>
@@ -45,6 +46,204 @@ const trueFlagForm = modifyFields(pendingForm, {
 });
 
 describe("form rule verdicts", () => {
+  it("coalesces rapid edits behind one request and applies only the final proposal's verdict", () => {
+    const edits = Array.from("abcdefghijklmnopqrstuvwxyz012345", (_, index) =>
+      "abcdefghijklmnopqrstuvwxyz012345".slice(0, index + 1)
+    );
+
+    story(
+      update,
+      given(
+        init({
+          id: 1,
+          maybeAppRevision: Option.none(),
+          mode: FormMode.Create(),
+          table: formRuleTable.name,
+        }).model
+      ),
+      message(
+        Message.SucceededLoadFormMetadata({
+          revision: REVISION_5,
+          table: formRuleTable,
+        })
+      ),
+      Command.expectExact(LoadFormState),
+      ...edits.flatMap((text) => [
+        message(
+          Message.UpdatedText({ fieldId: TICKET_FIELDS.shortDescription, text })
+        ),
+        Command.expectExact(LoadFormState),
+      ]),
+      Command.resolve(
+        LoadFormState,
+        Message.SucceededLoadFormState({
+          generation: 1,
+          maybeRevision: Option.none(),
+          verdict: closedFormVerdict,
+        })
+      ),
+      model((page) => {
+        assert.isFalse(AsyncData.hasData(page.formState));
+        assert.isTrue(isFormStatePending(page));
+        assert.deepStrictEqual(
+          page.edits[TICKET_FIELDS.shortDescription],
+          FieldInput.Text({ text: "abcdefghijklmnopqrstuvwxyz012345" })
+        );
+        assert.deepStrictEqual(
+          page.maybeFormStateInFlight,
+          Option.some(page.formGeneration)
+        );
+      }),
+      Command.expectExact(
+        LoadFormState({
+          fields: formRuleTable.fields.map(wireFieldOf),
+          generation: edits.length + 1,
+          recordId: null,
+          recordVersion: null,
+          schemaRevision: REVISION_5,
+          table: formRuleTable.name,
+          values: { short_description: "abcdefghijklmnopqrstuvwxyz012345" },
+        })
+      ),
+      Command.resolve(
+        LoadFormState,
+        Message.SucceededLoadFormState({
+          generation: edits.length + 1,
+          maybeRevision: Option.none(),
+          verdict: {
+            ...closedFormVerdict,
+            values: {
+              ...closedFormVerdict.values,
+              points: 73,
+              short_description: "abcdefghijklmnopqrstuvwxyz012345",
+            },
+          },
+        })
+      ),
+      model((page) => {
+        assert.isFalse(isFormStatePending(page));
+        assert.isTrue(Option.isNone(page.maybeFormStateInFlight));
+        assert.deepStrictEqual(
+          AsyncData.getData(page.formState),
+          Option.some({
+            ...closedFormVerdict,
+            values: {
+              ...closedFormVerdict.values,
+              points: 73,
+              short_description: "abcdefghijklmnopqrstuvwxyz012345",
+            },
+          })
+        );
+      }),
+      message(
+        Message.SucceededLoadFormState({
+          generation: 1,
+          maybeRevision: Option.none(),
+          verdict: closedFormVerdict,
+        })
+      ),
+      message(
+        Message.FailedLoadFormState({
+          error: WriteError.Unavailable(),
+          generation: 1,
+          maybeRevision: Option.none(),
+        })
+      ),
+      model((page) => {
+        assert.isFalse(isFormStatePending(page));
+      }),
+      Command.expectNone()
+    );
+  });
+
+  it("keeps the live announcement unchanged through typing and identical permissions", () => {
+    const checked = update(
+      pendingForm,
+      Message.SucceededLoadFormState({
+        generation: 1,
+        maybeRevision: Option.none(),
+        verdict: closedFormVerdict,
+      })
+    ).model;
+
+    const edited = update(
+      checked,
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.description,
+        text: "A description",
+      })
+    ).model;
+
+    assert.strictEqual(edited.formAnnouncement, checked.formAnnouncement);
+
+    const repeated = update(
+      edited,
+      Message.SucceededLoadFormState({
+        generation: edited.formGeneration,
+        maybeRevision: Option.none(),
+        verdict: {
+          ...closedFormVerdict,
+          values: { ...closedFormVerdict.values, description: "A description" },
+        },
+      })
+    ).model;
+
+    assert.strictEqual(repeated.formAnnouncement, checked.formAnnouncement);
+
+    const changed = update(
+      repeated,
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.description,
+        text: "A changed description",
+      })
+    ).model;
+
+    const allowed = update(
+      changed,
+      Message.SucceededLoadFormState({
+        generation: changed.formGeneration,
+        maybeRevision: Option.none(),
+        verdict: {
+          ...closedFormVerdict,
+          fields: {
+            ...closedFormVerdict.fields,
+            description: { hidden: false, readOnly: false, required: false },
+          },
+        },
+      })
+    ).model;
+
+    assert.notStrictEqual(allowed.formAnnouncement, checked.formAnnouncement);
+  });
+
+  it("releases a failed superseded request without applying its refusal", () => {
+    const edited = update(
+      pendingForm,
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.description,
+        text: "Latest",
+      })
+    );
+
+    assert.lengthOf(edited.commands ?? [], 0);
+
+    const completed = update(
+      edited.model,
+      Message.FailedLoadFormState({
+        error: WriteError.NotAllowed(),
+        generation: 1,
+        maybeRevision: Option.none(),
+      })
+    );
+
+    assert.strictEqual(completed.commands?.length, 1);
+    assert.isTrue(Option.isNone(AsyncData.getError(completed.model.formState)));
+    assert.deepStrictEqual(
+      completed.model.maybeFormStateInFlight,
+      Option.some(edited.model.formGeneration)
+    );
+  });
+
   it("holds saves while checking, ignores late answers and applies required/read-only/hidden states", () => {
     story(
       update,
@@ -178,6 +377,13 @@ describe("form rule verdicts", () => {
         Message.UpdatedText({
           fieldId: TICKET_FIELDS.description,
           text: "Hide me",
+        })
+      ),
+      message(
+        Message.SucceededLoadFormState({
+          generation: 1,
+          maybeRevision: Option.none(),
+          verdict: closedFormVerdict,
         })
       ),
       Command.resolve(
@@ -362,8 +568,17 @@ describe("form rule verdicts", () => {
       Message.SelectedChoice({ fieldId: TICKET_FIELDS.status, key: "closed" })
     ).model;
 
-    const checked = update(
+    const queued = update(
       selected,
+      Message.SucceededLoadFormState({
+        generation: 1,
+        maybeRevision: Option.none(),
+        verdict: closedFormVerdict,
+      })
+    ).model;
+
+    const checked = update(
+      queued,
       Message.SucceededLoadFormState({
         generation: selected.formGeneration,
         maybeRevision: Option.none(),
@@ -422,8 +637,17 @@ describe("form rule verdicts", () => {
       Message.UpdatedText({ fieldId: TICKET_FIELDS.shortDescription, text: "" })
     ).model;
 
-    const checked = update(
+    const queued = update(
       selected,
+      Message.SucceededLoadFormState({
+        generation: 1,
+        maybeRevision: Option.none(),
+        verdict: closedFormVerdict,
+      })
+    ).model;
+
+    const checked = update(
+      queued,
       Message.SucceededLoadFormState({
         generation: selected.formGeneration,
         maybeRevision: Option.none(),
@@ -585,6 +809,13 @@ describe("form rule verdicts", () => {
         Message.UpdatedText({
           fieldId: TICKET_FIELDS.description,
           text: "Keep this input",
+        })
+      ),
+      message(
+        Message.SucceededLoadFormState({
+          generation: 1,
+          maybeRevision: Option.none(),
+          verdict: closedFormVerdict,
         })
       ),
       Command.resolve(

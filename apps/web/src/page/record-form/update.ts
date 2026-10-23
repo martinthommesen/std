@@ -65,7 +65,11 @@ import {
   UpdateRecord,
 } from "./command.ts";
 import { forgetServerErrors, recordFieldEdit } from "./field-edit.ts";
-import { acceptFormState, requestFormState } from "./form-state-flow.ts";
+import {
+  acceptFormState,
+  announceFormState,
+  requestFormState,
+} from "./form-state-flow.ts";
 import {
   checkForm,
   classMetaOf,
@@ -209,6 +213,7 @@ export const init = (config: InitConfig): UpdateReturn => ({
     deletion: Deletion.Idle(),
     droppedEdits: [],
     edits: {},
+    formAnnouncement: "",
     formGeneration: 0,
     formState: FormStateVerdict.Idle(),
     generation: 0,
@@ -222,6 +227,7 @@ export const init = (config: InitConfig): UpdateReturn => ({
     isShowingProblems: false,
     maybeAppRevision: config.maybeAppRevision,
     maybeEditsFrom: Option.none(),
+    maybeFormStateInFlight: Option.none(),
     maybeFormStateKey: Option.none(),
     maybeRecordRevision: Option.none(),
     maybeToday: Option.none(),
@@ -2873,6 +2879,28 @@ const retry = (model: Model): UpdateReturn => {
 
 // UPDATE
 
+const completeFormState = (
+  model: Model,
+  generation: number,
+  accept: (current: Model) => UpdateReturn
+): UpdateReturn => {
+  if (!Option.contains(model.maybeFormStateInFlight, generation)) {
+    return { model };
+  }
+
+  const completed = modifyFields(model, {
+    maybeFormStateInFlight: () => Option.none(),
+  });
+
+  const completion =
+    generation === model.formGeneration &&
+    Option.isSome(model.maybeFormStateKey)
+      ? accept(completed)
+      : requestFormState(completed);
+
+  return modifyFields(completion, { model: announceFormState });
+};
+
 const receiveFormState = (
   model: Model,
   verdict: typeof FormState.Type,
@@ -3004,9 +3032,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     FailedLoadFormMetadata: ({ error }) => failMetadata(model, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadFormState: ({ generation, error, maybeRevision }) =>
-      generation === model.formGeneration
-        ? failFormState(model, error, maybeRevision)
-        : { model },
+      completeFormState(model, generation, (current) =>
+        failFormState(current, error, maybeRevision)
+      ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadHistory: ({ error, generation }) =>
       failHistory(model, generation, error),
@@ -3068,9 +3096,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       receiveMetadata(model, table, revision),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadFormState: ({ generation, verdict, maybeRevision }) =>
-      generation === model.formGeneration
-        ? receiveFormState(model, verdict, maybeRevision)
-        : { model },
+      completeFormState(model, generation, (current) =>
+        receiveFormState(current, verdict, maybeRevision)
+      ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadHistory: ({ entries, generation, maybeRevision }) =>
       sawRevision(

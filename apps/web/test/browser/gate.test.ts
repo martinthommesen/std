@@ -392,6 +392,8 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<void> => {
     return;
   }
 
+  const v3 = described.includes('"name":"assigned_to"');
+
   const due = await addLocalField(origin, token, {
     classId: HELPDESK.ticket,
     label: "Due",
@@ -404,6 +406,12 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<void> => {
     due,
   ]);
 
+  if (v3) {
+    await appendToLayout(origin, token, HELPDESK.layouts.incidentForm, [
+      HELPDESK.fields.customerEmail,
+    ]);
+  }
+
   const assigneeOf = (who: "agent" | "agent2" | null) =>
     who === null ? null : { id: fixture[who].id };
 
@@ -412,12 +420,16 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<void> => {
 
     await adminCall(origin, token, {
       body: {
-        assignee: assigneeOf(who),
+        ...(v3
+          ? { assignedTo: assigneeOf(who), description: title }
+          : { assignee: assigneeOf(who) }),
         category,
         customerEmail: emailOf(index),
         due: dueOn,
         internalCost: costOf(index),
-        priority,
+        priority: v3
+          ? { critical: "1", high: "2", low: "4", moderate: "3" }[priority]
+          : priority,
         shortDescription: title,
         status,
       },
@@ -838,6 +850,22 @@ const restrictedFieldsStayHidden = async (
   assert.isNotEmpty(await historyEntryTexts(page));
   await nothingHiddenAfter("the incident's history");
 
+  await openRecordForm(page, origin, {
+    id: fixture.records.laptop,
+    table: INCIDENTS,
+  });
+
+  const checked = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/checkFormState") && response.status() === 200
+  );
+
+  await fillField(page, "Description", "Privacy gate's latest proposal");
+  await checked;
+  await page.getByRole("button", { exact: true, name: "Save" }).waitFor();
+  await rendered(page);
+  await nothingHiddenAfter("the caller-masked form-state answer");
+
   const received = await bodies();
   const records = received.flatMap(receivedRecords);
   const text = received.join("\n");
@@ -970,6 +998,40 @@ const devToolsNeverHoldRestrictedValues = Effect.fn(
     await reloadingList(page, async () => {
       await page.getByRole("link", { name: "Back to the list" }).click();
     });
+    await page
+      .locator(`tr[data-record-id="${fixture.records.laptop}"] a`)
+      .first()
+      .click();
+    await waitForForm(page);
+
+    const checked = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/checkFormState") && response.status() === 200
+    );
+
+    await fillField(page, "Description", "DevTools privacy proposal");
+    await checked;
+    await page
+      .locator('button:not([disabled]):not([aria-disabled="true"])')
+      .filter({ hasText: /^Save$/u })
+      .waitFor();
+    await rendered(page);
+  });
+
+  const proposed = yield* devToolsHoldNoHiddenValue(
+    mcp,
+    opened.nextIndex,
+    hidden,
+    "the successful form-state verdict"
+  );
+
+  assert.include(proposed.text, "SucceededLoadFormState");
+  assert.include(proposed.text, "DevTools privacy proposal");
+
+  yield* Effect.promise(async () => {
+    await reloadingList(page, async () => {
+      await page.getByRole("link", { name: "Back to the list" }).click();
+    });
     await addCondition(page);
     await buildCondition(page, 1, [
       { kind: "field", label: "Customer email" },
@@ -981,7 +1043,7 @@ const devToolsNeverHoldRestrictedValues = Effect.fn(
 
   yield* devToolsHoldNoHiddenValue(
     mcp,
-    opened.nextIndex,
+    proposed.nextIndex,
     hidden,
     "a filter on the restricted field"
   );
@@ -1342,58 +1404,147 @@ describe("step 2 gate (helpdesk)", () => {
             });
           }).pipe(Effect.scoped)
       );
-
-      dbTest.effect(
-        "gate 2B: in development, the agent's DevTools Model and Message history never hold a restricted value",
-        () =>
-          Effect.gen(function* devToolsTest() {
-            const database = yield* TestDatabase;
-            const fixture = yield* HelpdeskFixture;
-            const server = yield* stdServe(database.url, inject("webRoot"));
-            const devOrigin = yield* viteDevServer(server.origin);
-            const browser = yield* launchBrowser;
-            const mcp = yield* devToolsMcp;
-
-            const hidden = yield* Effect.promise(async () => {
-              await seed(server.origin, fixture);
-
-              return await hiddenFromTheAgent(server.origin, fixture);
-            });
-
-            // NOTE: the context stays open until the scope ends, so DevTools
-            // keeps the page's runtime.
-            const page = yield* Effect.promise(async () => {
-              const context = await browser.newContext();
-
-              return await context.newPage();
-            });
-
-            yield* devToolsNeverHoldRestrictedValues(
-              mcp,
-              page,
-              devOrigin,
-              hidden,
-              fixture
-            );
-          }).pipe(Effect.scoped)
-      );
-
-      dbTest.effect(
-        "gate 2B: a restricted field shows as restricted, never as empty, and never reaches the browser",
-        () =>
-          Effect.gen(function* restrictedTest() {
-            const database = yield* TestDatabase;
-            const fixture = yield* HelpdeskFixture;
-            const server = yield* stdServe(database.url, inject("webRoot"));
-            const browser = yield* launchBrowser;
-
-            yield* Effect.promise(async () => {
-              await restrictedFieldsStayHidden(browser, server.origin, fixture);
-            });
-          }).pipe(Effect.scoped)
-      );
     }
   );
+
+  layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "gate 2B: in development, the agent's DevTools Model and Message history never hold a restricted value",
+      () =>
+        Effect.gen(function* devToolsTest() {
+          const database = yield* TestDatabase;
+          const fixture = yield* HelpdeskFixture;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const devOrigin = yield* viteDevServer(server.origin);
+          const browser = yield* launchBrowser;
+          const mcp = yield* devToolsMcp;
+
+          const hidden = yield* Effect.promise(async () => {
+            await seed(server.origin, fixture);
+
+            return await hiddenFromTheAgent(server.origin, fixture);
+          });
+
+          // NOTE: the context stays open until the scope ends, so DevTools
+          // keeps the page's runtime.
+          const page = yield* Effect.promise(async () => {
+            const context = await browser.newContext();
+
+            return await context.newPage();
+          });
+
+          yield* devToolsNeverHoldRestrictedValues(
+            mcp,
+            page,
+            devOrigin,
+            hidden,
+            fixture
+          );
+        }).pipe(Effect.scoped)
+    );
+
+    dbTest.effect(
+      "gate 2B: a restricted field shows as restricted, never as empty, and never reaches the browser",
+      () =>
+        Effect.gen(function* restrictedTest() {
+          const database = yield* TestDatabase;
+          const fixture = yield* HelpdeskFixture;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const browser = yield* launchBrowser;
+
+          yield* Effect.promise(async () => {
+            await restrictedFieldsStayHidden(browser, server.origin, fixture);
+          });
+        }).pipe(Effect.scoped)
+    );
+    dbTest.effect(
+      "gate 2C: a shipped v3 form refreshes a stale check, keeps input and never saves by itself",
+      () =>
+        Effect.gen(function* staleFormState() {
+          const database = yield* TestDatabase;
+          const fixture = yield* HelpdeskFixture;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const devOrigin = yield* viteDevServer(server.origin);
+          const browser = yield* launchBrowser;
+          const mcp = yield* devToolsMcp;
+
+          const page = yield* Effect.promise(async () => {
+            const token = await bearerToken(
+              devOrigin,
+              visitorOf(fixture.admin)
+            );
+
+            const vendor = await addLocalField(devOrigin, token, {
+              classId: HELPDESK.incident,
+              label: "Vendor reference",
+              name: "vendor_ref",
+              type: { kind: "text" },
+            });
+
+            await appendToLayout(
+              devOrigin,
+              token,
+              HELPDESK.layouts.incidentForm,
+              [vendor]
+            );
+            const context = await browser.newContext();
+            const openedPage = await context.newPage();
+            const writes = countRecordWrites(openedPage);
+            await signIn(openedPage, devOrigin, visitorOf(fixture.admin));
+            await openRecordForm(openedPage, devOrigin, {
+              id: fixture.records.laptop,
+              table: INCIDENTS,
+            });
+            await fillField(
+              openedPage,
+              "Vendor reference",
+              "VR-kept-until-refresh"
+            );
+            await openedPage
+              .locator('button:not([disabled]):not([aria-disabled="true"])')
+              .filter({ hasText: /^Save$/u })
+              .waitFor();
+            await patchDefinition(
+              devOrigin,
+              token,
+              definitionPath("core.field", vendor),
+              { state: "retired" }
+            );
+            await fillField(
+              openedPage,
+              "Description",
+              "Keep this v3 proposal through refresh"
+            );
+            await openedPage
+              .getByText(/Your change to Vendor reference was not kept/u)
+              .waitFor();
+            await settled(openedPage);
+            assert.strictEqual(
+              await formControl(openedPage, "Description").inputValue(),
+              "Keep this v3 proposal through refresh"
+            );
+            assert.strictEqual(writes(), 0);
+
+            return openedPage;
+          });
+
+          const state = yield* mcp.callTool("foldkit_get_model", {
+            expand: true,
+            path: "root.maybeRecordForm.value.formState",
+          });
+
+          assert.include(state, '"Success"', state);
+          yield* Effect.promise(async () => {
+            const saved = await saveRecordForm(page);
+            assert.strictEqual(saved.status, 200);
+            assert.deepStrictEqual(decodeBody(saved.body), {
+              description: "Keep this v3 proposal through refresh",
+            });
+            await page.context().close();
+          });
+        }).pipe(Effect.scoped)
+    );
+  });
 
   layer(helpdeskTestLayer({ version: "v2" }), { excludeTestServices: true })(
     (dbTest) => {

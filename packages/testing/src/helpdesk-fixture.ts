@@ -31,6 +31,7 @@ import { Actor } from "@std/server/auth/actor";
 import { ensureUser } from "@std/server/auth/bootstrap-admin";
 import { Catalog } from "@std/server/catalog/catalog";
 import { InstanceSettings } from "@std/server/config/instance-settings";
+import { readLayerState } from "@std/server/config/layer-store";
 import { loadSetDirectory } from "@std/server/config/load-set";
 import { CORE_SET_DIRECTORY } from "@std/server/config/set-files";
 import { RecordRuleSaveHooks } from "@std/server/hooks/record-rule-hooks";
@@ -230,9 +231,11 @@ const IMPACT_KEYS = [
 
 type DemoBody = Readonly<Record<string, JsonValue>>;
 
-const bodyOf = (snapshot: ConfigSnapshot, values: DemoValues): DemoBody => {
-  const v3 = snapshot.field(HELPDESK.fields.impact)?.name === "legacy_impact";
-
+const bodyOf = (
+  snapshot: ConfigSnapshot,
+  values: DemoValues,
+  v3: boolean
+): DemoBody => {
   const priorityKey =
     PRIORITY_KEYS.find(([key]) => key === values.priority)?.[1] ?? "4";
 
@@ -269,6 +272,7 @@ const bodyOf = (snapshot: ConfigSnapshot, values: DemoValues): DemoBody => {
     ...fields,
     description: values.description ?? values.shortDescription ?? "Demo ticket",
     impact,
+    // Contracts 14.2 matrix: demo pairs (1,1)→1, (2,1)→2, (3,1)→3, (3,2)→4.
     urgency: priorityKey === "4" ? "2" : "1",
   };
 
@@ -316,9 +320,15 @@ const insertRecords = Effect.fn("HelpdeskFixture.insertRecords")(
     snapshot: ConfigSnapshot,
     users: HelpdeskDemo["users"]
   ) {
+    const installed = yield* readLayerState;
+
+    const v3 = [...installed.sets.values()].some(
+      (set) => set.name === "helpdesk" && set.version >= 3
+    );
+
     const create = (classId: DefinitionId, values: DemoValues) =>
       createRecord({
-        body: bodyOf(snapshot, values),
+        body: bodyOf(snapshot, values, v3),
         endpointClassId: classId,
       }).pipe(
         Effect.map((saved) => saved.id),

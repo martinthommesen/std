@@ -325,42 +325,40 @@ describe("admin pages", () => {
     );
   });
 
-  layer(helpdeskTestLayer({ version: "v2" }), { excludeTestServices: true })(
-    (dbTest) => {
-      dbTest.effect(
-        "an admin creates a role, assigns it and adds an access rule through the generic pages; the rule restricts the field for that user",
-        () =>
-          Effect.gen(function* adminTest() {
-            const database = yield* TestDatabase;
-            const fixture = yield* HelpdeskFixture;
-            const server = yield* stdServe(database.url, inject("webRoot"));
-            const browser = yield* launchBrowser;
+  layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "an admin creates a role, assigns it and adds an access rule through the generic pages; the rule restricts the field for that user",
+      () =>
+        Effect.gen(function* adminTest() {
+          const database = yield* TestDatabase;
+          const fixture = yield* HelpdeskFixture;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const browser = yield* launchBrowser;
 
-            yield* Effect.promise(async () => {
-              await adminEditsAccess(browser, server.origin, fixture);
-              await reviewerSeesPriorityRestricted(
-                browser,
-                server.origin,
-                fixture
-              );
-            });
-          }).pipe(Effect.scoped)
-      );
+          yield* Effect.promise(async () => {
+            await adminEditsAccess(browser, server.origin, fixture);
+            await reviewerSeesPriorityRestricted(
+              browser,
+              server.origin,
+              fixture
+            );
+          });
+        }).pipe(Effect.scoped)
+    );
 
-      dbTest.effect(
-        "a user without the administrator role never sees the access tables, in the navigation or by address",
-        () =>
-          Effect.gen(function* nonAdminTest() {
-            const database = yield* TestDatabase;
-            const fixture = yield* HelpdeskFixture;
-            const server = yield* stdServe(database.url, inject("webRoot"));
-            const browser = yield* launchBrowser;
+    dbTest.effect(
+      "a user without the administrator role never sees the access tables, in the navigation or by address",
+      () =>
+        Effect.gen(function* nonAdminTest() {
+          const database = yield* TestDatabase;
+          const fixture = yield* HelpdeskFixture;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const browser = yield* launchBrowser;
 
-            yield* Effect.promise(async () => {
-              await agentNeverSeesAccessTables(browser, server.origin, fixture);
-            });
-          }).pipe(Effect.scoped)
-      );
-    }
-  );
+          yield* Effect.promise(async () => {
+            await agentNeverSeesAccessTables(browser, server.origin, fixture);
+          });
+        }).pipe(Effect.scoped)
+    );
+  });
 });

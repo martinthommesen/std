@@ -51,6 +51,7 @@ import {
 import {
   FieldInput,
   buildBody,
+  formStateBody,
   inputJson,
   inputOfValue,
   sentBody,
@@ -572,6 +573,27 @@ const verdictOfSentBody = (model: Model) => {
     (shaping, rules) => [...shaping, ...rules]
   );
 };
+
+describe("form-state write-only presence", () => {
+  it("sends presence and clearing independently of the redacted plaintext", () => {
+    const first = {
+      secrets: { password: toWriteOnlyValue("x") },
+      values: { secret: null },
+    };
+
+    const second = {
+      secrets: { password: toWriteOnlyValue("a different credential") },
+      values: { secret: null },
+    };
+
+    expect(formStateBody(first)).toStrictEqual({
+      password: { set: true },
+      secret: null,
+    });
+    expect(formStateBody(second)).toStrictEqual(formStateBody(first));
+    expect(sentBody(first)).toStrictEqual({ password: "x", secret: null });
+  });
+});
 
 describe("the client verdict", () => {
   const forms = [

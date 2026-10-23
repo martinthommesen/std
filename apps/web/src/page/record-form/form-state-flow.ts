@@ -2,12 +2,12 @@
 import type { FormState } from "@std/api/form-state";
 import { stringifyJson } from "@std/values/json";
 // oxlint-disable-next-line sonarjs/no-built-in-override -- Foldkit requires Effect module names; this module does not use the global Array.
-import { Array, Option, Record } from "effect";
+import { Array, Match, Option, Record } from "effect";
 import type { Update } from "foldkit";
 import { AsyncData } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
-import { FieldInput, judgedBody } from "../../domain/form-input.ts";
+import { FieldInput, formStateBody } from "../../domain/form-input.ts";
 import type { MetaField } from "../../domain/metadata.ts";
 import { inputText, mergeDropped } from "../../domain/stale-edits.ts";
 import { wireFieldOf } from "../../domain/wire.ts";
@@ -26,7 +26,7 @@ import {
 } from "./form.ts";
 import type { Message } from "./message.ts";
 import { FormStateVerdict } from "./model.ts";
-import type { Model } from "./model.ts";
+import type { Model, WriteError } from "./model.ts";
 
 /**
  * Requests a new verdict only when the proposal, record version or metadata changed.
@@ -57,7 +57,7 @@ export const requestFormState = (
     return { model };
   }
 
-  const values = judgedBody(checkForm(model).body);
+  const values = formStateBody(checkForm(model).body);
 
   const id = Option.match(maybeRecord, {
     onNone: () => null,
@@ -77,11 +77,34 @@ export const requestFormState = (
     version,
   });
 
-  if (Option.contains(model.maybeFormStateKey, key)) {
+  const unchanged = Option.contains(model.maybeFormStateKey, key);
+
+  if (
+    unchanged &&
+    (Option.isSome(model.maybeFormStateInFlight) ||
+      !AsyncData.isPending(model.formState))
+  ) {
     return { model };
   }
 
-  const generation = model.formGeneration + 1;
+  const generation = unchanged
+    ? model.formGeneration
+    : model.formGeneration + 1;
+
+  const pending = modifyFields(model, {
+    formGeneration: () => generation,
+    formState: (state) =>
+      Option.match(AsyncData.getData(state), {
+        onNone: () => FormStateVerdict.Loading(),
+        onSome: (data) => FormStateVerdict.Refreshing({ data }),
+      }),
+    maybeFormStateKey: () => Option.some(key),
+  });
+
+  // The Model keeps the latest proposal. Only completion releases the request slot.
+  if (Option.isSome(model.maybeFormStateInFlight)) {
+    return { model: pending };
+  }
 
   return {
     commands: [
@@ -95,14 +118,8 @@ export const requestFormState = (
         values,
       }),
     ],
-    model: modifyFields(model, {
-      formGeneration: () => generation,
-      formState: (state) =>
-        Option.match(AsyncData.getData(state), {
-          onNone: () => FormStateVerdict.Loading(),
-          onSome: (data) => FormStateVerdict.Refreshing({ data }),
-        }),
-      maybeFormStateKey: () => Option.some(key),
+    model: modifyFields(pending, {
+      maybeFormStateInFlight: () => Option.some(generation),
     }),
   };
 };
@@ -240,3 +257,112 @@ export const formNotices = (model: Model): readonly string[] =>
       });
     },
   });
+
+/**
+ * Describes a refused verdict without repeating private values.
+ * @param error - The check refusal.
+ * @returns Its actionable explanation.
+ */
+export const checkErrorText = (error: WriteError): string =>
+  Match.value(error).pipe(
+    Match.tag(
+      "Unavailable",
+      () =>
+        "The server did not answer the form check. Your input is kept; try again."
+    ),
+    Match.tag(
+      "ValidationFailed",
+      () => "The form could not be checked: review the marked fields."
+    ),
+    Match.tag(
+      "InvalidReference",
+      () =>
+        "The form could not be checked: a chosen record is not available here."
+    ),
+    Match.tag(
+      "UnknownField",
+      () =>
+        "The form could not be checked: a field is no longer available to you. Reload the definition."
+    ),
+    Match.tag(
+      "NotAllowed",
+      () => "You are not allowed to make this proposed change."
+    ),
+    Match.tag(
+      "NotFound",
+      () => "This record no longer exists, or you can no longer see it."
+    ),
+    Match.tag(
+      "VersionConflict",
+      ({ currentVersion }) =>
+        `The record changed to version ${currentVersion}. Reload it, keeping your changes, before checking the form again.`
+    ),
+    Match.tag(
+      "SchemaChanged",
+      () =>
+        "The definition changed. Your input is kept while the definition reloads."
+    ),
+    Match.tag(
+      "Referenced",
+      () => "The proposed change conflicts with records that refer to this one."
+    ),
+    Match.tag(
+      "Refused",
+      ({ message }) => `The form check was refused: ${message}`
+    ),
+    Match.exhaustive
+  );
+
+/**
+ * Keeps the live announcement stable while checking, and changes it only for a different verdict on permitted interaction.
+ * @param model - The completed form check or its successor proposal.
+ * @returns The form with a persistent screen-reader announcement.
+ */
+export const announceFormState = (model: Model): Model => {
+  const error = AsyncData.getError(model.formState);
+
+  if (Option.isSome(error)) {
+    return modifyFields(model, {
+      formAnnouncement: () => checkErrorText(error.value),
+    });
+  }
+
+  if (!AsyncData.isSuccess(model.formState)) {
+    return model;
+  }
+
+  const verdict = model.formState.data;
+
+  const restrictions = schemaFieldsOf(model).flatMap((field) => {
+    const state = verdict.fields[field.name];
+
+    if (state === undefined) {
+      return [`${field.label}: restricted.`];
+    }
+
+    const properties = Object.entries({
+      hidden: state.hidden,
+      "read-only": state.readOnly,
+      required: state.required,
+    }).flatMap(([property, applies]) => (applies ? [property] : []));
+
+    const offered =
+      state.choices === undefined || state.choices === null
+        ? properties
+        : [...properties, `choices ${state.choices.join(", ")}`];
+
+    return offered.length === 0
+      ? []
+      : [`${field.label}: ${offered.join(", ")}.`];
+  });
+
+  return modifyFields(model, {
+    formAnnouncement: () =>
+      [
+        "Form rules checked.",
+        ...restrictions,
+        ...formNotices(model),
+        ...(verdict.messages ?? []),
+      ].join(" "),
+  });
+};

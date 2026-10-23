@@ -7,6 +7,7 @@ import {
   given,
   label,
   role,
+  selector,
   scene,
   text,
 } from "foldkit/scene";
@@ -21,13 +22,14 @@ import { update } from "./update.ts";
 import { view } from "./view.ts";
 
 describe("accessible form rules", () => {
-  it("announces pending state, labels required fields, hides controls and displays the derived read-only value", () => {
+  it("shows pending state quietly, labels required fields, hides controls and displays the derived read-only value", () => {
     scene(
       { update, view },
       given(
         modifyFields(pendingForm, {
           formState: () =>
             FormStateVerdict.Failure({ error: WriteError.Unavailable() }),
+          maybeFormStateInFlight: () => Option.none(),
         })
       ),
       // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- Foldkit's scene assertion step
@@ -38,6 +40,9 @@ describe("accessible form rules", () => {
       ).toExist(),
       click(role("button", { name: "Check form again" })),
       expect(text("Checking form rules…")).toExist(),
+      expect(selector('[aria-live="polite"][aria-atomic="true"]')).toHaveText(
+        ""
+      ),
       Command.resolve(
         LoadFormState,
         Message.SucceededLoadFormState({

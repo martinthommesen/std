@@ -24,10 +24,9 @@ export const formStateIn = Effect.fn("Api.formState")(function* formStateIn(
     yield* jsonBodyOf(input.request)
   ).pipe(
     Effect.mapError(
-      () =>
+      (error) =>
         new InvalidRequest({
-          message:
-            "Expected table, id, revision and values for a form proposal.",
+          message: error.message,
           parameter: "body",
         })
     )

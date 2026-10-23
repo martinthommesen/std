@@ -191,10 +191,11 @@ describe("incident form v3", () => {
             await chooseOption(page, "Impact", "3 - Low");
             await chooseOption(page, "Urgency", "3 - Low");
             await page
-
-              .getByText(
-                /The major incident flag is retained because you cannot change it/u
-              )
+              .getByRole("paragraph")
+              .filter({
+                hasText:
+                  /The major incident flag is retained because you cannot change it/u,
+              })
               .waitFor({ state: "attached" });
             const saved = await saveRecordForm(page);
             assert.strictEqual(saved.status, 200);

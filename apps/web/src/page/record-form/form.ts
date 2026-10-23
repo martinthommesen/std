@@ -638,9 +638,19 @@ export const checkForm = (model: Model): FormCheck => {
   const shown = fieldsOf(model);
   const built = buildBody(editedFieldsOf(model, shown));
 
+  const active = new Set(
+    schemaFieldsOf(model).flatMap((field) =>
+      field.state === "active" ? [field.name] : []
+    )
+  );
+
+  // A verdict may include a retired field omitted by the reread; it is not a supplied edit.
   const canonical = Option.match(AsyncData.getData(model.formState), {
     onNone: () => ({}),
-    onSome: (verdict) => verdict.values,
+    onSome: (verdict) =>
+      Record.filter<string, JsonValue>((_value, name) => active.has(name))(
+        verdict.values
+      ),
   });
 
   const bodyValues = judgedBody(built.body);

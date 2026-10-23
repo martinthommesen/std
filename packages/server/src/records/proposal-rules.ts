@@ -4,13 +4,9 @@ import type { DefinitionId } from "@std/definitions/ids";
 import { fieldRulesOf, rulesOnUpdate } from "@std/definitions/record-rules";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 
-import type { SaveInput } from "./save-pipeline.ts";
+import type { SaveInput } from "./save-input.ts";
 import type { RulesById } from "./write-validation.ts";
 
-// The write rules of every field of a class (`@std/definitions/record-rules`),
-// the same ones the browser's `recordSchema` applies to the metadata: on
-// an update an owner reference is read-only (4.9), and the system effect
-// `aggregate` writes read-only fields like the service's own values.
 /** Builds the save rules, including immutable owner references on update.
  * @param snapshot - The effective configuration.
  * @param fields - Effective fields indexed by stable ID.

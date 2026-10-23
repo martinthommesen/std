@@ -5,6 +5,7 @@ import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
+import { FormSecretPresence } from "@std/api/form-state";
 import type { FormState, FormFieldState } from "@std/api/form-state";
 import { checkCondition } from "@std/conditions/check";
 import { evaluateCondition } from "@std/conditions/evaluate";
@@ -24,8 +25,8 @@ import { encodeOut } from "@std/values/codec";
 import type { DecodedInput } from "@std/values/field-value";
 import { isBoolean, isString } from "@std/values/field-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { isPlaintext } from "@std/values/write-only";
-import { Effect, Option, Result } from "effect";
+import { Plaintext, isPlaintext } from "@std/values/write-only";
+import { Effect, Option, Result, Schema } from "effect";
 
 import { applyDeriveRules } from "../hooks/before-rules.ts";
 import { imageOf } from "../hooks/rule-condition.ts";
@@ -421,10 +422,35 @@ const proposeForm = Effect.fn("Forms.propose")(function* proposeForm(
     return yield* resolved.failure;
   }
 
-  const proposal =
+  const presence = new Set(
+    [...resolved.success.entries].flatMap(([id, entry]) =>
+      (entry.field.type.kind === "password" ||
+        entry.field.type.kind === "secret") &&
+      Schema.is(FormSecretPresence)(entry.json)
+        ? [id]
+        : []
+    )
+  );
+
+  const body = {
+    entries: new Map(
+      [...resolved.success.entries].filter(([id]) => !presence.has(id))
+    ),
+  };
+
+  const proposed =
     existing === null
-      ? proposeCreate(rules, resolved.success)
-      : proposeUpdate(rules, resolved.success, existing);
+      ? proposeCreate(rules, body)
+      : proposeUpdate(rules, body, existing);
+
+  // Conditions can only ask whether a write-only value is empty. No credential is decoded.
+  const proposal = {
+    ...proposed,
+    values: new Map([
+      ...proposed.values,
+      ...[...presence].map((id) => [id, new Plaintext("")] as const),
+    ]),
+  };
 
   return {
     classId,
@@ -547,14 +573,6 @@ export const formState = Effect.fn("Forms.state")(function* formState(
     });
   }
 
-  if (proposal.invalid.size > 0) {
-    return yield* new ValidationFailed({
-      errors: [...proposal.invalid].map(([id, error]) =>
-        invalidValue(snapshot.field(id)?.name ?? id, error)
-      ),
-    });
-  }
-
   const previous = existing === null ? null : imageOf(existing);
 
   const image: RecordImage = {
@@ -612,6 +630,14 @@ export const formState = Effect.fn("Forms.state")(function* formState(
       record: existing,
       snapshot,
       written: affected,
+    });
+  }
+
+  if (proposal.invalid.size > 0) {
+    return yield* new ValidationFailed({
+      errors: [...proposal.invalid].map(([id, error]) =>
+        invalidValue(snapshot.field(id)?.name ?? id, error)
+      ),
     });
   }
 

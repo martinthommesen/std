@@ -6,7 +6,7 @@
  * For `admin` and for `agent`, in Chromium: open `/`, land on the sign-in
  * page, type the README's demo password into the rendered form and click
  * "Sign in", wait for the shell, open "Incident" from the navigation, and
- * see at least one incident; then open the first incident's form from the
+ * see at least one incident; then open an incident the user may edit from the
  * list. For the agent, the list has no "Internal cost" column, or every
  * cell of it is restricted, and the form does not show the internal cost
  * (no field, or a restricted one); the admin's form shows it. (The
@@ -212,7 +212,7 @@ const watchProblems = (page: Page, origin: string): ProblemWatch => {
 /**
  * As one demo user in a fresh browser context: open `/`, sign in through
  * the rendered form, open the incident list from the navigation and read
- * it, then open the first incident's form from the list.
+ * it, then open an incident the user may edit from the list.
  *
  * @param browser - The browser.
  * @param origin - The compose server.
@@ -269,10 +269,23 @@ const visitIncidents = async (
 
     const costs = [...costColumn.values()];
 
-    step = "open the first incident's form from the list";
-    await page.locator("table.records tbody tr a.link").first().click();
+    step = "open an incident the user may edit from the list";
+
+    const formRow =
+      user.login === "agent"
+        ? page
+            .locator("table.records tbody tr")
+            .filter({ has: page.getByText(user.name, { exact: true }) })
+            .first()
+        : page.locator("table.records tbody tr").first();
+
+    await formRow.locator("a.link").first().click();
     await waitForForm(page);
 
+    await page
+      .locator('button:not([disabled]):not([aria-disabled="true"])')
+      .filter({ hasText: /^Save$/u })
+      .waitFor();
     const formCost = await formFieldState(page, INTERNAL_COST_FIELD);
 
     return { costs, formCost, problems: watch.problems(), rows };

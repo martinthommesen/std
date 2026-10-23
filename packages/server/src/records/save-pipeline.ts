@@ -100,6 +100,7 @@ import { mapConstraints, withShownFields } from "./save-constraints.ts";
 import type { ConstraintFailure } from "./save-constraints.ts";
 import { SaveHooks } from "./save-hooks.ts";
 import type { HookEnvironment, SaveFailure, SaveMode } from "./save-hooks.ts";
+import type { SaveInput } from "./save-input.ts";
 import {
   deleteRecordRows,
   insertRecord,
@@ -137,29 +138,6 @@ import {
   validateProposal,
 } from "./write-validation.ts";
 import type { Proposal, ValidationInput } from "./write-validation.ts";
-
-/**
- * What every save names. The acting user is the `Actor` in the
- * environment (Contracts 3.1); the fields a body may name come from
- * `WriteAccess.nameable`.
- */
-export interface SaveInput {
-  /** The class whose endpoint the request came through. */
-  readonly endpointClassId: DefinitionId;
-  /** What produced the save; `{ kind: "api" }` by default. */
-  readonly cause?: ChangeCause;
-  /**
-   * Which `before` rules run (4.10): `user` by default; `settled` for the
-   * saves that settling persists (4.9), where only invariants run.
-   */
-  readonly mode?: SaveMode;
-  /**
-   * `aggregate`: a save finalization makes as the system effect (4.9,
-   * 4.10): it needs no write right of the acting user (read-only fields
-   * included, owner references excepted), but is validated as usual.
-   */
-  readonly system?: "aggregate";
-}
 
 /** A create: a record of exactly the endpoint's class (2.2 item 5). */
 export interface CreateInput extends SaveInput {

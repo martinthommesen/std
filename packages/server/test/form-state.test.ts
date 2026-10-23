@@ -1,4 +1,6 @@
 /** The non-persisting, caller-masked form verdict (Contracts 5.10, 6.3). */
+import { randomUUID } from "node:crypto";
+
 import { assert, describe, it } from "@effect/vitest";
 import { StdApi } from "@std/api/api";
 import { FormStateRequest } from "@std/api/form-state";
@@ -23,7 +25,14 @@ import {
   itilLayer,
   patchTicket,
 } from "./itil-support.ts";
-import { addAccessRule, change } from "./schema-support.ts";
+import {
+  addAccessRule,
+  addField,
+  addRecordRule,
+  createClass,
+  ensureSite,
+  change,
+} from "./schema-support.ts";
 
 const preview = Effect.fn("FormTest.preview")(function* preview(
   values: Readonly<Record<string, JsonValue>>,
@@ -379,6 +388,329 @@ describe("form-state", () => {
         assert.strictEqual(record.priority, "5");
 
         return yield* Effect.void;
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+  it.effect("hidden values cannot change a form-state outcome", () =>
+    Effect.gen(function* hiddenOracle() {
+      const amount = addField(HELPDESK.ticket, "visible_amount", {
+        kind: "decimal",
+        precision: 12,
+        scale: 2,
+      });
+
+      yield* change([
+        amount.op,
+        {
+          definition: {
+            active: true,
+            classId: HELPDESK.incident,
+            condition: {
+              left: { path: [amount.id] },
+              op: "eq",
+              right: { path: [HELPDESK.fields.internalCost] },
+            },
+            fieldId: HELPDESK.fields.shortDescription,
+            id: randomUUID(),
+            kind: "formRule",
+            name: "hidden_oracle",
+            order: 100,
+            owner: { layer: "local" },
+            property: "readOnly",
+            protected: false,
+            value: true,
+          },
+          op: "createFormRule",
+        },
+      ]);
+
+      const created = yield* createTicket("helpdeskIncident", {
+        internalCost: "101.00",
+        visibleAmount: "101.00",
+      });
+
+      const id = textOf(created.id);
+      const agent = yield* clientFor("agent");
+
+      const before = yield* agent.records.formState({
+        payload: { id, revision: 1, table: "helpdeskIncident", values: {} },
+      });
+
+      const saved = yield* patchTicket(created, { internalCost: "202.00" });
+
+      const after = yield* agent.records.formState({
+        payload: {
+          id,
+          revision: numberOf(saved.revision),
+          table: "helpdeskIncident",
+          values: {},
+        },
+      });
+
+      assert.deepStrictEqual(after.fields, before.fields);
+      assert.deepStrictEqual(after.values, before.values);
+      assert.deepStrictEqual(after.messages, before.messages);
+      assert.strictEqual(before.fields.shortDescription?.readOnly, false);
+      assert.isFalse(Object.hasOwn(after.values, "internalCost"));
+    }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "a denied edit gets the save's exact refusal and reveals no conditionally readable derived output",
+    () =>
+      Effect.gen(function* deniedOracle() {
+        const output = addField(HELPDESK.ticket, "oracle_output", {
+          kind: "text",
+        });
+
+        const hidden = addAccessRule(HELPDESK.ticket, [HELPDESK.agentRole], {
+          condition: {
+            arg: {
+              left: { path: [HELPDESK.fields.status] },
+              op: "eq",
+              right: { value: "in_progress" },
+            },
+            op: "not",
+          },
+          fields: [output.id],
+        });
+
+        const denied = addAccessRule(HELPDESK.ticket, [HELPDESK.agentRole], {
+          fields: [HELPDESK.fields.status],
+        });
+
+        if (
+          hidden.op.op !== "createAccessRule" ||
+          denied.op.op !== "createAccessRule"
+        ) {
+          return yield* Effect.die(new Error("Expected access rules"));
+        }
+
+        yield* change([
+          output.op,
+          {
+            ...hidden.op,
+            definition: { ...hidden.op.definition, effect: "deny" },
+          },
+          {
+            ...denied.op,
+            definition: {
+              ...denied.op.definition,
+              actions: ["update"],
+              effect: "deny",
+            },
+          },
+          addRecordRule(HELPDESK.incident, {
+            actions: [
+              {
+                type: "set",
+                values: [
+                  {
+                    fieldId: output.id,
+                    value: { value: "private-derived-output" },
+                  },
+                ],
+              },
+            ],
+            ruleKind: "derive",
+          }).op,
+        ]);
+        const record = yield* createTicket();
+        const fixture = yield* HelpdeskFixture;
+        const http = yield* TestHttpClient;
+
+        const token = yield* http.signIn(
+          fixture.agent.login,
+          fixture.agent.password
+        );
+
+        const values = { status: "in_progress" };
+
+        const admin = yield* clientFor();
+
+        const permitted = yield* admin.records.formState({
+          payload: {
+            id: textOf(record.id),
+            revision: 1,
+            table: "helpdeskIncident",
+            values,
+          },
+        });
+
+        assert.strictEqual(
+          permitted.values.oracleOutput,
+          "private-derived-output"
+        );
+
+        const check = yield* http.request("POST", "/api/v1/checkFormState", {
+          body: {
+            id: textOf(record.id),
+            revision: 1,
+            table: "helpdeskIncident",
+            values,
+          },
+          token,
+        });
+
+        const save = yield* http.request(
+          "PATCH",
+          `/api/v1/helpdeskIncident/${textOf(record.id)}`,
+          { body: values, headers: { "if-match": '"1"' }, token }
+        );
+
+        assert.strictEqual(check.status, 403, check.text);
+        assert.strictEqual(save.status, check.status, save.text);
+        assert.deepStrictEqual(check.json, save.json);
+        assert.notInclude(check.text, "private-derived-output");
+        assert.notInclude(check.text, "oracleOutput");
+
+        return yield* Effect.void;
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "derive-added existing access is checked before invalid supplied values, just as on save",
+    () =>
+      Effect.gen(function* deriveAccessOrdering() {
+        const record = yield* createTicket();
+        const snapshot = yield* (yield* Catalog).refresh;
+
+        const major = snapshot
+          .fields(HELPDESK.incident)
+          .find((field) => field.name === "major_incident");
+
+        if (major === undefined) {
+          return yield* Effect.die(new Error("Missing major flag"));
+        }
+
+        yield* change([
+          addRecordRule(HELPDESK.incident, {
+            actions: [
+              {
+                type: "set",
+                values: [{ fieldId: major.id, value: { value: true } }],
+              },
+            ],
+            ruleKind: "derive",
+          }).op,
+        ]);
+        const fixture = yield* HelpdeskFixture;
+        const http = yield* TestHttpClient;
+
+        const token = yield* http.signIn(
+          fixture.agent.login,
+          fixture.agent.password
+        );
+
+        const values = { priority: "invalid-choice" };
+
+        const check = yield* http.request("POST", "/api/v1/checkFormState", {
+          body: {
+            id: textOf(record.id),
+            revision: 1,
+            table: "helpdeskIncident",
+            values,
+          },
+          token,
+        });
+
+        const save = yield* http.request(
+          "PATCH",
+          `/api/v1/helpdeskIncident/${textOf(record.id)}`,
+          { body: values, headers: { "if-match": '"1"' }, token }
+        );
+
+        assert.strictEqual(check.status, 403, check.text);
+        assert.strictEqual(save.status, check.status, save.text);
+        assert.deepStrictEqual(check.json, save.json);
+
+        return yield* Effect.void;
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "a required password with a form rule accepts presence without decoding a surrogate credential",
+    () =>
+      Effect.gen(function* passwordPresence() {
+        yield* ensureSite;
+        const table = createClass("credential_form");
+
+        const password = addField(
+          table.id,
+          "password",
+          { kind: "password" },
+          { required: true }
+        );
+
+        const label = addField(table.id, "label", {
+          kind: "text",
+          maxLength: 1,
+        });
+
+        yield* change([
+          table.op,
+          password.op,
+          label.op,
+          {
+            definition: {
+              active: true,
+              classId: table.id,
+              condition: {
+                arg: { arg: { path: [password.id] }, op: "empty" },
+                op: "not",
+              },
+              fieldId: label.id,
+              id: randomUUID(),
+              kind: "formRule",
+              name: "password_present",
+              order: 0,
+              owner: { layer: "local" },
+              property: "required",
+              protected: false,
+              value: true,
+            },
+            op: "createFormRule",
+          },
+        ]);
+        const client = yield* clientFor();
+
+        const verdict = yield* client.records.formState({
+          payload: {
+            id: null,
+            revision: null,
+            table: "siteCredentialForm",
+            values: { label: "x", password: { set: true } },
+          },
+        });
+
+        assert.strictEqual(verdict.fields.label?.required, true);
+        assert.isFalse(Object.hasOwn(verdict.values, "password"));
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "invalid proposal envelopes keep the failing key in the HTTP error",
+    () =>
+      Effect.gen(function* invalidEnvelope() {
+        const fixture = yield* HelpdeskFixture;
+        const http = yield* TestHttpClient;
+
+        const token = yield* http.signIn(
+          fixture.admin.login,
+          fixture.admin.password
+        );
+
+        const response = yield* http.request("POST", "/api/v1/checkFormState", {
+          body: {
+            id: null,
+            revision: "invalid",
+            table: "helpdeskIncident",
+            values: {},
+          },
+          token,
+        });
+
+        assert.strictEqual(response.status, 400, response.text);
+        assert.include(response.text, "revision");
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 });
