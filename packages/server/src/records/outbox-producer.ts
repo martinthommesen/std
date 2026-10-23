@@ -47,11 +47,12 @@ import { acceptsHubEvent } from "../events/filter.ts";
 import { CurrentTransaction } from "../sql/transaction-context.ts";
 import { WorkerWakeup } from "../sql/wake-up.ts";
 import { STD_VERSION } from "../version.ts";
-import type { ChangeKind } from "./change-entry.ts";
+import type { ChangeEntry, ChangeKind } from "./change-entry.ts";
 import { exactTextView } from "./read-query.ts";
 import { SaveHooks } from "./save-hooks.ts";
 import type { AfterWriteInput } from "./save-hooks.ts";
 import { NOW } from "./save-sql.ts";
+import { imageOf } from "./stored-record.ts";
 import type { StoredRecord } from "./stored-record.ts";
 
 /** What subscription conditions are resolved with (5.10: `now` only). */
@@ -70,9 +71,6 @@ export interface SubscribedChange {
   /** The version's own image: after the save, before it for a delete. */
   readonly image: StoredRecord;
 }
-
-const imageOf = (record: StoredRecord): RecordImage =>
-  Object.fromEntries(record.values);
 
 const checkedBySnapshot = new WeakMap<
   ConfigSnapshot,
@@ -259,16 +257,16 @@ export const matchingSubscriptions = (
 /**
  * Inserts one pending delivery per subscription for a change entry.
  *
- * @param input - The change entry and its subscriptions.
+ * @param entry - The change identity and record version.
+ * @param subscriptionIds - Subscription IDs in insertion order.
  * @returns The insert.
  */
-const insertDeliveries = Effect.fn("Outbox.insertDeliveries")(
+export const insertDeliveries = Effect.fn("Outbox.insertDeliveries")(
   function* insertDeliveries(
-    input: AfterWriteInput,
+    entry: Pick<ChangeEntry, "changeId" | "recordId" | "recordVersion">,
     subscriptionIds: readonly DefinitionId[]
   ) {
     const sql = yield* SqlClient.SqlClient;
-    const { entry } = input;
 
     yield* sql.unsafe(
       `INSERT INTO core.delivery (
@@ -333,7 +331,7 @@ export const writeDeliveries = Effect.fn("Outbox.writeDeliveries")(
       return yield* Effect.void;
     }
 
-    yield* insertDeliveries(input, subscriptionIds);
+    yield* insertDeliveries(input.entry, subscriptionIds);
 
     const wakeup = yield* WorkerWakeup;
     const transaction = yield* CurrentTransaction;

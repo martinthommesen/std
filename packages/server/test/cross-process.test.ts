@@ -31,6 +31,7 @@ import { Duration, Effect, Layer, Schedule, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { SERVER_APPLICATION_NAME } from "../src/sql/database-config.ts";
 import { STD_VERSION } from "../src/version.ts";
@@ -38,7 +39,7 @@ import { startServe } from "./cli-support.ts";
 import type { ServeProcess } from "./cli-support.ts";
 import { listenGate } from "./listen-gate.ts";
 import { listPath } from "./reads-support.ts";
-import { ACME, addField, currentRevision, values } from "./schema-support.ts";
+import { addField, currentRevision, values } from "./schema-support.ts";
 
 /** Fetch without keep-alive, so killed servers leave no pooled sockets. */
 const Fetch = FetchHttpClient.layer.pipe(

@@ -28,6 +28,8 @@
  */
 import { isIP } from "node:net";
 
+import { isValidCivilDate } from "@std/values/calendar";
+
 import { isEmailAddress } from "./go-mail.ts";
 import { isRequestUri } from "./go-url.ts";
 
@@ -108,16 +110,6 @@ const hexQuad = /^[0-9a-f]{4}$/iu;
 const dottedQuad = /^\d+(?:\.\d+){3}$/u;
 const decimal = /^\d+$/u;
 
-// The proleptic Gregorian calendar Go's time package uses, year 0 included
-// (a leap year); JavaScript's Date.UTC maps years 0 to 99 to 1900 to 1999.
-const isLeapYear = (year: number): boolean =>
-  year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-
-const monthDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-
-const daysInMonth = (year: number, month: number): number =>
-  month === 2 && isLeapYear(year) ? 29 : (monthDays[month - 1] ?? 0);
-
 // `time.Parse("2006-01-02", value)`.
 const isDate = (value: string): boolean => {
   const groups = fullDate.exec(value)?.groups;
@@ -129,9 +121,8 @@ const isDate = (value: string): boolean => {
   const year = Number(groups.year);
   const month = Number(groups.month);
   const day = Number(groups.day);
-  const monthValid = month >= 1 && month <= 12;
 
-  return monthValid && day >= 1 && day <= daysInMonth(year, month);
+  return isValidCivilDate({ day, month, year });
 };
 
 // kube-openapi's IsDateTime: a date, `t`, then a time with a zone, compared

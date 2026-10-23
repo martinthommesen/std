@@ -66,9 +66,10 @@ import type {
   SettleSet,
 } from "../records/aggregate-images.ts";
 import type { SettleInput } from "../records/save-hooks.ts";
+import { imageOf } from "../records/stored-record.ts";
 import { suppliedFieldsOf } from "../records/supplied-fields.ts";
 import { applyDeriveRules, refusalError } from "./before-rules.ts";
-import { imageOf, preloadPath } from "./rule-condition.ts";
+import { preloadPath } from "./rule-condition.ts";
 import type { RuleContext } from "./rule-condition.ts";
 import { selectForEach, sourceImage } from "./rule-for-each.ts";
 import type { RuleRecord } from "./rule-for-each.ts";

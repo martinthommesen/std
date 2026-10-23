@@ -27,6 +27,7 @@ import {
 } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import {
   discardDeadDelivery,
@@ -50,8 +51,7 @@ import {
 } from "../src/outbox/worker.ts";
 import { createRecord } from "../src/records/save-pipeline.ts";
 import { deliveriesWhere, subscribe } from "./outbox-support.ts";
-import { ACME_FIELDS } from "./records-support.ts";
-import { ACME, values } from "./schema-support.ts";
+import { values } from "./schema-support.ts";
 import {
   actingAs,
   asLoadedUser,
@@ -528,10 +528,10 @@ const deletePayload = Effect.gen(function* deletePayloadTest() {
   // because L is in use and cheap (rules 6 and 10).
   assert.deepStrictEqual(ofL?.payload.image, {
     [ACME.name]: "L",
-    [ACME_FIELDS.owner]: fixture.bob.id,
+    [ACME.owner]: fixture.bob.id,
     [ACME.status]: "in_use",
     [ACME.purchasedOn]: "2025-01-15",
-    [ACME_FIELDS.dockedTo]: AM,
+    [ACME.dockedTo]: AM,
     [ACME.serial]: "SN-L",
   });
   assert.deepStrictEqual(
@@ -573,14 +573,14 @@ const ownImage = Effect.gen(function* ownImageTest() {
   assert.strictEqual(yield* workerPass(), 1);
 
   const delivered = yield* Ref.get(payloads);
-  const base = [ACME.name, ACME_FIELDS.owner, ACME.status];
+  const base = [ACME.name, ACME.owner, ACME.status];
 
   assert.deepStrictEqual(
     delivered.map((delivery) => Object.keys(delivery.payload.image).toSorted()),
     [
       [...base, ACME.purchasedOn].toSorted(),
-      [...base, ACME.purchasedOn, ACME_FIELDS.dockedTo].toSorted(),
-      [...base, ACME_FIELDS.dockedTo].toSorted(),
+      [...base, ACME.purchasedOn, ACME.dockedTo].toSorted(),
+      [...base, ACME.dockedTo].toSorted(),
     ]
   );
   assert.deepStrictEqual(

@@ -15,6 +15,7 @@ import { resolveSet } from "@std/definitions/set-resolve";
 import { ConfigSnapshot } from "@std/definitions/snapshot";
 import { Effect, Result } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import {
   readSetDirectory,
   CORE_SET_DIRECTORY,
@@ -25,7 +26,6 @@ import { ASSUME_POPULATED, planChangeSet } from "../src/schema/plan.ts";
 import type { Preflight } from "../src/schema/plan.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import {
-  ACME,
   ACME_SET_DIRECTORY,
   addField,
   addIndex,

@@ -12,6 +12,7 @@ import {
 import { Deferred, Duration, Effect, Fiber, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import {
   claimDeliveries,
   claimStatement,
@@ -37,7 +38,7 @@ import {
   subscribe,
 } from "./outbox-support.ts";
 import { setUpAcme, USERS } from "./records-support.ts";
-import { ACME, values } from "./schema-support.ts";
+import { values } from "./schema-support.ts";
 import { refusalOf } from "./support.ts";
 
 const LEASE = Duration.minutes(5);

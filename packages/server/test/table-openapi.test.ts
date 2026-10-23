@@ -12,40 +12,23 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { AccessRuleDraft, ChoiceDraft } from "@std/definitions/definition";
-import type { Operation } from "@std/definitions/operation";
+import type { AccessRuleDraft } from "@std/definitions/definition";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { Effect } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { statedRevision, stale } from "./api-support.ts";
 import { objectOf, signInAll } from "./authz-support.ts";
 import { codeOf, readsTestLayer, recordPath } from "./reads-support.ts";
-import { ACME, addField, change, values } from "./schema-support.ts";
+import { addChoice, addField, change, values } from "./schema-support.ts";
 
-const local = { owner: { layer: "local" }, protected: false } as const;
 const TABLE = "acme.asset";
 const RECORDS = "/api/v1/acmeAsset";
 const DOCUMENT = "/api/v1/tableMetadata/acmeAsset/openapi.json";
-
-const choice = (fieldId: string, key: string, order: number): ChoiceDraft => ({
-  ...local,
-  fieldId,
-  hidden: false,
-  id: randomUUID(),
-  key,
-  kind: "choice",
-  label: key,
-  order,
-});
-
-const createChoice = (definition: ChoiceDraft): Operation => ({
-  definition,
-  op: "createChoice",
-});
 
 /**
  * JSON Pointer escaping of one reference token (RFC 6901).
@@ -135,13 +118,10 @@ describe("per-table OpenAPI document", () => {
         const http = yield* TestHttpClient;
         const { fixture, tokens } = yield* signInAll;
         const grade = addField(ACME.asset, "grade", { kind: "choice" });
-        const scrap = choice(grade.id, "scrap", 3);
+        const scrap = addChoice(grade.id, "scrap", { order: 3 });
 
         yield* change([grade.op]);
-        yield* change([
-          createChoice(choice(grade.id, "good", 1)),
-          createChoice(scrap),
-        ]);
+        yield* change([addChoice(grade.id, "good", { order: 1 }).op, scrap.op]);
 
         // Bob's laptop L holds `scrap`, which is then hidden.
         const { L } = fixture.records;
@@ -340,7 +320,11 @@ describe("per-table OpenAPI document", () => {
           const empty = addField(ACME.asset, "no_keys", { kind: "choice" });
           const shut = addField(ACME.asset, "all_hidden", { kind: "choice" });
           const big = addField(ACME.asset, "big", { kind: "bigInteger" });
-          const closed = { ...choice(shut.id, "closed", 1), hidden: true };
+
+          const closed = addChoice(shut.id, "closed", {
+            hidden: true,
+            order: 1,
+          });
 
           // Bob may write `cost`, which rule 5 still hides from him.
           const writeCost: AccessRuleDraft = {
@@ -361,7 +345,7 @@ describe("per-table OpenAPI document", () => {
 
           yield* change([empty.op, shut.op, big.op]);
           yield* change([
-            createChoice(closed),
+            closed.op,
             { definition: writeCost, op: "createAccessRule" },
           ]);
 

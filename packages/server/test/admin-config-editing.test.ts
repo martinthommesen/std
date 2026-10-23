@@ -13,6 +13,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import type { JsonObject } from "@std/values/json-value";
 import { Effect } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { objectOf, signInAll, textOf } from "./authz-support.ts";
@@ -24,8 +25,7 @@ import {
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
-import { definitionVersion } from "./schema-paths-support.ts";
-import { ACME, values } from "./schema-support.ts";
+import { definitionVersion, values } from "./schema-support.ts";
 
 /** The revision, journal entries and change entries. */
 const counters = values(

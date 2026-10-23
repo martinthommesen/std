@@ -52,12 +52,14 @@ import { InstanceSettings } from "../config/instance-settings.ts";
 import { writeChangeEntry } from "../records/change-entry.ts";
 import type { ChangeEntry } from "../records/change-entry.ts";
 import { writeChangeImageValues } from "../records/change-image.ts";
-import { matchingSubscriptions } from "../records/outbox-producer.ts";
+import {
+  insertDeliveries,
+  matchingSubscriptions,
+} from "../records/outbox-producer.ts";
 import { NOW } from "../records/save-sql.ts";
 import type { StoredRecord } from "../records/stored-record.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { WORKER_CHANNEL } from "../sql/wake-up.ts";
-import { STD_VERSION } from "../version.ts";
 import { definitionColumns, definitionImage } from "./definition-changes.ts";
 import type { WrittenDefinitionChange } from "./definition-changes.ts";
 import { quoteIdent } from "./sql-text.ts";
@@ -261,20 +263,9 @@ export const writeConfigDeliveries = Effect.fn("Schema.writeConfigDeliveries")(
       );
 
       if (matching.length > 0) {
-        yield* sql.unsafe(
-          `INSERT INTO core.delivery (
-             subscription_id, change_id, record_id, record_version, status,
-             attempts, next_attempt_at, min_worker_version)
-           SELECT s.id, $1::uuid, $2::uuid, $3::int8, 'pending', 0, ${NOW}, $5::text
-           FROM unnest($4::uuid[]) WITH ORDINALITY AS s (id, position)
-           ORDER BY s.position`,
-          [
-            entry.changeId,
-            entry.recordId,
-            String(entry.recordVersion),
-            matching.map((subscription) => subscription.id),
-            STD_VERSION,
-          ]
+        yield* insertDeliveries(
+          entry,
+          matching.map((subscription) => subscription.id)
         );
 
         deliveries += matching.length;

@@ -48,6 +48,7 @@ import {
   LoadRelatedRecords,
   UpdateRecord,
 } from "./command.ts";
+import { formAfter } from "./fixture.ts";
 import { checkForm, controlIdOf, fieldOf } from "./form.ts";
 import { Message, OutMessage } from "./message.ts";
 import { FormMode, Submission, WriteError } from "./model.ts";
@@ -63,13 +64,6 @@ const REVISION_7 = revision("7.00000000-0000-4000-8000-000000000c07");
  * @param messages - The Messages.
  * @returns The last Model.
  */
-const after = (start: Model, ...messages: readonly Message[]): Model => {
-  const [first, ...rest] = messages;
-
-  return first === undefined
-    ? start
-    : after(update(start, first).model, ...rest);
-};
 
 /**
  * The ticket form, ready at revision 5, the record at version 3.
@@ -78,7 +72,7 @@ const after = (start: Model, ...messages: readonly Message[]): Model => {
  * @returns The page.
  */
 const readyWith = (table: MetaTable): Model =>
-  after(
+  formAfter(
     init({
       id: 1,
       maybeAppRevision: Option.some(REVISION_3),
@@ -338,7 +332,7 @@ describe("a save refused with SchemaChanged", () => {
   });
 
   it("sends nothing on Save while the definitions or the record reload", () => {
-    const refused = after(
+    const refused = formAfter(
       ready,
       Message.UpdatedText({
         fieldId: TICKET_FIELDS.shortDescription,
@@ -353,7 +347,7 @@ describe("a save refused with SchemaChanged", () => {
     expect(whileMetadataReloads.commands ?? []).toStrictEqual([]);
     expect(whileMetadataReloads.model).toStrictEqual(refused);
 
-    const metadataBack = after(
+    const metadataBack = formAfter(
       refused,
       Message.SucceededLoadFormMetadata({
         revision: REVISION_6,
@@ -375,7 +369,7 @@ describe("a save refused with SchemaChanged", () => {
         : [field]
     );
 
-    const refreshed = after(
+    const refreshed = formAfter(
       ready,
       Message.UpdatedText({
         fieldId: TICKET_FIELDS.shortDescription,
@@ -524,7 +518,7 @@ describe("a save refused with SchemaChanged", () => {
   });
 
   it("is outdated at once when a background refresh already reached the current revision", () => {
-    const refreshed = after(
+    const refreshed = formAfter(
       ready,
       Message.UpdatedText({
         fieldId: TICKET_FIELDS.shortDescription,
@@ -621,7 +615,7 @@ describe("a save refused with SchemaChanged", () => {
 });
 
 /** The ticket form with a typed short description. */
-const typed = after(
+const typed = formAfter(
   ready,
   Message.UpdatedText({
     fieldId: TICKET_FIELDS.shortDescription,
@@ -713,7 +707,7 @@ describe("a newer revision on any answer", () => {
   });
 
   it("on a related list refreshes the metadata, keeping the input", () => {
-    const withRelated = after(
+    const withRelated = formAfter(
       readyWith(ticketWithRelated),
       Message.UpdatedText({
         fieldId: TICKET_FIELDS.shortDescription,
@@ -876,7 +870,7 @@ describe("reads and deletes refused as stale", () => {
 describe("edits made while a save is in flight (review round 1)", () => {
   it("survive its success, on top of the saved record, and the next save sends them", () => {
     const sending = update(
-      after(
+      formAfter(
         ready,
         Message.UpdatedText({
           fieldId: TICKET_FIELDS.shortDescription,
@@ -908,7 +902,7 @@ describe("edits made while a save is in flight (review round 1)", () => {
     ]);
 
     // Typed before the answer: the same field, and another one.
-    const typedWhileSaving = after(
+    const typedWhileSaving = formAfter(
       sending.model,
       Message.UpdatedText({
         fieldId: TICKET_FIELDS.shortDescription,
@@ -977,7 +971,7 @@ describe("edits made while a save is in flight (review round 1)", () => {
 
 describe("a record not read again under new definitions (review round 1)", () => {
   it("holds Save back until the record is read under them, then sends the renamed field", () => {
-    const failedReread = after(
+    const failedReread = formAfter(
       typed,
       Message.ClickedReloadDefinition(),
       Message.SucceededLoadFormMetadata({
@@ -1063,7 +1057,7 @@ describe("the concrete class's metadata arriving after the record's reread (revi
   );
 
   it("reconciles the edits again, dropping with a note one the class made read-only", () => {
-    const incidentForm = after(
+    const incidentForm = formAfter(
       init({
         id: 1,
         maybeAppRevision: Option.some(REVISION_3),
@@ -1178,7 +1172,7 @@ describe("the concrete class's metadata asked before a rename (review round 2)",
   );
 
   it("is ignored when it arrives after the metadata moved on; the answer at the new revision counts", () => {
-    const refreshed = after(
+    const refreshed = formAfter(
       init({
         id: 1,
         maybeAppRevision: Option.some(REVISION_3),
@@ -1212,7 +1206,7 @@ describe("the concrete class's metadata asked before a rename (review round 2)",
       })
     );
 
-    const late = after(
+    const late = formAfter(
       refreshed,
       Message.SucceededLoadClassMetadata({
         revision: REVISION_5,
@@ -1224,7 +1218,7 @@ describe("the concrete class's metadata asked before a rename (review round 2)",
     expect(late.droppedEdits).toStrictEqual([]);
     expect(late.classMetadata).toStrictEqual(refreshed.classMetadata);
 
-    const current = after(
+    const current = formAfter(
       late,
       Message.SucceededLoadClassMetadata({
         revision: REVISION_6,
@@ -1257,7 +1251,7 @@ describe("a rename while a save is in flight (review round 2)", () => {
     };
 
     const answered = update(
-      after(
+      formAfter(
         ready,
         Message.UpdatedText({
           fieldId: TICKET_FIELDS.shortDescription,
@@ -1345,7 +1339,7 @@ describe("a rename while a save is in flight (review round 2)", () => {
       version: 1,
     };
 
-    const creating = after(
+    const creating = formAfter(
       init({
         id: 1,
         maybeAppRevision: Option.some(REVISION_3),
@@ -1401,7 +1395,7 @@ describe("a rename while a save is in flight (review round 2)", () => {
       },
     ]);
 
-    const reread = after(
+    const reread = formAfter(
       answered.model,
       Message.SucceededLoadRecord({
         generation: 2,
@@ -1448,7 +1442,7 @@ describe("a rename while a save is in flight (review round 2)", () => {
       version: 4,
     };
 
-    const classFirst = after(
+    const classFirst = formAfter(
       init({
         id: 1,
         maybeAppRevision: Option.some(REVISION_3),
@@ -1499,7 +1493,7 @@ describe("a rename while a save is in flight (review round 2)", () => {
     });
     expect(classFirst.droppedEdits).toStrictEqual([]);
 
-    const reread = after(
+    const reread = formAfter(
       classFirst,
       Message.SucceededLoadRecord({
         generation: 4,

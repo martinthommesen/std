@@ -8,6 +8,7 @@ import { TestClock } from "effect/testing";
 
 import { coreAndAcme } from "../../access/test/acme-snapshot.ts";
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { derivedSources } from "../src/events/render.ts";
@@ -20,7 +21,7 @@ import {
   register,
 } from "./hub-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
-import { ACME, change, addRecordRule } from "./schema-support.ts";
+import { change, addRecordRule } from "./schema-support.ts";
 import {
   create as createAsset,
   patch as patchAsset,

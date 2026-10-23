@@ -11,11 +11,12 @@ import {
 } from "@std/definitions/well-known";
 import { Effect, Schema } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { revisionHeaderValue } from "../src/http/schema-revision-header.ts";
 import { codeOf, listPath, readsTestLayer } from "./reads-support.ts";
-import { ACME, addField, change, values } from "./schema-support.ts";
+import { addField, change, values } from "./schema-support.ts";
 
 const ChangedBodySchema = Schema.Struct({
   changes: Schema.Array(

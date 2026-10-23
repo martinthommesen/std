@@ -8,27 +8,41 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { idsOf } from "./api-support.ts";
 
-const NEXT_SUFFIX = '>; rel="next"';
+/**
+ * Reads the Link format emitted by STD, including hyphenated relations.
+ * @param header - The response header, if present.
+ * @returns Each relation's URI, in header order.
+ */
+export const linksOf = (header: string | null): Map<string, string> => {
+  const links = new Map<string, string>();
+
+  for (const part of header === null || header === ""
+    ? []
+    : header.split(", <")) {
+    const uriEnd = part.indexOf(">");
+    const relStart = part.indexOf('rel="', uriEnd) + 'rel="'.length;
+    links.set(
+      part.slice(relStart, part.indexOf('"', relStart)),
+      part.slice(part.startsWith("<") ? 1 : 0, uriEnd)
+    );
+  }
+
+  return links;
+};
 
 /**
- * The path and query of a response's `rel="next"` link.
- *
- * @param link - The `Link` header, if any.
+ * The path and query of a response's rel="next" link.
+ * @param link - The Link header, if any.
  * @returns The relative URL, or undefined on the last page.
  */
 export const nextOf = (link: string | null): string | undefined => {
-  const entry = (link ?? "")
-    .split(", ")
-    .find((candidate) => candidate.endsWith(NEXT_SUFFIX));
+  const next = linksOf(link).get("next");
 
-  if (entry === undefined) {
+  if (next === undefined) {
     return undefined;
   }
 
-  const url = new URL(
-    entry.slice(entry.indexOf("<") + 1, -NEXT_SUFFIX.length),
-    "http://localhost"
-  );
+  const url = new URL(next, "http://localhost");
 
   return `${url.pathname}${url.search}`;
 };

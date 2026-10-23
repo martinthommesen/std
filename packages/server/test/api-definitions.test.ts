@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import {
@@ -24,7 +25,7 @@ import {
   textOf,
 } from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import { ACME, addField, change } from "./schema-support.ts";
+import { addField, change } from "./schema-support.ts";
 
 const APPLY = "/api/v1/applyChangeSet";
 const ROLES = "/api/v1/coreRole";

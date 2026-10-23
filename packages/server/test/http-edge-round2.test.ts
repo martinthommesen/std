@@ -4,6 +4,7 @@ import { forEach } from "effect/Effect";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { SessionRetentionLayer } from "../src/auth/session-retention.ts";
@@ -23,7 +24,7 @@ import {
   edgeWebUpload,
 } from "./http-edge-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import { ACME, addField, ensureSite, values } from "./schema-support.ts";
+import { addField, ensureSite, values } from "./schema-support.ts";
 import { waitUntil } from "./support.ts";
 
 const test = it.effect;

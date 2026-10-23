@@ -11,6 +11,7 @@ import type { DecodedInput } from "@std/values/field-value";
 import { Effect, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { Actor } from "../src/auth/actor.ts";
 import {
   historyStatement,
@@ -27,12 +28,7 @@ import { readRows } from "../src/records/sql-run.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import {
-  ACME,
-  loadCoreAndAcme,
-  schemaTestLayer,
-  values,
-} from "./schema-support.ts";
+import { loadCoreAndAcme, schemaTestLayer, values } from "./schema-support.ts";
 
 /** Fixed user IDs of the record tests. */
 export const USERS = {
@@ -45,14 +41,6 @@ export const TABLES = {
   asset: '"acme"."asset"',
   laptop: '"acme"."laptop"',
   monitor: '"acme"."monitor"',
-} as const;
-
-/** Further acme field IDs. */
-export const ACME_FIELDS = {
-  diskKey: "6972d40e-504c-492c-ae3c-3b2021f6e21f",
-  dockedTo: "83ec3835-6898-46f3-ae2e-afdbc3f5d407",
-  owner: "6a373fb5-bd18-4d7f-b0b4-182470f5421e",
-  sizeInches: "9ecc19c5-8401-4887-ac05-d5dbdd937297",
 } as const;
 
 /** `core.user`'s unique index on `login`. */

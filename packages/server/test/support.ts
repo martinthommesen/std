@@ -12,6 +12,7 @@ import {
   Result,
   Schedule,
 } from "effect";
+import { SqlClient } from "effect/sql";
 
 import { TransactionRefused } from "../src/sql/transaction-refused.ts";
 
@@ -97,3 +98,26 @@ export const waitUntil = <E, R>(
     }),
     Effect.asVoid
   );
+
+/**
+ * Counts lock waiters in this test's database without changing polling policy.
+ * @param options - The original observer's session and wait-event predicates.
+ * @returns The number of matching sessions, or the query failure.
+ */
+export const lockWaiterCount = Effect.fn("Test.lockWaiterCount")(
+  function* lockWaiterCount(
+    options: { readonly excludeCurrent?: boolean; readonly event?: string } = {}
+  ) {
+    const sql = yield* SqlClient.SqlClient;
+
+    const rows = yield* sql.unsafe<{ readonly waiting: string }>(
+      `SELECT count(*)::text AS waiting FROM pg_stat_activity
+       WHERE datname = current_database() AND wait_event_type = 'Lock'
+       ${options.excludeCurrent === true ? "AND pid <> pg_backend_pid()" : ""}
+       ${options.event === undefined ? "" : "AND wait_event = $1::text"}`,
+      options.event === undefined ? [] : [options.event]
+    );
+
+    return Number(rows[0]?.waiting ?? "0");
+  }
+);

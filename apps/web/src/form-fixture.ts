@@ -279,3 +279,16 @@ export const TASK_TABLE: MetaTable = {
 
 /** The columns a related list of tasks asks for. */
 export const TASK_COLUMNS = listColumns(TASK_TABLE).map(wireFieldOf);
+
+/**
+ * Requires a value the fixture promises to contain.
+ * @param value - The fixture value.
+ * @returns The value, or a fixture error when absent.
+ */
+export const present = <A>(value: A | undefined): A => {
+  if (value === undefined) {
+    throw new RangeError("the fixture lacks a value the test needs");
+  }
+
+  return value;
+};

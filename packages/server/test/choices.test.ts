@@ -7,18 +7,16 @@
  * with violating records is refused with a count, and `doctor` reports a
  * violation planted behind the service's back.
  */
-import { randomUUID } from "node:crypto";
-
 import { assert, describe, it, layer } from "@effect/vitest";
-import { TableMetadata } from "@std/api/table-metadata";
-import type { ChoiceDraft } from "@std/definitions/definition";
+import type { TableMetadata } from "@std/api/table-metadata";
 import type { Operation } from "@std/definitions/operation";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -26,8 +24,8 @@ import { runDoctor } from "../src/doctor/doctor.ts";
 import { arrayOf, objectOf, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import {
+  fetchMetadata,
   codeOf,
-  collectionOf,
   listPath,
   readsTestLayer,
   recordPath,
@@ -35,36 +33,12 @@ import {
 } from "./reads-support.ts";
 import { postChangeSet } from "./schema-paths-support.ts";
 import {
-  ACME,
+  addChoice,
   addField,
   addOverride,
   change,
   values,
 } from "./schema-support.ts";
-
-const local = { owner: { layer: "local" }, protected: false } as const;
-
-const choice = (
-  fieldId: string,
-  key: string,
-  order: number,
-  hidden = false
-): Operation => {
-  const definition: ChoiceDraft = {
-    ...local,
-    fieldId,
-    hidden,
-    id: randomUUID(),
-    key,
-    kind: "choice",
-    label: `${key[0]?.toUpperCase() ?? ""}${key.slice(1)}`,
-    order,
-  };
-
-  return { definition, op: "createChoice" };
-};
-
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
 
 // The error code and the invalid-value reason a refusal gives `tier`.
 const reasonOf = (response: TestResponse): string => {
@@ -113,14 +87,9 @@ const metaOf = Effect.fn("Choices.metaOf")(function* metaOf(
   token: string,
   table: string
 ) {
-  const http = yield* TestHttpClient;
+  const { body } = yield* fetchMetadata(token, table);
 
-  const response = yield* http.get(
-    `/api/v1/tableMetadata/${collectionOf(table)}`,
-    { token }
-  );
-
-  return yield* decodeMetadata(response.json).pipe(Effect.orDie);
+  return body;
 });
 
 const choicesOf = (table: typeof TableMetadata.Type) =>
@@ -136,10 +105,11 @@ const setup = Effect.gen(function* setupChoices() {
   });
 
   yield* change([
-    choice(tier.id, "gold", 1),
-    choice(tier.id, "silver", 2),
-    choice(tier.id, "bronze", 3),
-    choice(tier.id, "legacy", 4, true),
+    addChoice(tier.id, "gold", { label: "Gold", order: 1 }).op,
+    addChoice(tier.id, "silver", { label: "Silver", order: 2 }).op,
+    addChoice(tier.id, "bronze", { label: "Bronze", order: 3 }).op,
+    addChoice(tier.id, "legacy", { hidden: true, label: "Legacy", order: 4 })
+      .op,
     subset.op,
   ]);
 

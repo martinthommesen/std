@@ -23,11 +23,8 @@ import type { JsonObject } from "@std/values/json-value";
 import { Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 
-import {
-  ACME,
-  AcmeFixture,
-  seedRecord,
-} from "../../testing/src/acme-fixture.ts";
+import { AcmeFixture, seedRecord } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Actor } from "../src/auth/actor.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
@@ -38,7 +35,7 @@ import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { asObject, textOf, API, apiCallers } from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import { waitUntil } from "./support.ts";
+import { lockWaiterCount, waitUntil } from "./support.ts";
 
 const SaveServices = Layer.mergeAll(
   WriteAccess.allowAll,
@@ -46,16 +43,7 @@ const SaveServices = Layer.mergeAll(
   WriteOnlyValues.scrypt
 );
 
-const lockWaiters = Effect.gen(function* lockWaiters() {
-  const sql = yield* SqlClient.SqlClient;
-
-  const rows = yield* sql.unsafe<{ readonly waiting: string }>(
-    `SELECT count(*)::text AS waiting FROM pg_stat_activity
-      WHERE datname = current_database() AND wait_event_type = 'Lock'`
-  );
-
-  return Number(rows[0]?.waiting ?? "0");
-});
+const lockWaiters = lockWaiterCount();
 
 /**
  * Holds a record's root row in another transaction until `release`.

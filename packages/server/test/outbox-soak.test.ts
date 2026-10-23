@@ -26,12 +26,13 @@ import { Duration, Effect, Fiber, Ref, Schedule, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import type { Delivery } from "../src/outbox/delivery-effects.ts";
 import { DeliveryFailed } from "../src/outbox/delivery-failed.ts";
 import { runWorker } from "../src/outbox/worker.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { subscribe } from "./outbox-support.ts";
-import { ACME, freshId } from "./schema-support.ts";
+import { freshId } from "./schema-support.ts";
 import { waitUntil } from "./support.ts";
 import { serveOnly, workerTestLayer } from "./worker-support.ts";
 

@@ -25,7 +25,8 @@ import { Effect, Option } from "effect";
 import { recordRelation } from "../records/relation.ts";
 import { loadRecord, rootTable } from "../records/save-sql.ts";
 import { readRows } from "../records/sql-run.ts";
-import { checkedRuleCondition, imageOf } from "./rule-condition.ts";
+import { imageOf } from "../records/stored-record.ts";
+import { checkedRuleCondition } from "./rule-condition.ts";
 import type { RuleContext } from "./rule-condition.ts";
 import type { ValueRecord } from "./rule-values.ts";
 

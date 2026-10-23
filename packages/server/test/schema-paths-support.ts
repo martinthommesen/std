@@ -50,10 +50,6 @@ const DISPATCHED: ReadonlySet<string> = new Set(
   PATCH_FIELD_OPERATIONS.map((entry) => entry.field)
 );
 
-export { catalogFingerprint, committedState } from "./committed-state.ts";
-
-export type { CommittedState } from "./committed-state.ts";
-
 /**
  * The qualified table of a definition kind.
  *
@@ -257,15 +253,4 @@ export const userWithRoles = (login: string, roles: readonly string[]) =>
     ).pipe(Effect.orDie);
 
     return yield* http.signIn(login, `${login}-password`);
-  });
-
-/**
- * The current version of a definition.
- *
- * @param id - The definition.
- * @returns Its version, 0 when unknown.
- */
-export const definitionVersion = (id: string) =>
-  Effect.gen(function* readVersion() {
-    return (yield* (yield* Catalog).refresh).get(id)?.version ?? 0;
   });

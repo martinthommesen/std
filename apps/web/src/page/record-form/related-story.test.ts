@@ -28,6 +28,7 @@ import {
   LoadRelatedMetadata,
   LoadRelatedRecords,
 } from "./command.ts";
+import { formAfter } from "./fixture.ts";
 import { Message } from "./message.ts";
 import { FormMode } from "./model.ts";
 import type { Model, RelatedList } from "./model.ts";
@@ -40,14 +41,6 @@ const COLUMNS =
 
 const TASKS: MetaTable = { ...ticketTable, label: "Task", name: "help.task" };
 
-const after = (start: Model, ...messages: readonly Message[]): Model => {
-  const [first, ...rest] = messages;
-
-  return first === undefined
-    ? start
-    : after(update(start, first).model, ...rest);
-};
-
 const page = (next: string | null) => ({
   maybeCount: Option.some(12),
   maybeNextCursor: Option.fromNullishOr(next),
@@ -55,7 +48,7 @@ const page = (next: string | null) => ({
 });
 
 /** The ticket form with its related tasks just opened. */
-const withListOpen = after(
+const withListOpen = formAfter(
   init({
     id: 1,
     maybeAppRevision: Option.some(REVISION_3),
@@ -76,7 +69,7 @@ const withListOpen = after(
 );
 
 /** The ticket form with its related tasks open on their first page. */
-const onFirstPage = after(
+const onFirstPage = formAfter(
   withListOpen,
   Message.SucceededLoadRelatedMetadata({
     generation: 1,
@@ -248,7 +241,7 @@ describe("a related list that is removed and made again (review round 3)", () =>
       },
     ];
 
-    const synchronized = after(
+    const synchronized = formAfter(
       onFirstPage,
       Message.SucceededLoadFormMetadata({
         revision: REVISION_6,
@@ -267,7 +260,7 @@ describe("a related list that is removed and made again (review round 3)", () =>
     expect(synchronized.nextRelatedListId).toBe(4);
     expect(listOf(synchronized).isOpen).toBeTruthy();
 
-    const reordered = after(
+    const reordered = formAfter(
       synchronized,
       Message.SucceededLoadFormMetadata({
         revision: REVISION_6,
@@ -282,7 +275,7 @@ describe("a related list that is removed and made again (review round 3)", () =>
   });
 
   it("is a new list: an answer meant for the removed one never reaches it", () => {
-    const remade = after(
+    const remade = formAfter(
       onFirstPage,
       // `parent` renamed `parent_ticket`; its next page is asked for.
       Message.SucceededLoadFormMetadata({
@@ -306,7 +299,7 @@ describe("a related list that is removed and made again (review round 3)", () =>
     expect(remade.relatedLists).toHaveLength(1);
     expect(made?.id).not.toBe(LIST);
 
-    const opened = after(
+    const opened = formAfter(
       remade,
       Message.ToggledRelatedList({ isOpen: true, listId: made?.id ?? 0 }),
       Message.SucceededLoadRelatedMetadata({
@@ -320,7 +313,7 @@ describe("a related list that is removed and made again (review round 3)", () =>
     expect(AsyncData.isLoading(listOf(opened, made?.id).records)).toBeTruthy();
 
     // The removed list's answers: its first page and its next page.
-    const late = after(
+    const late = formAfter(
       opened,
       Message.SucceededLoadRelatedRecords({
         generation: 1,
@@ -361,7 +354,7 @@ describe("a related list's page refused with SchemaChanged", () => {
   });
 
   it("the related table's metadata still finds its list when the renamed endpoint metadata arrived first (review round 2)", () => {
-    const parentFirst = after(
+    const parentFirst = formAfter(
       onFirstPage,
       Message.ClickedNextRelatedPage({ listId: LIST }),
       refused,
@@ -396,7 +389,7 @@ describe("a related list's page refused with SchemaChanged", () => {
   });
 
   it("asks for no page until the endpoint's metadata reloaded successfully, and Try again reloads it (review round 2)", () => {
-    const parentFailed = after(
+    const parentFailed = formAfter(
       onFirstPage,
       Message.ClickedNextRelatedPage({ listId: LIST }),
       refused,
@@ -485,7 +478,7 @@ describe("a related list's page refused with SchemaChanged", () => {
   });
 
   it("after the reload failed, Try again reloads both metadata instead of asking under the old name", () => {
-    const reloadFailed = after(
+    const reloadFailed = formAfter(
       onFirstPage,
       Message.ClickedNextRelatedPage({ listId: LIST }),
       refused,

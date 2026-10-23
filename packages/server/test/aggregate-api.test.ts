@@ -25,20 +25,19 @@ import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { owner as ownerReference } from "./aggregates-support.ts";
 import { API, apiCallers, asArray, asObject, textOf } from "./api-support.ts";
 import { codeOf, readsTestLayer } from "./reads-support.ts";
-import { ACME_FIELDS } from "./records-support.ts";
 import { postChangeSet } from "./schema-paths-support.ts";
 import {
-  ACME,
+  addAccessRule,
   addField,
   addRecordRule,
   change,
   createClass,
   createNamespace,
-  freshId,
 } from "./schema-support.ts";
 import { create, patch, savedOf } from "./writes-support.ts";
 
@@ -77,10 +76,7 @@ const LOOP = addRecordRule(BOX.id, {
 });
 
 /** acme's `asset_manager` and `employee` roles. */
-const ACME_ROLES = [
-  "081e3ce8-26a8-43a2-bc58-838d40b4c22d",
-  "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b",
-];
+const ACME_ROLES = [ACME.assetManager, ACME.employee];
 
 /** An asset ID no record has. */
 const ABSENT_ASSET = "00000000-0000-4000-8000-0000000000ab";
@@ -120,24 +116,16 @@ const ownedBy = (
  * @param target - Records or fields.
  * @returns The operation.
  */
-const partAccess = (target: AccessTarget): Operation => ({
-  definition: {
-    actions: ["read", "create", "update"],
-    active: true,
-    classId: PART.id,
-    condition: null,
-    description: "acme's roles may write parts",
-    effect: "allow",
-    id: freshId(),
-    kind: "accessRule",
-    name: null,
-    owner: { layer: "local" },
-    protected: false,
-    roleIds: ACME_ROLES,
-    target,
-  },
-  op: "createAccessRule",
-});
+const partAccess = (target: AccessTarget): Operation =>
+  addAccessRule(
+    PART.id,
+    ACME_ROLES,
+    { description: "acme's roles may write parts" },
+    {
+      actions: ["read", "create", "update"],
+      target,
+    }
+  ).op;
 
 // A system write the caller's own write could not make: settling sets
 // docked_to to an asset that does not exist.
@@ -145,9 +133,7 @@ const BAD_DOCK = addRecordRule(ACME.asset, {
   actions: [
     {
       type: "set",
-      values: [
-        { fieldId: ACME_FIELDS.dockedTo, value: { value: ABSENT_ASSET } },
-      ],
+      values: [{ fieldId: ACME.dockedTo, value: { value: ABSENT_ASSET } }],
     },
   ],
   condition: {

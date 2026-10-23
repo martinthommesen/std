@@ -20,6 +20,7 @@ import type { Operation } from "@std/definitions/operation";
 import { Deferred, Duration, Effect, Fiber, Ref } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import type { ClaimedDelivery } from "../src/outbox/delivery-claims.ts";
 import type {
@@ -36,7 +37,7 @@ import type { WorkerProbesApi } from "../src/outbox/worker.ts";
 import { createRecord } from "../src/records/save-pipeline.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { deliveriesWhere, subscribe } from "./outbox-support.ts";
-import { ACME, change, values } from "./schema-support.ts";
+import { change, values } from "./schema-support.ts";
 import {
   createAsset,
   expireLease,

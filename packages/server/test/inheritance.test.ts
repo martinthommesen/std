@@ -6,13 +6,13 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { CLASS_CHANGE_REFUSED_SQLSTATE } from "../src/platform/migrations/0001-core.ts";
 import { WIDENED_CHECK_NOTE } from "../src/schema/plan.ts";
 import { hygienic } from "../src/sql/errors.ts";
 import { TABLES } from "./records-support.ts";
 import {
-  ACME,
   addField,
   coordinatorGone,
   insertRecordsFlushed,

@@ -18,6 +18,11 @@ import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import {
+  PLATFORM_CLASS_IDS,
+  SYSTEM_USER_ID,
+  USER_CLASS_ID,
+} from "@std/definitions/well-known";
 import { runPlatformMigrations } from "@std/server/platform/runner";
 import { CLI_APPLICATION_PREFIX } from "@std/server/sql/database-config";
 import { Transactions } from "@std/server/sql/transactions";
@@ -43,15 +48,10 @@ const BATCH = 100;
 /** The batch the run is stopped in (0-based): seven batches commit first. */
 const BARRIER_BATCH = 7;
 
-/** `core.change`'s platform class and `core.user`, by stable ID. */
-const CHANGE_CLASS_ID = "edde151d-f204-4639-bcbf-a4793f86a219";
-const USER_CLASS_ID = "da385db7-b2b7-4a1d-a1a9-42e8e0bb7992";
-const SYSTEM_USER_ID = "1970f1d9-a830-4414-ba8e-210e07952a85";
-
 /** A change entry for version 2 of the user `$1`, the backfill's key. */
 const BARRIER_ENTRY = `INSERT INTO core."change" (id, class_id, version, created_at, created_by, updated_at, updated_by,
     operation_id, record_id, record_class_id, record_version, kind, actor_id, cause, schema_revision, occurred_at, fields)
-  VALUES (uuidv7(), '${CHANGE_CLASS_ID}', 1, now(), '${SYSTEM_USER_ID}', now(), '${SYSTEM_USER_ID}',
+  VALUES (uuidv7(), '${PLATFORM_CLASS_IDS.change}', 1, now(), '${SYSTEM_USER_ID}', now(), '${SYSTEM_USER_ID}',
     uuidv7(), $1::uuid, '${USER_CLASS_ID}', 2, 'update', '${SYSTEM_USER_ID}', '{"kind": "system"}', 0, now(), '{}')`;
 
 /** Ends the barrier transaction with a rollback. */

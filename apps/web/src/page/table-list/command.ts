@@ -1,9 +1,9 @@
 import { isTmfError } from "@std/api/client";
 import { Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
-import { today } from "foldkit/calendar";
 import { replaceUrl } from "foldkit/navigation";
 
+import { calendarToday } from "../../calendar.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import type { SchemaRevision as Revision } from "../../domain/schema-revision.ts";
 import {
@@ -17,9 +17,6 @@ import {
 import { StdApi, atRevision, responseRevision } from "../../std-client.ts";
 import { Message } from "./message.ts";
 import type { ListError } from "./model.ts";
-
-/** The zone of the Date Pickers' "today": never the device's (5.7). */
-const CALENDAR_ZONE = "UTC";
 
 /** A response without `STD-Schema-Revision`, which every API response has. */
 // oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
@@ -251,9 +248,9 @@ export const LoadRecords = Command.define("LoadRecords", {
 
 /** Reads today's date in UTC, for the Date Pickers' "today" mark. */
 export const ReadToday = Command.define("ReadToday", {
-  execute: today
-    .inZone(CALENDAR_ZONE)
-    .pipe(Effect.map((date) => Message.CompletedReadToday({ today: date }))),
+  execute: calendarToday.pipe(
+    Effect.map((date) => Message.CompletedReadToday({ today: date }))
+  ),
   messages: [Message.CompletedReadToday],
 });
 

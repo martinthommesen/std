@@ -87,7 +87,7 @@ import {
   ensureSite,
   SITE_NAMESPACE_ID,
 } from "./schema-support.ts";
-import { waitUntil } from "./support.ts";
+import { lockWaiterCount, waitUntil } from "./support.ts";
 
 const ITEM = "site.fuzz_item";
 const SPECIAL = "site.fuzz_special";
@@ -1588,16 +1588,9 @@ const freshRecord = Effect.fn("ErrorMatrix.freshRecord")(function* freshRecord(
 });
 
 /** Some backend of this database waits for a lock. */
-const someoneWaitsOnALock = Effect.gen(function* someoneWaits() {
-  const sql = yield* SqlClient.SqlClient;
-
-  const rows = yield* sql.unsafe<{ readonly waiting: string }>(
-    `SELECT count(*)::text AS waiting FROM pg_stat_activity
-      WHERE datname = current_database() AND wait_event_type = 'Lock'`
-  );
-
-  return Number(rows[0]?.waiting ?? "0") > 0;
-});
+const someoneWaitsOnALock = lockWaiterCount().pipe(
+  Effect.map((count) => count > 0)
+);
 
 /**
  * A unique value another fresh record already holds, in upper case.

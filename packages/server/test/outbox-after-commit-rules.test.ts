@@ -14,6 +14,7 @@ import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import { Effect, Layer } from "effect";
 
 import { acmeTestLayer, AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { RecordRuleSaveHooks } from "../src/hooks/record-rule-hooks.ts";
 import { ProductionDeliveryHandlers } from "../src/outbox/production-handlers.ts";
 import { WorkerSettings, workerPass } from "../src/outbox/worker.ts";
@@ -21,7 +22,7 @@ import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
-import { ACME, addRecordRule, freshId, values } from "./schema-support.ts";
+import { addRecordRule, freshId, values } from "./schema-support.ts";
 import { createAsset, updateAsset } from "./worker-support.ts";
 
 const AUDIT_NAME = `audit ${freshId().slice(0, 8)}`;

@@ -9,11 +9,13 @@ import { InstanceSettings } from "../config/instance-settings.ts";
 import { collectionNameOf } from "../http/api/table-names.ts";
 import { writeChangeEntry } from "../records/change-entry.ts";
 import { writeChangeImage } from "../records/change-image.ts";
-import { matchingSubscriptions } from "../records/outbox-producer.ts";
-import { NOW } from "../records/save-sql.ts";
+import {
+  insertDeliveries,
+  matchingSubscriptions,
+} from "../records/outbox-producer.ts";
 import type { StoredRecord } from "../records/stored-record.ts";
 import { decodeRows } from "../sql/rows.ts";
-import { STD_VERSION } from "../version.ts";
+import { WORKER_CHANNEL } from "../sql/wake-up.ts";
 import { eventIdOf } from "./event-id.ts";
 
 /** The reserved namespace of synthetic record topics. */
@@ -140,21 +142,12 @@ export const writeResourceTopicChanges = Effect.fn(
       { now, timeZone }
     );
 
-    for (const subscription of subscriptions) {
-      yield* sql.unsafe(
-        `INSERT INTO core.delivery (subscription_id, change_id, record_id, record_version, status, attempts, next_attempt_at, min_worker_version) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::int8, 'pending', 0, ${NOW}, $5::text)`,
-        [
-          subscription.id,
-          entry.changeId,
-          recordId,
-          String(recordVersion),
-          STD_VERSION,
-        ]
-      );
-    }
-
     if (subscriptions.length > 0) {
-      yield* sql`SELECT pg_notify('std_worker', '')`;
+      yield* insertDeliveries(
+        entry,
+        subscriptions.map((subscription) => subscription.id)
+      );
+      yield* sql`SELECT pg_notify(${WORKER_CHANNEL}, '')`;
     }
   }
 });

@@ -27,7 +27,8 @@ import type { Operation } from "@std/definitions/operation";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
-import { ACME, createFixtureUser } from "../../testing/src/acme-fixture.ts";
+import { createFixtureUser } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
   TestRequestOptions,

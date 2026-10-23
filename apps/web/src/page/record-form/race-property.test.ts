@@ -40,6 +40,7 @@ import {
   ticketTable,
 } from "../../form-fixture.ts";
 import { REVISION_3, revision } from "../../table-fixture.ts";
+import { formAfter } from "./fixture.ts";
 import { Message, ReadPurpose } from "./message.ts";
 import { FormMode } from "./model.ts";
 import type { Model, RelatedList } from "./model.ts";
@@ -223,14 +224,6 @@ interface Run {
   readonly maybeLastRead: Option.Option<Read>;
 }
 
-const after = (start: Model, ...messages: readonly Message[]): Model => {
-  const [first, ...rest] = messages;
-
-  return first === undefined
-    ? start
-    : after(update(start, first).model, ...rest);
-};
-
 /**
  * The incident's form at revision 5: the class's metadata loaded, "A"
  * saved and in flight, "AB" typed since.
@@ -238,7 +231,7 @@ const after = (start: Model, ...messages: readonly Message[]): Model => {
  * @returns The page.
  */
 const start = (): Model =>
-  after(
+  formAfter(
     init({
       id: 1,
       maybeAppRevision: Option.some(REVISION_3),

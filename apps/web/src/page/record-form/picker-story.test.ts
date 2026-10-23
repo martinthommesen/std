@@ -21,6 +21,7 @@ import { describe, expect, it } from "vitest";
 import { FieldInput } from "../../domain/form-input.ts";
 import type { MetaField, MetaTable } from "../../domain/metadata.ts";
 import {
+  present,
   REVISION_5,
   REVISION_6,
   TICKET,
@@ -38,34 +39,13 @@ import {
   LoadTarget,
   SearchTargets,
 } from "./command.ts";
+import { formAfter } from "./fixture.ts";
 import { Message, OutMessage } from "./message.ts";
 import { FormMode, PickerResults } from "./model.ts";
 import type { Model, Picker } from "./model.ts";
 import { MORE_RESULTS_ITEM, init, update } from "./update.ts";
 
 const ASSIGNEE = TICKET_FIELDS.assignee;
-
-const after = (start: Model, ...messages: readonly Message[]): Model => {
-  const [first, ...rest] = messages;
-
-  return first === undefined
-    ? start
-    : after(update(start, first).model, ...rest);
-};
-
-/**
- * A value the test knows is there.
- *
- * @param value - The value, or undefined.
- * @returns The value.
- */
-const present = <A>(value: A | undefined): A => {
-  if (value === undefined) {
-    throw new RangeError("the fixture lacks a value the test needs");
-  }
-
-  return value;
-};
 
 const userField = (overrides: Partial<MetaField>): MetaField => ({
   ...present(userTable.fields[0]),
@@ -109,7 +89,7 @@ const usersShownBy = (display: MetaField | null): MetaTable => ({
  * @returns The page.
  */
 const openPickerWith = (users: MetaTable): Model => {
-  const ready = after(
+  const ready = formAfter(
     init({
       id: 1,
       maybeAppRevision: Option.some(REVISION_3),
@@ -346,7 +326,7 @@ describe("a search refused with SchemaChanged", () => {
   });
 
   it("takes only the answer to the target's latest request (review round 3)", () => {
-    const reloading = after(
+    const reloading = formAfter(
       openPickerWith(userTable),
       Message.GotPickerMessage({
         fieldId: ASSIGNEE,
@@ -356,7 +336,7 @@ describe("a search refused with SchemaChanged", () => {
     );
 
     // The answer to the first request, arriving after the second was sent.
-    const late = after(
+    const late = formAfter(
       reloading,
       Message.SucceededLoadTarget({ request: 1, table: userTable })
     );
@@ -366,7 +346,7 @@ describe("a search refused with SchemaChanged", () => {
       AsyncData.isRefreshing(late.targets[USER_TABLE_NAME] ?? AsyncData.Idle())
     ).toBeTruthy();
 
-    const current = after(
+    const current = formAfter(
       late,
       Message.SucceededLoadTarget({ request: 2, table: renamedUsers })
     );
@@ -467,7 +447,7 @@ describe("a search refused with SchemaChanged", () => {
 
 describe("the picker's toggle button", () => {
   it("lists the first targets when the field already holds a value", () => {
-    const closed = after(
+    const closed = formAfter(
       openPickerWith(userTable),
       Message.GotPickerMessage({
         fieldId: ASSIGNEE,

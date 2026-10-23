@@ -43,20 +43,6 @@ export const ACME_SET_DIRECTORY = new URL(
   import.meta.url
 ).pathname;
 
-/** Stable IDs of the acme set. */
-export const ACME = {
-  asset: "989151bb-a69f-4b18-b73d-9e19a4e7514c",
-  cost: "6dfdc15e-7b81-40ba-aaac-6d7ad5a0d717",
-  laptop: "6a365314-6d1b-4e4d-b166-73f29f808504",
-  monitor: "87363f0e-8122-4569-8fc8-ec8c5277a71b",
-  name: "6438aa02-739d-46c0-94cc-ecea44488210",
-  namespace: "639583a8-9b13-4227-94b1-5cae597ac5f5",
-  purchasedOn: "4da75c5e-eb4d-499d-ae10-ed167bfb3185",
-  purchasedOnOverride: "8c8bcc5d-5818-45f6-92dc-3e2e43749e84",
-  serial: "35989424-54b4-4d99-adfe-649cb4bac237",
-  status: "5ed5f951-f6da-47ed-967a-c726af083d44",
-} as const;
-
 /** Fast retries for tests that provoke lock timeouts. */
 export const FAST_RETRIES: ChangeSetOptions = {
   retryDelays: [
@@ -305,15 +291,17 @@ export const addOverride = (
 /**
  * Creates a role and returns its ID.
  * @param name - The role name.
+ * @param id - The role ID, generated when omitted.
  * @returns The operation and the role ID.
  */
 export const addRole = (
-  name: string
+  name: string,
+  id: string = freshId()
 ): BuiltOperation<Extract<Operation, { op: "createRole" }>> => {
   const definition: RoleDraft = {
     ...LOCAL,
     helpText: null,
-    id: freshId(),
+    id,
     kind: "role",
     label: name,
     name,
@@ -604,3 +592,14 @@ export const seqScans = (table: string) =>
     ),
     Effect.map(([value]) => Number(value))
   );
+
+/**
+ * The current version of a definition.
+ *
+ * @param id - The definition.
+ * @returns Its version, 0 when unknown.
+ */
+export const definitionVersion = (id: string) =>
+  Effect.gen(function* readVersion() {
+    return (yield* (yield* Catalog).refresh).get(id)?.version ?? 0;
+  });

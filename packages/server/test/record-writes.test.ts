@@ -9,6 +9,7 @@ import { USER_CLASS_ID } from "@std/definitions/well-known";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Result } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import {
   createRecord,
   deleteRecord,
@@ -27,7 +28,7 @@ import {
   TABLES,
   USERS,
 } from "./records-support.ts";
-import { ACME, values } from "./schema-support.ts";
+import { values } from "./schema-support.ts";
 
 const createAs = (endpointClassId: string, body: JsonValue) =>
   createRecord({ body, endpointClassId });

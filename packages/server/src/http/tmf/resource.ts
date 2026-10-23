@@ -91,7 +91,7 @@ import {
 import { jsonBodyOf, mediaTypeOf, queryOf } from "../api/request.ts";
 import { classOfType } from "../api/table-names.ts";
 import { textBodyOf } from "../body-limits.ts";
-import { expectedVersionOf } from "../record-writes.ts";
+import { optionalExpectedVersionOf } from "../record-writes.ts";
 import {
   checkRequestRevision,
   checkUnscopedRevision,
@@ -1130,8 +1130,7 @@ export const readTmfPatch = Effect.fn("Tmf.readPatch")(function* readTmfPatch(
 ) {
   const header = request.headers["if-match"];
 
-  const expectedVersion =
-    header === undefined ? null : yield* expectedVersionOf(header);
+  const expectedVersion = yield* optionalExpectedVersionOf(header);
 
   const mediaType = mediaTypeOf(request);
 
@@ -1449,8 +1448,7 @@ export const readTmfDelete = Effect.fn("Tmf.readDelete")(
   function* readTmfDelete(request: HttpServerRequest) {
     const header = request.headers["if-match"];
 
-    const expectedVersion =
-      header === undefined ? null : yield* expectedVersionOf(header);
+    const expectedVersion = yield* optionalExpectedVersionOf(header);
 
     const text = yield* textBodyOf(request);
 

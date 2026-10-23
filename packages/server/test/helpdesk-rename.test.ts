@@ -18,7 +18,7 @@
  * Either way the old name becomes an unknown field (no aliases, 1.1).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { TableMetadata } from "@std/api/table-metadata";
+import type { TableMetadata } from "@std/api/table-metadata";
 import type {
   LayoutElementEntry,
   NamedSetFile,
@@ -27,7 +27,7 @@ import type {
 } from "@std/definitions/set-file";
 import { isJsonString } from "@std/values/json-value";
 import type { JsonObject } from "@std/values/json-value";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer } from "effect";
 
 import {
   HELPDESK,
@@ -42,6 +42,7 @@ import { readSetDirectory } from "../src/config/set-files.ts";
 import { numberOf } from "./api-support.ts";
 import { writeSetDirectory } from "./config-support.ts";
 import {
+  fetchMetadata,
   allPages,
   codeOf,
   collectionOf,
@@ -49,7 +50,7 @@ import {
   recordPath,
   resourceOf,
 } from "./reads-support.ts";
-import { definitionVersion } from "./schema-paths-support.ts";
+import { definitionVersion } from "./schema-support.ts";
 import { patch } from "./writes-support.ts";
 
 const INCIDENT = "helpdesk.incident";
@@ -60,8 +61,6 @@ const idOf = (resource: JsonObject): string => {
   return id !== undefined && isJsonString(id) ? id : "";
 };
 
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
-
 type MetaTable = typeof TableMetadata.Type;
 
 type MetaSavedFilter = NonNullable<MetaTable["savedFilters"]>[number];
@@ -69,18 +68,11 @@ type MetaSavedFilter = NonNullable<MetaTable["savedFilters"]>[number];
 const metadataOf = Effect.fn("HelpdeskRename.metadataOf")(function* metadataOf(
   token: string
 ) {
-  const http = yield* TestHttpClient;
-
-  const response = yield* http.get(
-    `/api/v1/tableMetadata/${collectionOf(INCIDENT)}`,
-    {
-      token,
-    }
-  );
+  const { body, response } = yield* fetchMetadata(token, INCIDENT);
 
   assert.strictEqual(response.status, 200, response.text);
 
-  return yield* decodeMetadata(response.json).pipe(Effect.orDie);
+  return body;
 });
 
 /**

@@ -20,7 +20,7 @@
  *   agent's field states next to the admin's.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { TableMetadata } from "@std/api/table-metadata";
+import type { TableMetadata } from "@std/api/table-metadata";
 import type {
   AccessRuleEntry,
   FieldEntry,
@@ -38,7 +38,7 @@ import {
 import type { HelpdeskVersion } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { readSetDirectory } from "../src/config/set-files.ts";
-import { collectionOf } from "./reads-support.ts";
+import { fetchMetadata } from "./reads-support.ts";
 
 const TICKET = "helpdesk.ticket";
 const INCIDENT = "helpdesk.incident";
@@ -142,8 +142,6 @@ const fieldOf = (
   id: string
 ): FieldEntry | undefined => table?.fields?.find((field) => field.id === id);
 
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
-
 type MetaTable = typeof TableMetadata.Type;
 
 type MetaField = MetaTable["fields"][number];
@@ -158,16 +156,11 @@ const metadataOf = Effect.fn("HelpdeskSet.metadataOf")(function* metadataOf(
   token: string,
   table: string
 ) {
-  const http = yield* TestHttpClient;
-
-  const response = yield* http.get(
-    `/api/v1/tableMetadata/${collectionOf(table)}`,
-    { token }
-  );
+  const { body, response } = yield* fetchMetadata(token, table);
 
   assert.strictEqual(response.status, 200, response.text);
 
-  return yield* decodeMetadata(response.json).pipe(Effect.orDie);
+  return body;
 });
 
 const metaField = (table: MetaTable, id: string): MetaField | undefined =>

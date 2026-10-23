@@ -41,7 +41,7 @@ import {
   schemaTestLayer,
   values,
 } from "./schema-support.ts";
-import { waitUntil } from "./support.ts";
+import { lockWaiterCount, waitUntil } from "./support.ts";
 
 /** The fixture's classes. */
 export const C = {
@@ -1010,11 +1010,9 @@ export const columnOf = (table: string, column: string, id: string) =>
  * @returns Nothing, once one waits.
  */
 export const someoneWaits = waitUntil(
-  values(
-    `SELECT count(*)::text AS value FROM pg_stat_activity
-   WHERE datname = current_database() AND pid <> pg_backend_pid()
-     AND wait_event_type = 'Lock'`
-  ).pipe(Effect.map(([value]) => value !== "0")),
+  lockWaiterCount({ excludeCurrent: true }).pipe(
+    Effect.map((waiting) => waiting > 0)
+  ),
   "20 seconds"
 ).pipe(Effect.orDie);
 

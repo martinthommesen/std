@@ -44,8 +44,12 @@ import {
   insertAdmin,
   overridesOf,
 } from "./config-support.ts";
-import { definitionVersion } from "./schema-paths-support.ts";
-import { currentRevision, schemaTestLayer, values } from "./schema-support.ts";
+import {
+  definitionVersion,
+  currentRevision,
+  schemaTestLayer,
+  values,
+} from "./schema-support.ts";
 
 const { choices, fields, layouts } = HELPDESK;
 

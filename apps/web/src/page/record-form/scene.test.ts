@@ -43,22 +43,15 @@ import {
   KeepFocusClearOfActionBar,
   UpdateRecord,
 } from "./command.ts";
+import { formAfter } from "./fixture.ts";
 import { Message, OutMessage, UnreadSavedRecord } from "./message.ts";
 import { FormMode, WriteError } from "./model.ts";
 import type { Model } from "./model.ts";
 import { init, update } from "./update.ts";
 import { view } from "./view.ts";
 
-const after = (start: Model, ...messages: readonly Message[]): Model => {
-  const [first, ...rest] = messages;
-
-  return first === undefined
-    ? start
-    : after(update(start, first).model, ...rest);
-};
-
 const openTicket = (record: typeof ticketRecord): Model =>
-  after(
+  formAfter(
     init({
       id: 1,
       maybeAppRevision: Option.none(),
@@ -80,7 +73,7 @@ const openTicket = (record: typeof ticketRecord): Model =>
 
 const ready = openTicket(ticketRecord);
 
-const creating = after(
+const creating = formAfter(
   init({
     id: 1,
     maybeAppRevision: Option.none(),
@@ -328,7 +321,7 @@ describe("the record form", () => {
   });
 
   it("a refused definition change lists every problem, and shows one beside the field it names", () => {
-    const refused = after(
+    const refused = formAfter(
       ready,
       Message.UpdatedText({
         fieldId: TICKET_FIELDS.shortDescription,
@@ -533,7 +526,7 @@ describe("the history panel", () => {
     version: 3,
   };
 
-  const withHistory = after(
+  const withHistory = formAfter(
     ready,
     Message.ToggledHistory({ isOpen: true }),
     Message.SucceededLoadHistory({
@@ -580,7 +573,7 @@ describe("the history panel", () => {
   });
 
   it("is busy while it reloads, its earlier entries still shown, and not once the answer is in", () => {
-    const reloading = after(
+    const reloading = formAfter(
       withHistory,
       Message.UpdatedText({
         fieldId: TICKET_FIELDS.shortDescription,
@@ -608,7 +601,7 @@ describe("the history panel", () => {
     scene(
       { update, view },
       given(
-        after(
+        formAfter(
           reloading,
           Message.SucceededLoadHistory({
             entries: [entry, hidden],
@@ -662,7 +655,7 @@ describe("a stale form", () => {
     }),
   };
 
-  const reloaded = after(
+  const reloaded = formAfter(
     ready,
     Message.UpdatedText({
       fieldId: TICKET_FIELDS.shortDescription,
@@ -711,7 +704,7 @@ describe("a stale form", () => {
   });
 
   it("then shows the new definition with the input that applies, what changed, and what was not kept", () => {
-    const outdated = after(
+    const outdated = formAfter(
       reloaded,
       Message.SucceededLoadFormMetadata({
         revision: REVISION_6,
@@ -760,7 +753,7 @@ describe("a stale form", () => {
   });
 
   it("holds Save back, with a way to reload the record, when the record could not be read under the new definition", () => {
-    const notReread = after(
+    const notReread = formAfter(
       reloaded,
       Message.SucceededLoadFormMetadata({
         revision: REVISION_6,
@@ -807,7 +800,7 @@ describe("a stale form", () => {
 describe("a related list's cells", () => {
   const TASK_ID = "019a0000-0000-7000-8000-0000000f2002";
 
-  const shown = after(
+  const shown = formAfter(
     init({
       id: 1,
       maybeAppRevision: Option.none(),
@@ -891,7 +884,7 @@ describe("a related list without columns", () => {
 
   const TASK_ID = "019a0000-0000-7000-8000-0000000f2001";
 
-  const shown = after(
+  const shown = formAfter(
     init({
       id: 1,
       maybeAppRevision: Option.none(),
@@ -945,7 +938,7 @@ describe("a related list without columns", () => {
 describe("a related list loading another page", () => {
   const LIST = 1;
 
-  const onEmptyPage = after(
+  const onEmptyPage = formAfter(
     ready,
     Message.SucceededLoadFormMetadata({
       revision: REVISION_5,

@@ -40,6 +40,7 @@ import { deadDeliveries } from "../src/outbox/metrics.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { asArray, asObject, apiCallers, idsOf, textOf } from "./api-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
+import { linksOf } from "./paging.ts";
 import { readsTestLayer } from "./reads-support.ts";
 
 const COLLECTION = "/api/v1/deadDelivery";
@@ -78,15 +79,6 @@ const pendingSecond = Effect.fn("DeadLetterTest.pendingSecond")(
     yield* sql`UPDATE core.delivery SET status = 'pending', attempts = 0, finished_at = NULL WHERE id = ${secondId}::int8`;
   }
 );
-
-const linksOf = (header: string) =>
-  new Map(
-    header.split(", ").map((link) => {
-      const [target = "", relation = ""] = link.split('; rel="');
-
-      return [relation.slice(0, -1), target.slice(1, -1)] as const;
-    })
-  );
 
 describe("dead-letter API", () => {
   it("validates int8 identities without losing precision above the JavaScript integer range", () => {

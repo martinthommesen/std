@@ -27,6 +27,7 @@ import {
   apiCallers,
   withQuery,
 } from "./api-support.ts";
+import { linksOf } from "./paging.ts";
 import { readsTestLayer } from "./reads-support.ts";
 
 const revisionsChecked = (response: TestResponse): number[] => {
@@ -35,9 +36,12 @@ const revisionsChecked = (response: TestResponse): number[] => {
   return revisionsOf(response);
 };
 
+// History assertions select word-only navigation relations; version relations remain distinct.
+const WORD_RELATION = /^\w+$/u;
+
 const linkRels = (response: TestResponse): string[] =>
-  [...(response.headers.get("link") ?? "").matchAll(/rel="(?<rel>\w+)"/gu)].map(
-    (match) => match.groups?.rel ?? ""
+  [...linksOf(response.headers.get("link")).keys()].filter((relation) =>
+    WORD_RELATION.test(relation)
   );
 
 /**

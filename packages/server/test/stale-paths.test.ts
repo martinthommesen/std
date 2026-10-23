@@ -22,6 +22,7 @@ import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { Effect } from "effect";
 import type { Layer } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
   TestRequestOptions,
@@ -48,7 +49,7 @@ import {
   recordPath,
 } from "./reads-support.ts";
 import { CHANGE_SETS, postChangeSet } from "./schema-paths-support.ts";
-import { ACME, change, createRole, values } from "./schema-support.ts";
+import { change, createRole, values } from "./schema-support.ts";
 
 /** The paths, in the order of every expectation below. */
 const PATHS = [

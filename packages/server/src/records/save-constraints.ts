@@ -27,14 +27,11 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { Effect } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
 
-import { toDatabaseError } from "../sql/errors.ts";
+import { SQLSTATE_UNIQUE_VIOLATION, toDatabaseError } from "../sql/errors.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 
 /** SQLSTATE `23503` (`foreign_key_violation`). */
 export const SQLSTATE_FOREIGN_KEY_VIOLATION = "23503";
-
-/** SQLSTATE `23505` (`unique_violation`). */
-export const SQLSTATE_UNIQUE_VIOLATION = "23505";
 
 /** SQLSTATE `23502` (`not_null_violation`). */
 export const SQLSTATE_NOT_NULL_VIOLATION = "23502";

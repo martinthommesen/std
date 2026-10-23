@@ -12,6 +12,7 @@ import { ConfigSnapshot } from "@std/definitions/snapshot";
 import type { DecodedInput } from "@std/values/field-value";
 import { Effect, Ref } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import type { BeforeWriteInput } from "../src/records/save-hooks.ts";
 import { createRecord, updateRecord } from "../src/records/save-pipeline.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
@@ -26,7 +27,7 @@ import {
   rootVersion,
   setUpAcme,
 } from "./records-support.ts";
-import { ACME, freshId } from "./schema-support.ts";
+import { freshId } from "./schema-support.ts";
 
 type Rewrite = (
   input: BeforeWriteInput

@@ -23,3 +23,13 @@ export interface StoredRecord {
    */
   readonly values: ReadonlyMap<DefinitionId, StoredValue | null>;
 }
+
+/**
+ * A record's values as a fresh image keyed by field ID.
+ * @param record - The stored record.
+ * @returns Its values, including write-only presence markers.
+ */
+export const imageOf = (
+  record: StoredRecord
+): Record<DefinitionId, StoredValue | null> =>
+  Object.fromEntries(record.values);

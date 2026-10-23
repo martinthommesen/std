@@ -44,9 +44,9 @@ import {
 } from "../src/http/definition-writes.ts";
 import { DatabaseConfig } from "../src/sql/database-config.ts";
 import { observe } from "./authz-support.ts";
+import { committedState } from "./committed-state.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
-  committedState,
   genericFormOf,
   postChangeSet,
   sendGeneric,

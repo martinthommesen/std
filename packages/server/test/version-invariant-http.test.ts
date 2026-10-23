@@ -28,12 +28,12 @@ import {
 } from "fast-check";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { deliveriesOf, subscribe } from "./outbox-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import { ACME } from "./schema-support.ts";
 import {
   ASSET,
   create,

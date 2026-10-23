@@ -13,6 +13,7 @@ import type { JsonObject } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
   TestRequestOptions,
@@ -40,7 +41,7 @@ import {
 } from "./api-support.ts";
 import type { ApiCallers } from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import { ACME, addAccessRule, addField, change } from "./schema-support.ts";
+import { addAccessRule, addField, change } from "./schema-support.ts";
 
 const changedKinds = (response: TestResponse): string[] =>
   asArray(asObject(response.json).changes).map(

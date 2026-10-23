@@ -30,7 +30,7 @@ import type { DefinitionId } from "@std/definitions/ids";
 import { RENAMABLE, RETIRABLE, UPDATABLE } from "@std/definitions/operation";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 
-import { TABLE_OF } from "../catalog/definition-tables.ts";
+import { columnsOf, tableOf } from "../catalog/definition-tables.ts";
 import { DEFINITION_KIND_OF_TABLE } from "./change-sets.ts";
 import { READ_ONLY_COLUMNS } from "./definition-writes.ts";
 
@@ -43,16 +43,8 @@ const NEVER: WriteStates = { create: "no", update: "no" };
  * @param column - The column (the field's name).
  * @returns The property, or undefined for a column no write names.
  */
-const propertyOf = (
-  kind: DefinitionKind,
-  column: string
-): string | undefined => {
-  const entry = TABLE_OF.get(kind);
-
-  return [...(entry?.columns ?? []), ...(entry?.special ?? [])].find(
-    (spec) => spec.column === column
-  )?.property;
-};
+const propertyOf = (kind: DefinitionKind, column: string): string | undefined =>
+  columnsOf(tableOf(kind)).find((spec) => spec.column === column)?.property;
 
 const updatable = (kind: DefinitionKind, property: string): boolean => {
   if (property === "name") {

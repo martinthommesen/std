@@ -6,6 +6,7 @@ import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 
 import { AcmeFixture, acmeTestLayer } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
   TestRequestOptions,
@@ -24,7 +25,6 @@ import {
   API,
   withQuery,
 } from "./api-support.ts";
-import { ACME } from "./schema-support.ts";
 
 // The security regression workload requested in F6: 2,000 versions, far beyond a one-entry page.
 const LARGE_HISTORY = 2000;

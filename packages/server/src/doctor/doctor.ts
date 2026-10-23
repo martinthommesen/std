@@ -34,6 +34,7 @@ import { loadSnapshot } from "../catalog/load.ts";
 import { layerTablesExist, readLayerState } from "../config/layer-store.ts";
 import type { PlatformMigration } from "../platform/migration.ts";
 import { PLATFORM_MIGRATIONS } from "../platform/migrations.ts";
+import { SQLSTATE_LOCK_NOT_AVAILABLE } from "../sql/errors.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import { parseConfigState } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
@@ -178,9 +179,6 @@ const allChecks = Effect.fn("Doctor.checks")(function* allChecks(
   ];
 });
 
-/** SQLSTATE of a lock timeout. */
-const LOCK_NOT_AVAILABLE = "55P03";
-
 /**
  * The finding for a diagnostic transaction that timed out waiting for a
  * table lock, naming the strong locks other sessions hold, read after the
@@ -245,7 +243,7 @@ export const runDoctor = Effect.fn("Doctor.run")(function* runDoctor(
   const findings = byCheck(
     yield* diagnostic(allChecks(options)).pipe(
       Effect.catchTag("DatabaseError", (failure) =>
-        failure.sqlState === LOCK_NOT_AVAILABLE
+        failure.sqlState === SQLSTATE_LOCK_NOT_AVAILABLE
           ? lockTimeoutFinding.pipe(Effect.map((entry) => [entry]))
           : Effect.fail(failure)
       )

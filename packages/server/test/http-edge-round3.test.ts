@@ -1,4 +1,5 @@
 import { assert, describe, it, layer } from "@effect/vitest";
+import { DEFAULT_DATABASE_URL } from "@std/postgres/transport";
 import { decodeIn } from "@std/values/codec";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { forEach } from "effect/Effect";
@@ -17,10 +18,7 @@ import {
   BODY_MIN_BYTES_PER_SECOND,
   BODY_PROGRESS_WINDOW_MS,
 } from "../src/http/body-limits.ts";
-import {
-  DatabaseConfig,
-  DEFAULT_DATABASE_URL,
-} from "../src/sql/database-config.ts";
+import { DatabaseConfig } from "../src/sql/database-config.ts";
 import { edgeRequest, edgeServer, edgeUpload } from "./http-edge-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import { waitUntil } from "./support.ts";

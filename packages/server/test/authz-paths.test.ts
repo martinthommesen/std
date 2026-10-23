@@ -28,6 +28,7 @@ import type { Layer } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import type { AcmeData } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
   TestRequestOptions,
@@ -70,8 +71,8 @@ import {
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
-import { CHANGE_SETS, definitionVersion } from "./schema-paths-support.ts";
-import { ACME, createRole, values } from "./schema-support.ts";
+import { CHANGE_SETS } from "./schema-paths-support.ts";
+import { definitionVersion, createRole, values } from "./schema-support.ts";
 import { errorOf } from "./support.ts";
 import { ASSET, LAPTOP, MONITOR, versionOf } from "./writes-support.ts";
 

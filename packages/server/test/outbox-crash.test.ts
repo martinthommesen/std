@@ -25,6 +25,7 @@ import { Deferred, Effect, Ref } from "effect";
 import type { Scope } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import type {
   Delivery,
@@ -35,7 +36,7 @@ import { createRecord } from "../src/records/save-pipeline.ts";
 import { killAndAwait } from "./cli-support.ts";
 import { WORKER_CHILD_APPLICATION_NAME } from "./fixtures/worker-child-name.ts";
 import { deliveriesWhere, subscribe } from "./outbox-support.ts";
-import { ACME, values } from "./schema-support.ts";
+import { values } from "./schema-support.ts";
 import { waitUntil } from "./support.ts";
 import {
   createAsset,

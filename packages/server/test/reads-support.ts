@@ -3,6 +3,7 @@
  * client, the API's paths for a qualified table name, and the parts of a
  * response the tests read (Contracts 10).
  */
+import { TableMetadata } from "@std/api/table-metadata";
 import { apiTableNameOf } from "@std/definitions/names";
 import {
   isJsonArray,
@@ -10,7 +11,7 @@ import {
   isJsonString,
 } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -207,3 +208,24 @@ export const allPages = Effect.fn("ReadsSupport.allPages")(function* allPages(
 
   return { resources, texts, total };
 });
+
+const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
+
+/**
+ * Fetches typed table metadata while retaining the raw response for assertions.
+ * @param token - The caller's session.
+ * @param table - The qualified table name.
+ * @returns The decoded body and original response.
+ */
+export const fetchMetadata = Effect.fn("Test.fetchMetadata")(
+  function* fetchMetadata(token: string, table: string) {
+    const response = yield* (yield* TestHttpClient).get(
+      `/api/v1/tableMetadata/${collectionOf(table)}`,
+      { token }
+    );
+
+    const body = yield* decodeMetadata(response.json).pipe(Effect.orDie);
+
+    return { body, response };
+  }
+);

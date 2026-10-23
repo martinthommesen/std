@@ -230,6 +230,9 @@ importers:
       '@std/tmf':
         specifier: workspace:*
         version: link:packages/tmf
+      '@std/values':
+        specifier: workspace:*
+        version: link:packages/values
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
@@ -453,6 +456,9 @@ importers:
       '@std/api':
         specifier: workspace:*
         version: link:../../packages/api
+      '@std/definitions':
+        specifier: workspace:*
+        version: link:../../packages/definitions
       '@std/server':
         specifier: workspace:*
         version: link:../../packages/server

@@ -14,8 +14,9 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import { ACME, AcmeFixture, acmeTestLayer } from "@std/testing/acme-fixture";
+import { AcmeFixture, acmeTestLayer } from "@std/testing/acme-fixture";
 import type { AcmeData } from "@std/testing/acme-fixture";
+import { ACME } from "@std/testing/acme-ids";
 import { TestDatabase } from "@std/testing/test-database";
 import type { JsonValue } from "@std/values/json-value";
 import { Context, Effect, Layer, Schema } from "effect";

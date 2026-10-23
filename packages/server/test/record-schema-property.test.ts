@@ -23,7 +23,7 @@
  * (`InvalidReference`, after validation passed).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { TableMetadata } from "@std/api/table-metadata";
+import type { TableMetadata } from "@std/api/table-metadata";
 import type { AccessRuleDraft, ChoiceDraft } from "@std/definitions/definition";
 import { FieldErrorSchema } from "@std/definitions/field-errors";
 import type { FieldError } from "@std/definitions/field-errors";
@@ -52,18 +52,18 @@ import {
   AcmeFixture,
   createFixtureUser,
 } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { numberOf, textOf } from "./api-support.ts";
 import {
-  collectionOf,
+  fetchMetadata,
   readsTestLayer,
   recordPath,
   resourceOf,
 } from "./reads-support.ts";
 import {
-  ACME,
   addField,
   addOverride,
   change,
@@ -482,18 +482,11 @@ const buildTable = Effect.fn("RecordSchemaProperty.buildTable")(
   }
 );
 
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
-
 const metadataOf = Effect.fn("RecordSchemaProperty.metadataOf")(
   function* metadataOf(token: string, table: string) {
-    const http = yield* TestHttpClient;
+    const { body } = yield* fetchMetadata(token, table);
 
-    const response = yield* http.get(
-      `/api/v1/tableMetadata/${collectionOf(table)}`,
-      { token }
-    );
-
-    return yield* decodeMetadata(response.json).pipe(Effect.orDie);
+    return body;
   }
 );
 

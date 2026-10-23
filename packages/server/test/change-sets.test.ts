@@ -6,10 +6,10 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import {
-  ACME,
   coordinatorGone,
   createClass,
   insertRecordsFlushed,

@@ -14,11 +14,9 @@ import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type {
-  TestRequestOptions,
-  TestResponse,
-} from "../../testing/src/http-client.ts";
+import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import {
   patchOptions,
   UNKNOWN_ID,
@@ -37,44 +35,17 @@ import {
   apiCallers,
   withQuery,
 } from "./api-support.ts";
+import { linksOf } from "./paging.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import { ACME, addField, change } from "./schema-support.ts";
-
-/**
- * A response's `Link` header as relation and URI.
- *
- * @param response - The response.
- * @returns Each relation's URI.
- */
-const linksOf = (response: TestResponse): Map<string, string> => {
-  const header = response.headers.get("link") ?? "";
-  const links = new Map<string, string>();
-
-  for (const part of header === "" ? [] : header.split(", <")) {
-    const uriEnd = part.indexOf(">");
-    const relStart = part.indexOf('rel="', uriEnd) + 'rel="'.length;
-
-    links.set(
-      part.slice(relStart, part.indexOf('"', relStart)),
-      part.slice(part.startsWith("<") ? 1 : 0, uriEnd)
-    );
-  }
-
-  return links;
-};
+import { addField, change } from "./schema-support.ts";
 
 const pathOf = (uri: string): string => new URL(uri).pathname;
 
 describe("api-review-2", () => {
   it("reads Link headers", () => {
-    const links = linksOf({
-      headers: new Headers({
-        link: '<https://x/a>; rel="self", <https://x/a/history>; rel="version-history"',
-      }),
-      json: null,
-      status: 200,
-      text: "",
-    });
+    const links = linksOf(
+      '<https://x/a>; rel="self", <https://x/a/history>; rel="version-history"'
+    );
 
     assert.strictEqual(links.get("version-history"), "https://x/a/history");
   });
@@ -267,7 +238,7 @@ describe("api-review-2", () => {
           assert.strictEqual(created.status, 201, created.text);
 
           const createdHref = textOf(asObject(created.json).href);
-          const createdLinks = linksOf(created);
+          const createdLinks = linksOf(created.headers.get("link"));
 
           assert.strictEqual(
             createdLinks.get("version-history"),
@@ -289,7 +260,7 @@ describe("api-review-2", () => {
           for (const caller of [callers.bob, callers.admin]) {
             const resource = yield* http.get(laptop, caller);
             const href = textOf(asObject(resource.json).href);
-            const links = linksOf(resource);
+            const links = linksOf(resource.headers.get("link"));
 
             const history = yield* http.get(`${laptop}/history`, caller);
 
@@ -301,13 +272,13 @@ describe("api-review-2", () => {
             assert.strictEqual(links.get("version-history"), `${href}/history`);
             assert.strictEqual(links.get("latest-version"), hrefs.at(-1));
             assert.strictEqual(
-              linksOf(history).get("latest-version"),
+              linksOf(history.headers.get("link")).get("latest-version"),
               hrefs.at(-1)
             );
 
             for (const [index, entryHref] of hrefs.entries()) {
               const entry = yield* http.get(pathOf(entryHref), caller);
-              const entryLinks = linksOf(entry);
+              const entryLinks = linksOf(entry.headers.get("link"));
 
               assert.strictEqual(entry.status, 200, entry.text);
               assert.strictEqual(entryLinks.get("self"), entryHref);
@@ -622,7 +593,10 @@ describe("api-review-2", () => {
           const latest = textOf(asObject(asArray(full.json).at(-1)).href);
 
           assert.strictEqual(asArray(full.json).length, 3);
-          assert.strictEqual(linksOf(full).get("latest-version"), latest);
+          assert.strictEqual(
+            linksOf(full.headers.get("link")).get("latest-version"),
+            latest
+          );
 
           const lists = [
             ["kind=create", 1],
@@ -642,7 +616,7 @@ describe("api-review-2", () => {
             assert.strictEqual(listed.status, 200, `${query}: ${listed.text}`);
             assert.strictEqual(asArray(listed.json).length, count, query);
             assert.strictEqual(
-              linksOf(listed).get("latest-version"),
+              linksOf(listed.headers.get("link")).get("latest-version"),
               latest,
               query
             );

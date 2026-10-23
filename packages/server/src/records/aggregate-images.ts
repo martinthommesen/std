@@ -20,6 +20,7 @@ import type { OwnerEntry } from "./aggregate-state.ts";
 import { recordRelation } from "./relation.ts";
 import { loadRecord, loadRecords } from "./save-sql.ts";
 import { readRows } from "./sql-run.ts";
+import { imageOf } from "./stored-record.ts";
 import type { StoredRecord } from "./stored-record.ts";
 
 /** One record's image while settling. */
@@ -59,16 +60,6 @@ export interface SettleSet {
   readonly proposed: { count: number };
 }
 
-/**
- * The image of a stored record.
- *
- * @param record - The record.
- * @returns Its values by field ID.
- */
-const imageOfRecord = (
-  record: StoredRecord
-): Record<DefinitionId, StoredOrPlaintext> => Object.fromEntries(record.values);
-
 const rememberImage = (
   set: SettleSet,
   record: StoredRecord,
@@ -77,7 +68,7 @@ const rememberImage = (
   const image: SettleImage = {
     classId: record.classId,
     id: record.id,
-    image: imageOfRecord(record),
+    image: imageOf(record),
     key: record.id,
     ownerKey,
     rules: new Set(),

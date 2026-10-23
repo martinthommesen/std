@@ -3,7 +3,6 @@ import { NotFound } from "@std/api/errors/not-found";
 import { SessionToken } from "@std/api/session-token";
 import { TmfHubCreate, TMF688_PREFIX } from "@std/api/tmf688";
 import { Tmf688Api } from "@std/api/tmf688-api";
-import type { Condition } from "@std/definitions/condition";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer, Schema } from "effect";
@@ -62,7 +61,7 @@ import {
 import { originOf } from "../api/resource.ts";
 import { isTmfFailure, tmfErrorResponse } from "../api/tmf-error.ts";
 import { hubRateLimitResponse } from "../hubs.ts";
-import { expectedVersionOf } from "../record-writes.ts";
+import { optionalExpectedVersionOf } from "../record-writes.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
 import { recordServedRevision } from "../schema-revision-header.ts";
 import {
@@ -232,36 +231,6 @@ const prepareHubMutation = Effect.fn("Tmf688.prepareHubMutation")(
       body.query ?? null,
       input.origin
     );
-
-    if (target.api === "TMF688" && target.topicId !== null) {
-      const snapshot = yield* (yield* Catalog).current;
-      const field = snapshot.fieldByName(EVENT_CLASS_IDS.event, "topic");
-
-      if (field === undefined) {
-        return yield* new NotFound();
-      }
-
-      const topicCondition = {
-        left: { path: [field.id] },
-        op: "eq",
-        right: { value: target.topicId },
-      } as const;
-
-      const withTopic = (condition: Condition | null): Condition =>
-        condition === null
-          ? topicCondition
-          : { args: [condition, topicCondition], op: "and" };
-
-      return {
-        actor,
-        registration: {
-          ...registration,
-          condition: withTopic(registration.condition),
-          standardCondition: withTopic(registration.standardCondition),
-        },
-        target,
-      };
-    }
 
     return { actor, registration, target };
   }
@@ -665,8 +634,7 @@ const resourceRequest = Effect.fn("Tmf688.resourceRequest")(
       case "deleteTopic": {
         const header = input.request.headers["if-match"];
 
-        const expected =
-          header === undefined ? null : yield* expectedVersionOf(header);
+        const expected = yield* optionalExpectedVersionOf(header);
 
         yield* deleteTopic(id, input.origin, expected);
 

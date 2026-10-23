@@ -14,11 +14,12 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import { TableMetadata } from "@std/api/table-metadata";
-import type { ChoiceDraft, LayoutDraft } from "@std/definitions/definition";
+import type { TableMetadata } from "@std/api/table-metadata";
+import type { LayoutDraft } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -26,6 +27,7 @@ import { DEFINITION_KIND_OF_TABLE } from "../src/http/change-sets.ts";
 import { objectOf, signInAll } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import {
+  fetchMetadata,
   codeOf,
   collectionOf,
   readsTestLayer,
@@ -33,7 +35,7 @@ import {
   revisionOf,
 } from "./reads-support.ts";
 import {
-  ACME,
+  addChoice,
   addAccessRule,
   addField,
   change,
@@ -41,37 +43,13 @@ import {
   ensureSite,
 } from "./schema-support.ts";
 
-const EMPLOYEE = "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b";
-const ASSET_MANAGER = "081e3ce8-26a8-43a2-bc58-838d40b4c22d";
 const local = { owner: { layer: "local" }, protected: false } as const;
-
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
 
 /** A table's metadata, as the caller reads it. */
 type MetaTable = typeof TableMetadata.Type;
 
 const metaPath = (table: string): string =>
   `/api/v1/tableMetadata/${collectionOf(table)}`;
-
-const choice = (
-  fieldId: string,
-  key: string,
-  order: number,
-  hidden = false
-): Operation => {
-  const definition: ChoiceDraft = {
-    ...local,
-    fieldId,
-    hidden,
-    id: randomUUID(),
-    key,
-    kind: "choice",
-    label: key.toUpperCase(),
-    order,
-  };
-
-  return { definition, op: "createChoice" };
-};
 
 const layoutOp = (
   type: LayoutDraft["type"],
@@ -116,10 +94,10 @@ const setup = Effect.gen(function* setupMetadata() {
   const denyRule = randomUUID();
 
   yield* change([
-    choice(grade.id, "good", 1),
-    choice(grade.id, "fair", 2),
-    choice(grade.id, "scrap", 3, true),
-    choice(color.id, "silver", 1),
+    addChoice(grade.id, "good", { label: "GOOD", order: 1 }).op,
+    addChoice(grade.id, "fair", { label: "FAIR", order: 2 }).op,
+    addChoice(grade.id, "scrap", { hidden: true, label: "SCRAP", order: 3 }).op,
+    addChoice(color.id, "silver", { label: "SILVER", order: 1 }).op,
     layoutOp("form", [
       { kind: "section", label: "Money" },
       { fieldId: ACME.cost, kind: "field" },
@@ -149,7 +127,7 @@ const setup = Effect.gen(function* setupMetadata() {
         id: denyRule,
         kind: "accessRule",
         name: null,
-        roleIds: [EMPLOYEE],
+        roleIds: [ACME.employee],
         target: { fields: [vault.id], kind: "fields" },
       },
       op: "createAccessRule",
@@ -167,12 +145,11 @@ const setup = Effect.gen(function* setupMetadata() {
 
 const metadataOf = Effect.fn("MetadataFiltering.metadataOf")(
   function* metadataOf(token: string, table: string) {
-    const http = yield* TestHttpClient;
-    const response = yield* http.get(metaPath(table), { token });
+    const { body, response } = yield* fetchMetadata(token, table);
 
     assert.strictEqual(response.status, 200, response.text);
 
-    const decoded = yield* decodeMetadata(response.json).pipe(Effect.orDie);
+    const decoded = body;
 
     return {
       body: decoded,
@@ -503,7 +480,7 @@ describe("metadata filtering", () => {
           ]);
           yield* change([
             addField(vaultClass.id, "code", { kind: "integer" }).op,
-            choice(color.id, "black", 2),
+            addChoice(color.id, "black", { label: "BLACK", order: 2 }).op,
           ]);
 
           // A hidden table gains a reference to assets, a new hidden table
@@ -526,8 +503,8 @@ describe("metadata filtering", () => {
           const vaultNow = (yield* catalog.refresh).class(vaultClass.id);
 
           yield* change([
-            addAccessRule(vaultClass.id, [ASSET_MANAGER]).op,
-            addAccessRule(vaultClass.id, [ASSET_MANAGER], {
+            addAccessRule(vaultClass.id, [ACME.assetManager]).op,
+            addAccessRule(vaultClass.id, [ACME.assetManager], {
               fields: [assetRef.id],
             }).op,
             {

@@ -496,20 +496,15 @@ describe("form-state", () => {
         const snapshot = yield* (yield* Catalog).refresh;
         const agentRole = snapshot.roleByName("agent");
         assert.isDefined(agentRole);
-        const hidden = addAccessRule(HELPDESK.ticket, [agentRole?.id ?? ""]);
 
-        yield* hidden.op.op === "createAccessRule"
-          ? change([
-              {
-                ...hidden.op,
-                definition: {
-                  ...hidden.op.definition,
-                  condition: null,
-                  effect: "deny",
-                },
-              },
-            ])
-          : Effect.die(new Error("Expected an access rule"));
+        const hidden = addAccessRule(
+          HELPDESK.ticket,
+          [agentRole?.id ?? ""],
+          {},
+          { effect: "deny" }
+        );
+
+        yield* change([hidden.op]);
 
         const denied = yield* previewRecord(textOf(assigned.id), {}, 999);
         assert.strictEqual(denied.status, 404, denied.text);
@@ -686,43 +681,36 @@ describe("form-state", () => {
           kind: "text",
         });
 
-        const hidden = addAccessRule(HELPDESK.ticket, [HELPDESK.agentRole], {
-          condition: {
-            arg: {
-              left: { path: [HELPDESK.fields.status] },
-              op: "eq",
-              right: { value: "in_progress" },
+        const hidden = addAccessRule(
+          HELPDESK.ticket,
+          [HELPDESK.agentRole],
+          {
+            condition: {
+              arg: {
+                left: { path: [HELPDESK.fields.status] },
+                op: "eq",
+                right: { value: "in_progress" },
+              },
+              op: "not",
             },
-            op: "not",
+            fields: [output.id],
           },
-          fields: [output.id],
-        });
+          { effect: "deny" }
+        );
 
-        const denied = addAccessRule(HELPDESK.ticket, [HELPDESK.agentRole], {
-          fields: [HELPDESK.fields.status],
-        });
-
-        if (
-          hidden.op.op !== "createAccessRule" ||
-          denied.op.op !== "createAccessRule"
-        ) {
-          return yield* Effect.die(new Error("Expected access rules"));
-        }
+        const denied = addAccessRule(
+          HELPDESK.ticket,
+          [HELPDESK.agentRole],
+          {
+            fields: [HELPDESK.fields.status],
+          },
+          { actions: ["update"], effect: "deny" }
+        );
 
         yield* change([
           output.op,
-          {
-            ...hidden.op,
-            definition: { ...hidden.op.definition, effect: "deny" },
-          },
-          {
-            ...denied.op,
-            definition: {
-              ...denied.op.definition,
-              actions: ["update"],
-              effect: "deny",
-            },
-          },
+          hidden.op,
+          denied.op,
           addRecordRule(HELPDESK.incident, {
             actions: [
               {

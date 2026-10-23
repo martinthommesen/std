@@ -19,6 +19,7 @@ import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -31,10 +32,8 @@ import {
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
-import { definitionVersion } from "./schema-paths-support.ts";
-import { ACME, addField, change } from "./schema-support.ts";
+import { definitionVersion, addField, change } from "./schema-support.ts";
 
-const EMPLOYEE = "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b";
 const local = { owner: { layer: "local" }, protected: false } as const;
 
 const PICKER = "acmeAsset/dock";
@@ -86,7 +85,7 @@ const setup = Effect.gen(function* setupAllowedRecords() {
     id: randomUUID(),
     kind: "accessRule",
     name: null,
-    roleIds: [EMPLOYEE],
+    roleIds: [ACME.employee],
     target: { fields: [dock.id], kind: "fields" },
   };
 

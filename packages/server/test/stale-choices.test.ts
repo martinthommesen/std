@@ -13,14 +13,14 @@ import type { Operation } from "@std/definitions/operation";
 import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { arrayOf, objectOf, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
-import { definitionVersion } from "./schema-paths-support.ts";
 import {
-  ACME,
+  definitionVersion,
   addField,
   addChoice,
   addOverride,

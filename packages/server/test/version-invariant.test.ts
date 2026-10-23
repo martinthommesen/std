@@ -19,6 +19,7 @@ import {
   string,
 } from "fast-check";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import type { Actor } from "../src/auth/actor.ts";
 import type { Catalog } from "../src/catalog/catalog.ts";
 import type { SaveHooks } from "../src/records/save-hooks.ts";
@@ -38,7 +39,6 @@ import {
   setUpAcme,
   USERS,
 } from "./records-support.ts";
-import { ACME } from "./schema-support.ts";
 
 type Concrete = "asset" | "laptop" | "monitor";
 

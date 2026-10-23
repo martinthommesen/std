@@ -32,11 +32,11 @@ import {
 import type { Arbitrary } from "fast-check";
 
 import {
-  ACME,
   AcmeFixture,
   createFixtureUser,
 } from "../../testing/src/acme-fixture.ts";
 import type { AcmeData } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
   TestRequestOptions,
@@ -67,13 +67,7 @@ import {
 import { committedState } from "./committed-state.ts";
 import { allPagesV2, nextOf } from "./paging.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import {
-  ACME as SCHEMA_IDS,
-  change,
-  createRole,
-  freshId,
-  values,
-} from "./schema-support.ts";
+import { change, createRole, freshId, values } from "./schema-support.ts";
 
 class SignedInCallers extends Context.Service<SignedInCallers, ApiCallers>()(
   "std/test/Contracts3Callers"
@@ -909,7 +903,7 @@ const replaceRule7ForName = Effect.gen(function* replaceRule7() {
     {
       changes: {
         target: {
-          fields: [SCHEMA_IDS.status, OWNER_FIELD, DOCKED_TO_FIELD],
+          fields: [ACME.status, OWNER_FIELD, DOCKED_TO_FIELD],
           kind: "fields",
         },
       },
@@ -921,9 +915,9 @@ const replaceRule7ForName = Effect.gen(function* replaceRule7() {
       definition: {
         actions: ["create", "update"],
         active: true,
-        classId: SCHEMA_IDS.asset,
+        classId: ACME.asset,
         condition: {
-          left: { path: [SCHEMA_IDS.status] },
+          left: { path: [ACME.status] },
           op: "eq",
           right: { value: "in_use" },
         },
@@ -935,7 +929,7 @@ const replaceRule7ForName = Effect.gen(function* replaceRule7() {
         owner: { layer: "local" },
         protected: false,
         roleIds: [EMPLOYEE],
-        target: { fields: [SCHEMA_IDS.name], kind: "fields" },
+        target: { fields: [ACME.name], kind: "fields" },
       },
       op: "createAccessRule",
     },

@@ -40,8 +40,9 @@ import type { DecodedInput } from "@std/values/field-value";
 import { Effect } from "effect";
 
 import type { SaveMode } from "../records/save-hooks.ts";
+import { imageOf } from "../records/stored-record.ts";
 import type { StoredRecord } from "../records/stored-record.ts";
-import { imageOf, ruleConditionHolds } from "./rule-condition.ts";
+import { ruleConditionHolds } from "./rule-condition.ts";
 import type { RuleContext } from "./rule-condition.ts";
 import { selectRules } from "./rule-selection.ts";
 import { assignedValue } from "./rule-values.ts";

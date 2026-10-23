@@ -12,6 +12,7 @@ import { Result, Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import {
   checkTmfExchange,
@@ -25,7 +26,7 @@ import { workerPass } from "../src/outbox/worker.ts";
 import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import { hubTestLayer, listener } from "./hub-support.ts";
 import { subscribe } from "./outbox-support.ts";
-import { ACME, change, createClass, ensureSite } from "./schema-support.ts";
+import { change, createClass, ensureSite } from "./schema-support.ts";
 import { serveOnly, workerTestLayer } from "./worker-support.ts";
 
 const BASE = TMF688_PREFIX;

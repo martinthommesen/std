@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 
 import { FieldInput, toWriteOnlyValue } from "../../domain/form-input.ts";
 import {
+  present,
   INCIDENT_ID,
   REVISION_5,
   REVISION_6,
@@ -49,6 +50,7 @@ import {
   SearchTargets,
   UpdateRecord,
 } from "./command.ts";
+import { formAfter } from "./fixture.ts";
 import { checkForm, controlIdOf } from "./form.ts";
 import { Message, OutMessage, UnreadSavedRecord } from "./message.ts";
 import { FormMode, Submission, WriteError } from "./model.ts";
@@ -75,13 +77,6 @@ const creating = opening(FormMode.Create());
  * @param messages - The Messages.
  * @returns The last Model.
  */
-const after = (start: Model, ...messages: readonly Message[]): Model => {
-  const [first, ...rest] = messages;
-
-  return first === undefined
-    ? start
-    : after(update(start, first).model, ...rest);
-};
 
 /**
  * A value the test knows is there.
@@ -89,16 +84,9 @@ const after = (start: Model, ...messages: readonly Message[]): Model => {
  * @param value - The value, or undefined.
  * @returns The value.
  */
-const present = <A>(value: A | undefined): A => {
-  if (value === undefined) {
-    throw new RangeError("the fixture lacks a value the test needs");
-  }
-
-  return value;
-};
 
 /** The ticket form, ready: metadata at revision 5, the record at version 3. */
-const ready = after(
+const ready = formAfter(
   editing.model,
   Message.SucceededLoadFormMetadata({
     revision: REVISION_5,
@@ -114,7 +102,7 @@ const ready = after(
 );
 
 /** The create form, ready. */
-const readyToCreate = after(
+const readyToCreate = formAfter(
   creating.model,
   Message.SucceededLoadFormMetadata({
     revision: REVISION_5,
@@ -207,7 +195,7 @@ describe("opening a form", () => {
   });
 
   it("validates an update with the concrete class's metadata, loaded when the record's class differs", () => {
-    const incidentForm = after(
+    const incidentForm = formAfter(
       opening(FormMode.Edit({ recordId: INCIDENT_ID })).model,
       Message.SucceededLoadFormMetadata({
         revision: REVISION_5,
@@ -293,7 +281,7 @@ describe("opening a form", () => {
     story(
       update,
       given(
-        after(
+        formAfter(
           editing.model,
           Message.SucceededLoadFormMetadata({
             revision: REVISION_5,
@@ -689,7 +677,7 @@ describe("editing and saving", () => {
   });
 
   it("a save whose record could not be read back says so, keeps the record as stale, holds Save back and reads it again on request (review round 1)", () => {
-    const sent = after(
+    const sent = formAfter(
       ready,
       Message.UpdatedText({
         fieldId: TICKET_FIELDS.description,
@@ -702,7 +690,7 @@ describe("editing and saving", () => {
       })
     );
 
-    const unread = after(
+    const unread = formAfter(
       sent,
       Message.SucceededSaveRecord({
         generation: 2,
@@ -761,7 +749,7 @@ describe("editing and saving", () => {
   });
 
   /** A save of the description sent from `ready` (generation 2). */
-  const savingDescription = after(
+  const savingDescription = formAfter(
     ready,
     Message.UpdatedText({ fieldId: TICKET_FIELDS.description, text: "Mine" }),
     Message.ClickedSave()
@@ -771,7 +759,7 @@ describe("editing and saving", () => {
     // The definitions move on while the save is in flight: the record is
     // asked for again (generation 3), then the save commits version 4
     // without its record being read back.
-    const unread = after(
+    const unread = formAfter(
       savingDescription,
       Message.SucceededLoadFormMetadata({
         revision: REVISION_6,
@@ -807,7 +795,7 @@ describe("editing and saving", () => {
   });
 
   it("after an unread save, a later version is someone else's change: the edits are marked against what the page showed (review round 2)", () => {
-    const unread = after(
+    const unread = formAfter(
       savingDescription,
       Message.UpdatedText({
         fieldId: TICKET_FIELDS.shortDescription,
@@ -831,7 +819,7 @@ describe("editing and saving", () => {
       version: 5,
     };
 
-    const reread = after(
+    const reread = formAfter(
       unread,
       Message.SucceededLoadRecord({
         generation: 3,
@@ -850,7 +838,7 @@ describe("editing and saving", () => {
     ]);
 
     // Exactly the committed version is the page's own save: no mark.
-    const own = after(
+    const own = formAfter(
       unread,
       Message.SucceededLoadRecord({
         generation: 3,
@@ -864,7 +852,7 @@ describe("editing and saving", () => {
   });
 
   it("updates a definition table with a merge patch, as its metadata says (definitionTable)", () => {
-    const definitionForm = after(
+    const definitionForm = formAfter(
       editing.model,
       Message.SucceededLoadFormMetadata({
         revision: REVISION_5,
@@ -882,7 +870,7 @@ describe("editing and saving", () => {
     expect(isDefinitionTableOf(definitionForm)).toStrictEqual([true]);
     expect(
       isDefinitionTableOf(
-        after(
+        formAfter(
           ready,
           Message.UpdatedText({
             fieldId: TICKET_FIELDS.description,
@@ -919,7 +907,7 @@ describe("editing and saving", () => {
   });
 
   it("never sends a restricted field, whatever the Model holds", () => {
-    const restricted = after(
+    const restricted = formAfter(
       editing.model,
       Message.SucceededLoadFormMetadata({
         revision: REVISION_5,
@@ -1101,7 +1089,7 @@ describe("creating", () => {
     const NEW_ID = "019a0000-0000-7000-8000-0000000f1099";
 
     const sending = update(
-      after(
+      formAfter(
         readyToCreate,
         Message.UpdatedText({
           fieldId: TICKET_FIELDS.shortDescription,
@@ -1126,7 +1114,7 @@ describe("creating", () => {
     );
 
     // Typed before the answer: the same field, and another one.
-    const typedWhileCreating = after(
+    const typedWhileCreating = formAfter(
       sending.model,
       Message.UpdatedText({
         fieldId: TICKET_FIELDS.shortDescription,
@@ -1219,7 +1207,7 @@ describe("creating", () => {
 
 describe("rereads", () => {
   it("does not show a reread older than the record a save returned", () => {
-    const saved = after(
+    const saved = formAfter(
       ready,
       Message.UpdatedText({ fieldId: TICKET_FIELDS.points, text: "5" }),
       Message.ClickedSave(),
@@ -1259,7 +1247,7 @@ describe("rereads", () => {
 
 describe("the reference picker", () => {
   it("says it cannot search when the target's metadata does not load", () => {
-    const searching = after(
+    const searching = formAfter(
       editing.model,
       Message.SucceededLoadFormMetadata({
         revision: REVISION_5,
@@ -1492,7 +1480,7 @@ describe("the reference picker", () => {
 
 describe("delete", () => {
   it("asks for confirmation, then deletes with If-Match and goes to the list", () => {
-    const confirmed = after(ready, Message.ClickedDelete());
+    const confirmed = formAfter(ready, Message.ClickedDelete());
 
     expect(confirmed.deleteDialog.isOpen).toBeTruthy();
 
@@ -1529,7 +1517,7 @@ describe("delete", () => {
   });
 
   it("goes back to the list the form was opened from, with its filter, sort and page size", () => {
-    const fromList = after(
+    const fromList = formAfter(
       modifyFields(ready, {
         listQuery: () => ({
           filter: Option.some('{"op":"isEmpty","left":"x"}'),
@@ -1567,7 +1555,11 @@ describe("delete", () => {
     story(
       update,
       given(
-        after(ready, Message.ClickedDelete(), Message.ClickedConfirmDelete())
+        formAfter(
+          ready,
+          Message.ClickedDelete(),
+          Message.ClickedConfirmDelete()
+        )
       ),
       message(
         Message.FailedDeleteRecord({
@@ -1582,7 +1574,7 @@ describe("delete", () => {
 });
 
 describe("related lists and history", () => {
-  const withRelated = after(
+  const withRelated = formAfter(
     editing.model,
     Message.SucceededLoadFormMetadata({
       revision: REVISION_5,

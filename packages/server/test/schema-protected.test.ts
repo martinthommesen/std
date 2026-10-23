@@ -21,10 +21,10 @@ import {
 import type { JsonObject } from "@std/values/json-value";
 import { Effect } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import {
-  ACME,
   addField,
   addIndex,
   addOverride,

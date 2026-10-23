@@ -16,15 +16,16 @@ import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import type { JsonValue, JsonObject } from "@std/values/json-value";
 import { Effect } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { codeOf, collectionOf, readsTestLayer } from "./reads-support.ts";
-import { CHANGE_SETS, definitionVersion } from "./schema-paths-support.ts";
+import { CHANGE_SETS } from "./schema-paths-support.ts";
 import {
-  ACME,
+  definitionVersion,
   addField,
   change,
   createClass,

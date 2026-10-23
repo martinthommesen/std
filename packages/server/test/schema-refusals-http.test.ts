@@ -22,6 +22,7 @@ import { isJsonArray, isJsonObject } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -34,12 +35,11 @@ import {
   createBodyOf,
   definitionTable,
   inApiNames,
-  definitionVersion,
   postChangeSet,
   userWithRoles,
 } from "./schema-paths-support.ts";
 import {
-  ACME,
+  definitionVersion,
   addAccessRule,
   addField,
   addIndex,

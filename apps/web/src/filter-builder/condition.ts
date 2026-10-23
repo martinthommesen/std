@@ -27,8 +27,9 @@ import type {
 import { isCompare, isPath } from "@std/conditions/ast";
 import { MAX_RELATIVE_OFFSET } from "@std/conditions/check";
 import { operatorFitsKind } from "@std/conditions/profile";
+import { formatCivilDate } from "@std/values/calendar";
 import { parseChoiceKey } from "@std/values/choice";
-import { parseDate } from "@std/values/date";
+import { dateToCivil, parseDate } from "@std/values/date";
 import { formatDateTime, parseDateTime } from "@std/values/date-time";
 import { formatDecimal, parseDecimal } from "@std/values/decimal";
 import type { Decoded } from "@std/values/field-error";
@@ -117,19 +118,6 @@ export const resolvePath = (
 };
 
 /**
- * A calendar date as `YYYY-MM-DD`.
- *
- * @param date - The date.
- * @returns Its canonical text.
- */
-export const isoDateOf = (date: CalendarDate): string =>
-  [
-    String(date.year).padStart(4, "0"),
-    String(date.month).padStart(2, "0"),
-    String(date.day).padStart(2, "0"),
-  ].join("-");
-
-/**
  * A canonical `YYYY-MM-DD` date as a calendar date.
  *
  * @param text - The date.
@@ -142,13 +130,7 @@ export const calendarDateOf = (text: string): Option.Option<CalendarDate> => {
     return Option.none();
   }
 
-  const [year = "", month = "", day = ""] = parsed.value.split("-");
-
-  return Option.some({
-    day: Number(day),
-    month: Number(month),
-    year: Number(year),
-  });
+  return Option.some(dateToCivil(parsed.value));
 };
 
 type NumberKind = Extract<FieldKind, "integer" | "bigInteger" | "decimal">;
@@ -297,7 +279,7 @@ const instantLiteral = (
         : Result.map(
             fromDecoded(
               parseDateTime(
-                `${isoDateOf(date)}T${clock.hour}:${clock.minute}:00.000Z`
+                `${formatCivilDate(date)}T${clock.hour}:${clock.minute}:00.000Z`
               )
             ),
             formatDateTime
@@ -324,7 +306,7 @@ const comparisonValue = (
     Match.tag("Day", ({ maybeDate }) =>
       Option.match(maybeDate, {
         onNone: () => Result.fail("Pick a date."),
-        onSome: (date) => Result.succeed({ value: isoDateOf(date) }),
+        onSome: (date) => Result.succeed({ value: formatCivilDate(date) }),
       })
     ),
     Match.tag("Instant", ({ maybeDate, time }) =>

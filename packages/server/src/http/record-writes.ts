@@ -33,3 +33,11 @@ export const expectedVersionOf = Effect.fn("Http.ifMatch")(
       : Number(version);
   }
 );
+
+/**
+ * Parses a supplied If-Match header while allowing its absence.
+ * @param header - The optional header.
+ * @returns The version, null when absent, or the same malformed-header refusal.
+ */
+export const optionalExpectedVersionOf = (header: string | undefined) =>
+  header === undefined ? Effect.succeed(null) : expectedVersionOf(header);

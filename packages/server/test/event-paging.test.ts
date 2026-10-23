@@ -9,7 +9,8 @@ import type { JsonValue } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { ACME, AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { eventIdOf, recordEventType } from "../src/events/event-id.ts";

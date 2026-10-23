@@ -10,7 +10,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import { Effect } from "effect";
 
-import { ACME } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { effectiveRoles, loadActor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";

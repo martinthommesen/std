@@ -23,8 +23,6 @@ import { Config, Context, Effect, Layer, Redacted } from "effect";
 import { STD_VERSION } from "../version.ts";
 
 /** The connection URL used when `STD_DATABASE_URL` is not set. */
-export { DEFAULT_DATABASE_URL } from "@std/postgres/transport";
-
 /** `STD_DATABASE_URL`, or `DEFAULT_DATABASE_URL` when it is not set. */
 export const databaseUrlConfig: Config.Config<Redacted.Redacted> =
   Config.Redacted("STD_DATABASE_URL").pipe(

@@ -792,17 +792,13 @@ const createOperationOf = (
   }
 
   if (step.op === "createRole") {
-    const role = addRole(nameFor(step.name, world.ruledRoleName));
-
-    const operation: Operation =
-      role.op.op === "createRole"
-        ? {
-            definition: { ...role.op.definition, id: createId(world, step.id) },
-            op: "createRole",
-          }
-        : role.op;
-
-    return { kind: "role", operation };
+    return {
+      kind: "role",
+      operation: addRole(
+        nameFor(step.name, world.ruledRoleName),
+        createId(world, step.id)
+      ).op,
+    };
   }
 
   const roleId = {
@@ -831,18 +827,11 @@ const createOperationOf = (
   const rule = addAccessRule(
     world.baseId,
     [roleId],
-    condition === undefined ? { description } : { condition, description }
+    condition === undefined ? { description } : { condition, description },
+    { id: createId(world, step.id) }
   );
 
-  const operation: Operation =
-    rule.op.op === "createAccessRule"
-      ? {
-          definition: { ...rule.op.definition, id: createId(world, step.id) },
-          op: "createAccessRule",
-        }
-      : rule.op;
-
-  return { kind: "accessRule", operation };
+  return { kind: "accessRule", operation: rule.op };
 };
 
 /**
@@ -1447,8 +1436,8 @@ const REQUIRED_OUTCOMES = [
  * @param name - The role's name.
  * @returns The operation.
  */
-const hideRole = (nameFieldId: string, name: string): Operation => {
-  const deny = addAccessRule(
+const hideRole = (nameFieldId: string, name: string): Operation =>
+  addAccessRule(
     PLATFORM_CLASS_IDS.role,
     [BUILT_IN_ROLE_IDS.admin],
     {
@@ -1457,21 +1446,9 @@ const hideRole = (nameFieldId: string, name: string): Operation => {
         op: "eq",
         right: { value: name },
       },
-    }
-  );
-
-  return deny.op.op === "createAccessRule"
-    ? {
-        definition: {
-          ...deny.op.definition,
-          actions: ["read"],
-          effect: "deny",
-          owner: { layer: "core" },
-        },
-        op: "createAccessRule",
-      }
-    : deny.op;
-};
+    },
+    { effect: "deny", owner: { layer: "core" } }
+  ).op;
 
 const PAM = { login: "fuzz-pam", password: "fuzz-pam-password" } as const;
 

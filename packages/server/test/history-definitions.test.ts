@@ -14,7 +14,6 @@ import { randomUUID } from "node:crypto";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { renderSql } from "@std/conditions/sql-fragment";
 import type { SqlFragment, SqlParameter } from "@std/conditions/sql-fragment";
-import type { ChoiceDraft } from "@std/definitions/definition";
 import type { Requester } from "@std/definitions/requester";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
@@ -22,6 +21,7 @@ import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { definitionAt } from "../src/catalog/definition-revisions.ts";
 import { definitionRevisionsStatement } from "../src/records/history-definitions.ts";
@@ -29,11 +29,13 @@ import { applyChangeSet } from "../src/schema/change-set.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
-import { definitionVersion } from "./schema-paths-support.ts";
-import { ACME, addField, change, currentRevision } from "./schema-support.ts";
-import type { BuiltOperation } from "./schema-support.ts";
-
-const local = { owner: { layer: "local" }, protected: false } as const;
+import {
+  addChoice,
+  definitionVersion,
+  addField,
+  change,
+  currentRevision,
+} from "./schema-support.ts";
 
 /** The last revision whose number has one digit. */
 const MAX_SINGLE_DIGIT = 9;
@@ -126,26 +128,6 @@ const PURGER: Requester = {
   userId: randomUUID(),
 };
 
-const choice = (
-  fieldId: string,
-  key: string,
-  label: string,
-  order: number
-): BuiltOperation => {
-  const definition: ChoiceDraft = {
-    ...local,
-    fieldId,
-    hidden: false,
-    id: randomUUID(),
-    key,
-    kind: "choice",
-    label,
-    order,
-  };
-
-  return { id: definition.id, op: { definition, op: "createChoice" } };
-};
-
 const historyOf = Effect.fn("HistoryDefinitions.historyOf")(function* historyOf(
   token: string,
   id: string
@@ -194,9 +176,12 @@ describe("history-definitions", () => {
 
           yield* change([grade.op, memo.op]);
 
-          const good = choice(grade.id, "good", "Good", 1);
+          const good = addChoice(grade.id, "good", { label: "Good", order: 1 });
 
-          yield* change([good.op, choice(grade.id, "fair", "Fair", 2).op]);
+          yield* change([
+            good.op,
+            addChoice(grade.id, "fair", { label: "Fair", order: 2 }).op,
+          ]);
 
           // Alice creates an asset Bob owns, so both read its history.
           const created = yield* http.request("POST", listPath("acme.asset"), {
@@ -355,9 +340,12 @@ describe("history-definitions", () => {
 
           yield* change([tier.op]);
 
-          const gold = choice(tier.id, "gold", "Gold", 1);
+          const gold = addChoice(tier.id, "gold", { label: "Gold", order: 1 });
 
-          yield* change([gold.op, choice(tier.id, "iron", "Iron", 2).op]);
+          yield* change([
+            gold.op,
+            addChoice(tier.id, "iron", { label: "Iron", order: 2 }).op,
+          ]);
           assert.isBelow(yield* currentRevision, MAX_SINGLE_DIGIT);
 
           const created = yield* http.request("POST", listPath("acme.asset"), {
@@ -444,7 +432,9 @@ describe("history-definitions", () => {
           const shade = addField(ACME.asset, "shade", { kind: "choice" });
 
           yield* change([shade.op]);
-          yield* change([choice(shade.id, "dark", "Dark", 1).op]);
+          yield* change([
+            addChoice(shade.id, "dark", { label: "Dark", order: 1 }).op,
+          ]);
 
           // Unrelated revisions of fields, overrides and choices, as table
           // owner.

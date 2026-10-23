@@ -211,8 +211,7 @@ export const DEFINITION_TABLES: readonly DefinitionTable[] = [
   ]),
 ];
 
-/** The table of a definition kind. */
-export const TABLE_OF: ReadonlyMap<DefinitionKind, DefinitionTable> = new Map(
+const TABLE_OF: ReadonlyMap<DefinitionKind, DefinitionTable> = new Map(
   DEFINITION_TABLES.map((entry) => [entry.kind, entry])
 );
 
@@ -277,10 +276,9 @@ const COMMON_SCHEMAS = {
  * @param entry - The table.
  * @returns Its columns, the special ones last.
  */
-const columnsOf = (entry: DefinitionTable): readonly PropertyColumn[] => [
-  ...entry.columns,
-  ...entry.special,
-];
+export const columnsOf = (
+  entry: DefinitionTable
+): readonly PropertyColumn[] => [...entry.columns, ...entry.special];
 
 /**
  * The columns that the database has.

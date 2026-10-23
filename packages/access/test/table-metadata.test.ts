@@ -8,29 +8,21 @@ import type { Definition } from "@std/definitions/definition";
 import type { MetaTable } from "@std/definitions/table-metadata";
 import { BUILT_IN_ROLE_IDS, USER_CLASS_ID } from "@std/definitions/well-known";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import type { Caller } from "../src/rules.ts";
 import { tableMetadata } from "../src/table-metadata.ts";
 import { coreAndAcme } from "./acme-snapshot.ts";
 
 const snapshot = coreAndAcme();
 
-const CLASS = {
-  asset: "989151bb-a69f-4b18-b73d-9e19a4e7514c",
-  laptop: "6a365314-6d1b-4e4d-b166-73f29f808504",
-  monitor: "87363f0e-8122-4569-8fc8-ec8c5277a71b",
-} as const;
-
-const ASSET_MANAGER = "081e3ce8-26a8-43a2-bc58-838d40b4c22d";
-const EMPLOYEE = "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b";
-const STATUS = "5ed5f951-f6da-47ed-967a-c726af083d44";
-const NAME = "6438aa02-739d-46c0-94cc-ecea44488210";
-const COST = "6dfdc15e-7b81-40ba-aaac-6d7ad5a0d717";
-
 const alice: Caller = {
-  roleIds: [BUILT_IN_ROLE_IDS.authenticated, ASSET_MANAGER],
+  roleIds: [BUILT_IN_ROLE_IDS.authenticated, ACME.assetManager],
 };
 
-const bob: Caller = { roleIds: [BUILT_IN_ROLE_IDS.authenticated, EMPLOYEE] };
+const bob: Caller = {
+  roleIds: [BUILT_IN_ROLE_IDS.authenticated, ACME.employee],
+};
+
 const admin: Caller = { roleIds: [BUILT_IN_ROLE_IDS.admin] };
 const nobody: Caller = { roleIds: [] };
 
@@ -84,7 +76,7 @@ const ASSET_FIELDS = [
 
 describe("table metadata", () => {
   it("lists exactly what Bob can read on acme.asset, with read and write states", () => {
-    const table = metadataOf(bob, CLASS.asset);
+    const table = metadataOf(bob, ACME.asset);
 
     assert.deepStrictEqual(
       fieldNames(table),
@@ -104,7 +96,7 @@ describe("table metadata", () => {
   });
 
   it("gives Alice every asset field, always readable and writable", () => {
-    const table = metadataOf(alice, CLASS.asset);
+    const table = metadataOf(alice, ACME.asset);
 
     assert.deepStrictEqual(fieldNames(table), sorted(ASSET_FIELDS));
     assert.isTrue(
@@ -118,7 +110,7 @@ describe("table metadata", () => {
   });
 
   it("shows child-only fields per endpoint and inherited fields with their table", () => {
-    const laptop = metadataOf(bob, CLASS.laptop);
+    const laptop = metadataOf(bob, ACME.laptop);
 
     assert.deepStrictEqual(
       fieldNames(laptop),
@@ -127,7 +119,7 @@ describe("table metadata", () => {
     assert.strictEqual(fieldOf(laptop, "name").inheritedFrom, "acme.asset");
     assert.isNull(fieldOf(laptop, "serial").inheritedFrom);
     assert.deepStrictEqual(laptop.ancestors, [
-      { id: CLASS.asset, label: "Asset", name: "acme.asset" },
+      { id: ACME.asset, label: "Asset", name: "acme.asset" },
     ]);
     // Rule 9 denies Bob updating status on laptops.
     assert.strictEqual(fieldOf(laptop, "status").write.update, "no");
@@ -137,28 +129,28 @@ describe("table metadata", () => {
       "the laptop override makes purchased_on required"
     );
 
-    const adminLaptop = metadataOf(admin, CLASS.laptop);
+    const adminLaptop = metadataOf(admin, ACME.laptop);
 
     assert.include(fieldNames(adminLaptop), "disk_key");
-    assert.notInclude(fieldNames(metadataOf(bob, CLASS.asset)), "serial");
+    assert.notInclude(fieldNames(metadataOf(bob, ACME.asset)), "serial");
   });
 
   it("names reference targets only when the caller knows the table", () => {
-    const table = metadataOf(bob, CLASS.asset);
+    const table = metadataOf(bob, ACME.asset);
 
     assert.deepStrictEqual(fieldOf(table, "owner").type, {
       kind: "reference",
       target: "core.user",
     });
 
-    assert.isUndefined(tableMetadata(snapshot, nobody, CLASS.asset));
+    assert.isUndefined(tableMetadata(snapshot, nobody, ACME.asset));
     assert.isUndefined(tableMetadata(snapshot, nobody, USER_CLASS_ID));
   });
 
   it("lists each reference that can point at the table once, on the most general table", () => {
     const docked = {
       field: "docked_to",
-      fieldLabel: fieldOf(metadataOf(bob, CLASS.asset), "docked_to").label,
+      fieldLabel: fieldOf(metadataOf(bob, ACME.asset), "docked_to").label,
       label: "Asset",
       table: "acme.asset",
     };
@@ -166,7 +158,7 @@ describe("table metadata", () => {
     // `docked_to` targets assets, so laptops and monitors are its targets
     // too; it is declared on asset, whose endpoint lists every asset.
     for (const caller of [alice, bob, admin]) {
-      for (const classId of Object.values(CLASS)) {
+      for (const classId of [ACME.asset, ACME.laptop, ACME.monitor]) {
         assert.deepStrictEqual(
           metadataOf(caller, classId).relatedLists,
           [docked],
@@ -183,7 +175,7 @@ describe("table metadata", () => {
       [
         {
           field: "owner",
-          fieldLabel: fieldOf(metadataOf(bob, CLASS.asset), "owner").label,
+          fieldLabel: fieldOf(metadataOf(bob, ACME.asset), "owner").label,
           label: "Asset",
           table: "acme.asset",
         },
@@ -192,9 +184,9 @@ describe("table metadata", () => {
   });
 
   it("never contains an access-rule condition, a hidden field or a hidden field's ID", () => {
-    const text = JSON.stringify(metadataOf(bob, CLASS.asset));
+    const text = JSON.stringify(metadataOf(bob, ACME.asset));
 
-    assert.notInclude(text, COST);
+    assert.notInclude(text, ACME.cost);
     assert.notInclude(text, '"cost"');
     assert.notInclude(text, '"op"');
     assert.notInclude(text, "2000");
@@ -202,7 +194,7 @@ describe("table metadata", () => {
 
   it("lists choices of readable fields and only readable, active fields in layouts", () => {
     const base = snapshot.definitions();
-    const status = snapshot.field(STATUS);
+    const status = snapshot.field(ACME.status);
 
     if (status === undefined) {
       throw new Error("no status field");
@@ -222,7 +214,7 @@ describe("table metadata", () => {
         { ...status, type: { kind: "choice" } } satisfies Definition,
         {
           ...common,
-          fieldId: STATUS,
+          fieldId: ACME.status,
           hidden: false,
           id: "00000000-0000-4000-8000-0000000000c1",
           key: "in_use",
@@ -232,7 +224,7 @@ describe("table metadata", () => {
         },
         {
           ...common,
-          fieldId: STATUS,
+          fieldId: ACME.status,
           hidden: true,
           id: "00000000-0000-4000-8000-0000000000c2",
           key: "lost",
@@ -242,13 +234,13 @@ describe("table metadata", () => {
         },
         {
           ...common,
-          classId: CLASS.asset,
+          classId: ACME.asset,
           elements: [
             { kind: "section", label: "Money" },
-            { fieldId: COST, kind: "field" },
+            { fieldId: ACME.cost, kind: "field" },
             { kind: "section", label: "Main" },
-            { fieldId: NAME, kind: "field" },
-            { fieldId: STATUS, kind: "field" },
+            { fieldId: ACME.name, kind: "field" },
+            { fieldId: ACME.status, kind: "field" },
           ],
           id: "00000000-0000-4000-8000-0000000000d1",
           kind: "layout",
@@ -257,7 +249,7 @@ describe("table metadata", () => {
       ]
     );
 
-    const bobTable = metadataOf(bob, CLASS.laptop, changed);
+    const bobTable = metadataOf(bob, ACME.laptop, changed);
 
     assert.deepStrictEqual(fieldOf(bobTable, "status").choices, [
       { key: "in_use", label: "In use", order: 1, retired: false },
@@ -265,16 +257,16 @@ describe("table metadata", () => {
     ]);
     assert.deepStrictEqual(bobTable.layouts.form, [
       { kind: "section", label: "Main" },
-      { field: "name", fieldId: NAME, kind: "field" },
-      { field: "status", fieldId: STATUS, kind: "field" },
+      { field: "name", fieldId: ACME.name, kind: "field" },
+      { field: "status", fieldId: ACME.status, kind: "field" },
     ]);
     assert.isNull(bobTable.layouts.list);
 
-    const aliceTable = metadataOf(alice, CLASS.asset, changed);
+    const aliceTable = metadataOf(alice, ACME.asset, changed);
 
     assert.deepStrictEqual(aliceTable.layouts.form?.slice(0, 2), [
       { kind: "section", label: "Money" },
-      { field: "cost", fieldId: COST, kind: "field" },
+      { field: "cost", fieldId: ACME.cost, kind: "field" },
     ]);
   });
 
@@ -284,9 +276,9 @@ describe("table metadata", () => {
       [
         {
           active: true,
-          classId: CLASS.asset,
-          condition: { arg: { path: [COST] }, op: "empty" },
-          fieldId: NAME,
+          classId: ACME.asset,
+          condition: { arg: { path: [ACME.cost] }, op: "empty" },
+          fieldId: ACME.name,
           id: "00000000-0000-4000-8000-0000000000f1",
           kind: "formRule",
           name: "name_when_cost_empty",
@@ -300,9 +292,9 @@ describe("table metadata", () => {
         },
         {
           active: true,
-          classId: CLASS.asset,
+          classId: ACME.asset,
           condition: null,
-          fieldId: COST,
+          fieldId: ACME.cost,
           id: "00000000-0000-4000-8000-0000000000f2",
           kind: "formRule",
           name: "hidden_cost_rule",
@@ -317,14 +309,14 @@ describe("table metadata", () => {
       ]
     );
 
-    const bobRules = metadataOf(bob, CLASS.laptop, changed).formRules;
+    const bobRules = metadataOf(bob, ACME.laptop, changed).formRules;
     assert.strictEqual(bobRules.length, 1);
     assert.deepStrictEqual(bobRules[0]?.condition, { op: "true" });
-    assert.notInclude(JSON.stringify(bobRules), COST);
-    const aliceRules = metadataOf(alice, CLASS.laptop, changed).formRules;
+    assert.notInclude(JSON.stringify(bobRules), ACME.cost);
+    const aliceRules = metadataOf(alice, ACME.laptop, changed).formRules;
     assert.strictEqual(aliceRules.length, 2);
     assert.deepStrictEqual(aliceRules[0]?.condition, {
-      arg: { path: [COST] },
+      arg: { path: [ACME.cost] },
       op: "empty",
     });
   });

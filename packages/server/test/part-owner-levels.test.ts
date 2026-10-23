@@ -29,6 +29,7 @@ import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
   TestRequestOptions,
@@ -39,12 +40,11 @@ import { StatementLog } from "../src/sql/statement-log.ts";
 import { count } from "./aggregates-support.ts";
 import { apiCallers, asArray, asObject, textOf } from "./api-support.ts";
 import {
-  ACME,
+  addAccessRule,
   addField,
   change,
   createClass,
   createNamespace,
-  freshId,
   values,
 } from "./schema-support.ts";
 import { FF, FIXTURE_TICKETS, FX, tmfTestLayer } from "./tmf-fixture.ts";
@@ -89,27 +89,21 @@ const accessRule = (rule: {
   readonly effect?: "allow" | "deny";
   readonly fields?: "*";
   readonly condition?: AccessRuleDraft["condition"];
-}) => ({
-  definition: {
-    actions: rule.actions,
-    active: true,
-    classId: rule.classId,
-    condition: rule.condition ?? null,
-    description: null,
-    effect: rule.effect ?? "allow",
-    id: freshId(),
-    kind: "accessRule" as const,
-    name: null,
-    owner: { layer: "local" as const },
-    protected: false,
-    roleIds: rule.roleIds,
-    target:
-      rule.fields === undefined
-        ? { kind: "records" as const }
-        : { fields: rule.fields, kind: "fields" as const },
-  },
-  op: "createAccessRule" as const,
-});
+}) =>
+  addAccessRule(
+    rule.classId,
+    rule.roleIds,
+    {},
+    {
+      actions: rule.actions,
+      condition: rule.condition ?? null,
+      effect: rule.effect ?? "allow",
+      target:
+        rule.fields === undefined
+          ? { kind: "records" }
+          : { fields: rule.fields, kind: "fields" },
+    }
+  ).op;
 
 /** The ticket the asset manager reads but may not update. */
 const FROZEN = "frozen";

@@ -17,6 +17,7 @@ import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { Effect, Layer, Ref, Schema } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { editDefinition } from "../src/config/config-service.ts";
@@ -27,13 +28,7 @@ import { workerPass } from "../src/outbox/worker.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { signInAll } from "./authz-support.ts";
 import { deliveriesWhere, subscribe } from "./outbox-support.ts";
-import {
-  ACME,
-  addAccessRule,
-  addRole,
-  change,
-  values,
-} from "./schema-support.ts";
+import { addAccessRule, addRole, change, values } from "./schema-support.ts";
 import { serveOnly, workerTestLayer } from "./worker-support.ts";
 
 const HELPDESK_V2 = new URL("../../../examples/helpdesk/v2", import.meta.url)

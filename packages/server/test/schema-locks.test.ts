@@ -7,6 +7,7 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Clock, Deferred, Duration, Effect, Fiber, Ref } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { DDL_LOCK_BUDGET_MS } from "../src/schema/lock-budget.ts";
 import {
@@ -15,7 +16,6 @@ import {
   CONFIG_KEY,
 } from "../src/sql/locks.ts";
 import {
-  ACME,
   addField,
   addIndex,
   addOverride,

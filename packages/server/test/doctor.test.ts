@@ -19,6 +19,7 @@ import {
 import { Duration, Effect, Layer, Redacted } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { runUpgrade } from "../src/config/upgrade.ts";
@@ -31,9 +32,8 @@ import { SqlLayer } from "../src/sql/layer.ts";
 import { CONFIG_KEY, SCHEMA_KEY } from "../src/sql/locks.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { FIXTURE, FX } from "./config-support.ts";
-import { ACME_FIELDS, LOGIN_INDEX_ID } from "./records-support.ts";
+import { LOGIN_INDEX_ID } from "./records-support.ts";
 import {
-  ACME,
   ACME_SET_DIRECTORY,
   addField,
   insertRecords,
@@ -467,12 +467,12 @@ const DRIFTS: readonly Drift[] = [
       12,
       "error",
       "fkAction",
-      `acme.asset/${name("fk", ACME_FIELDS.owner)}`
+      `acme.asset/${name("fk", ACME.owner)}`
     ),
     name: "a reference FK with a cascading action",
     statements: [
-      `ALTER TABLE acme.asset DROP CONSTRAINT ${name("fk", ACME_FIELDS.owner)},
-         ADD CONSTRAINT ${name("fk", ACME_FIELDS.owner)} FOREIGN KEY (owner) REFERENCES core."user" (id) ON DELETE SET NULL`,
+      `ALTER TABLE acme.asset DROP CONSTRAINT ${name("fk", ACME.owner)},
+         ADD CONSTRAINT ${name("fk", ACME.owner)} FOREIGN KEY (owner) REFERENCES core."user" (id) ON DELETE SET NULL`,
     ],
   },
   {

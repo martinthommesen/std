@@ -32,10 +32,10 @@ import {
 import type { Arbitrary } from "fast-check";
 
 import {
-  ACME,
   AcmeFixture,
   createFixtureUser,
 } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import type { OwnerRecord } from "../../testing/src/owner-records.ts";
 import { Actor } from "../src/auth/actor.ts";

@@ -34,7 +34,6 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { runAfterCommitRule } from "../src/hooks/after-commit-rules.ts";
 import { applyDeriveRules } from "../src/hooks/before-rules.ts";
 import { RecordRuleSaveHooks } from "../src/hooks/record-rule-hooks.ts";
-import { imageOf } from "../src/hooks/rule-condition.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
 import type { SaveHooksApi } from "../src/records/save-hooks.ts";
 import {
@@ -44,6 +43,7 @@ import {
 } from "../src/records/save-pipeline.ts";
 import type { SaveResult } from "../src/records/save-pipeline.ts";
 import { loadRecord } from "../src/records/save-sql.ts";
+import { imageOf } from "../src/records/stored-record.ts";
 import { suppliedFieldsOf } from "../src/records/supplied-fields.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";

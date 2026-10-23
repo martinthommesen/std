@@ -9,7 +9,7 @@ import { Option } from "effect";
 import { describe, expect, it } from "vitest";
 
 import type { MetaField, MetaTable } from "../../domain/metadata.ts";
-import { userTable } from "../../table-fixture.ts";
+import { field, userTable } from "../../table-fixture.ts";
 import {
   DisplayMatch,
   PickerFilter,
@@ -26,25 +26,8 @@ const A_UUID = "019A0000-0000-7000-8000-0000000FA001";
 const displayField = (
   type: MetaFieldType,
   overrides: Partial<MetaField> = {}
-): MetaField => ({
-  apiName: "shown",
-  autoNumber: null,
-  choices: null,
-  default: null,
-  helpText: null,
-  id: FIELD_ID,
-  inheritedFrom: null,
-  label: "Shown",
-  name: "shown",
-  nullable: true,
-  read: "yes",
-  readOnly: false,
-  required: false,
-  state: "active",
-  type,
-  write: { create: "yes", update: "yes" },
-  ...overrides,
-});
+): MetaField =>
+  field(FIELD_ID, "shown", "Shown", type, { nullable: true, ...overrides });
 
 const left = { path: [FIELD_ID] };
 
@@ -208,10 +191,10 @@ describe("the operation a picker searches a display field with", () => {
   });
 });
 
-const targetWith = (field: MetaField | null): MetaTable => ({
+const targetWith = (display: MetaField | null): MetaTable => ({
   ...userTable,
-  displayField: field?.name ?? null,
-  fields: field === null ? userTable.fields : [...userTable.fields, field],
+  displayField: display?.name ?? null,
+  fields: display === null ? userTable.fields : [...userTable.fields, display],
   name: "help.thing",
 });
 

@@ -56,7 +56,7 @@ import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 import { Actor } from "../auth/actor.ts";
 import type { ActingUser } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
-import { TABLE_OF } from "../catalog/definition-tables.ts";
+import { columnsOf, tableOf } from "../catalog/definition-tables.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { uuidv7At } from "../records/change-entry.ts";
 import { currentReadScope, resolveTable } from "../records/read-records.ts";
@@ -221,13 +221,8 @@ const propertiesOf = (
   body: Readonly<Record<string, JsonValue>>,
   allowState: boolean
 ): Result.Result<Candidate, UnknownField | ValidationFailed> => {
-  const entry = TABLE_OF.get(kind);
-
   const columns = new Map(
-    [...(entry?.columns ?? []), ...(entry?.special ?? [])].map((spec) => [
-      spec.column,
-      spec.property,
-    ])
+    columnsOf(tableOf(kind)).map((spec) => [spec.column, spec.property])
   );
 
   const properties: Candidate = {};
@@ -320,11 +315,8 @@ const columnOfProperty = (
       : "target";
   }
 
-  const entry = TABLE_OF.get(kind);
-
-  return [...(entry?.columns ?? []), ...(entry?.special ?? [])].find(
-    (spec) => spec.property === property
-  )?.column;
+  return columnsOf(tableOf(kind)).find((spec) => spec.property === property)
+    ?.column;
 };
 
 /**
@@ -536,7 +528,7 @@ const mergedJsonColumns = (
   const stored: JsonObject = current;
 
   const jsonProperties = new Map(
-    (TABLE_OF.get(current.kind)?.columns ?? []).flatMap((spec) =>
+    tableOf(current.kind).columns.flatMap((spec) =>
       JSON_CODECS.has(spec.codec) ? [[spec.column, spec.property] as const] : []
     )
   );

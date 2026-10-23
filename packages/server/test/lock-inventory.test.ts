@@ -29,6 +29,7 @@ import { LOCAL_ORIGIN } from "@std/definitions/requester";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import { Effect, Result, Schema } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import type {
@@ -40,9 +41,8 @@ import { dropColumn, dropConstraint } from "../src/schema/ddl.ts";
 import { planChangeSet } from "../src/schema/plan.ts";
 import type { Preflight } from "../src/schema/plan.ts";
 import { decodeRows } from "../src/sql/rows.ts";
-import { TABLES, ACME_FIELDS } from "./records-support.ts";
+import { TABLES } from "./records-support.ts";
 import {
-  ACME,
   addField,
   addIndex,
   change,
@@ -429,7 +429,7 @@ describe("lock-inventory", () => {
           );
 
           const snapshot = yield* (yield* Catalog).refresh;
-          const owner = snapshot.field(ACME_FIELDS.owner);
+          const owner = snapshot.field(ACME.owner);
 
           const dropping =
             owner === undefined
@@ -437,7 +437,7 @@ describe("lock-inventory", () => {
               : [
                   dropConstraint(
                     TABLES.asset,
-                    generatedName("fk", ACME_FIELDS.owner),
+                    generatedName("fk", ACME.owner),
                     USER
                   ),
                   dropColumn(TABLES.asset, owner, USER),

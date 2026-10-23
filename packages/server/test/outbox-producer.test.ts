@@ -18,6 +18,7 @@ import {
   snapshotOf,
   table,
 } from "../../definitions/test/fixtures.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { matchingSubscriptions } from "../src/records/outbox-producer.ts";
 import {
   createRecord,
@@ -36,7 +37,6 @@ import {
   subscribe,
 } from "./outbox-support.ts";
 import { changeLog, setUpAcme } from "./records-support.ts";
-import { ACME } from "./schema-support.ts";
 import { waitUntil } from "./support.ts";
 
 const LOST = {

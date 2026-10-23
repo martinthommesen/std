@@ -31,7 +31,6 @@ import { Plaintext, isPlaintext } from "@std/values/write-only";
 import { Effect, Option, Result, Schema } from "effect";
 
 import { applyDeriveRules } from "../hooks/before-rules.ts";
-import { imageOf } from "../hooks/rule-condition.ts";
 import { readChain } from "./aggregate-chain.ts";
 import { authorizeOwners } from "./part-owner-access.ts";
 import type { OwnersOutcome } from "./part-owner-access.ts";
@@ -42,6 +41,7 @@ import { currentReadScope } from "./read-records.ts";
 import type { ReadScope } from "./read-view.ts";
 import { readableOnProposal, readableOnRecord } from "./record-access.ts";
 import { loadRecord, loadRoot } from "./save-sql.ts";
+import { imageOf } from "./stored-record.ts";
 import type { StoredRecord } from "./stored-record.ts";
 import type { ProposalCheck } from "./write-access.ts";
 import { WriteAccess } from "./write-access.ts";

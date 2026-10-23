@@ -14,6 +14,7 @@
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
 import type { FormState } from "@std/api/form-state";
 import type { MetaRelatedList } from "@std/definitions/table-metadata";
+import { formatCivilDate } from "@std/values/calendar";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import {
   Array as EffectArray,
@@ -51,7 +52,7 @@ import {
   defaultSelectionOf,
   wireFieldOf,
 } from "../../domain/wire.ts";
-import { calendarDateOf, isoDateOf } from "../../filter-builder/condition.ts";
+import { calendarDateOf } from "../../filter-builder/condition.ts";
 import { PLAIN_LIST, recordRouter, tableListRouter } from "../../route.ts";
 import type { ListQuery } from "../../route.ts";
 import type { StdApi } from "../../std-client.ts";
@@ -1370,7 +1371,11 @@ const foldDatePicker = Update.foldChildAt({
       SelectedDate:
         ({ date }) =>
         (model) =>
-          editField(model, fieldId, withDate(Option.some(isoDateOf(date)))),
+          editField(
+            model,
+            fieldId,
+            withDate(Option.some(formatCivilDate(date)))
+          ),
     }),
   readAt: (model: Model, fieldId: string) =>
     Record.get(model.datePickers, fieldId),

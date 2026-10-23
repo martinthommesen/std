@@ -1,4 +1,5 @@
 import { assert, describe, it, layer } from "@effect/vitest";
+import { DEFAULT_DATABASE_URL } from "@std/postgres/transport";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { forEach } from "effect/Effect";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
@@ -14,10 +15,7 @@ import {
   ownBody,
   textBodyOf,
 } from "../src/http/body-limits.ts";
-import {
-  DatabaseConfig,
-  DEFAULT_DATABASE_URL,
-} from "../src/sql/database-config.ts";
+import { DatabaseConfig } from "../src/sql/database-config.ts";
 import {
   edgeRequest,
   edgeServer,

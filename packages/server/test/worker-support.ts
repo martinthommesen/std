@@ -10,6 +10,7 @@ import { Context, Effect, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import type { TestDatabaseOptions } from "../../testing/src/test-database.ts";
 import { Actor, loadActor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -29,7 +30,6 @@ import {
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { ACME } from "./schema-support.ts";
 
 /** Handler selection owned by one worker test layer. */
 class TestHandlers extends Context.Service<

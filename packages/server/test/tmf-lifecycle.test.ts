@@ -17,7 +17,6 @@ import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import { Catalog } from "../src/catalog/catalog.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import {
   asArray,
@@ -27,7 +26,12 @@ import {
   textOf,
   apiCallers,
 } from "./api-support.ts";
-import { addField, change, freshId } from "./schema-support.ts";
+import {
+  addField,
+  change,
+  definitionVersion,
+  freshId,
+} from "./schema-support.ts";
 import {
   FF,
   FIXTURE_TICKETS,
@@ -37,11 +41,6 @@ import {
 } from "./tmf-fixture.ts";
 
 const REVISION_HEADER = "std-schema-revision";
-
-const versionOf = (id: string) =>
-  Effect.gen(function* readVersion() {
-    return (yield* (yield* Catalog).refresh).get(id)?.version ?? 0;
-  });
 
 describe("tmf-lifecycle", () => {
   it("names the purger role it needs", () => {
@@ -71,7 +70,11 @@ describe("tmf-lifecycle", () => {
           const field = FF.statusReason.id;
 
           yield* change([
-            { id: field, op: "retire", version: yield* versionOf(field) },
+            {
+              id: field,
+              op: "retire",
+              version: yield* definitionVersion(field),
+            },
           ]);
 
           const retired = yield* http.get(path, alice);
@@ -96,7 +99,7 @@ describe("tmf-lifecycle", () => {
             ["DefinitionRetired"]
           );
 
-          const version = yield* versionOf(field);
+          const version = yield* definitionVersion(field);
 
           yield* applyChangeSet({
             operations: [

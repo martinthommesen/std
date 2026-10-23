@@ -1,13 +1,13 @@
 import { Option } from "effect";
-import { reduce } from "effect/Array";
 import { describe, expect, it } from "vitest";
 
 import { REVISION_5 } from "../form-fixture.ts";
+import { formAfter } from "../page/record-form/fixture.ts";
 import { checkForm, fieldsOf, recordOf } from "../page/record-form/form.ts";
 import { Message } from "../page/record-form/message.ts";
 import { FormMode } from "../page/record-form/model.ts";
 import type { Model } from "../page/record-form/model.ts";
-import { init, update } from "../page/record-form/update.ts";
+import { init } from "../page/record-form/update.ts";
 import { field as metadataField, servedAs } from "../table-fixture.ts";
 import {
   FIELD_TABLE,
@@ -67,20 +67,6 @@ const definitionRecord = (values: RecordJson["values"]): RecordJson => ({
 });
 
 /**
- * Applies Messages one after the other, keeping only the Model.
- *
- * @param start - The first Model.
- * @param messages - The Messages.
- * @returns The last Model.
- */
-const after = (start: Model, ...messages: readonly Message[]): Model =>
-  reduce(
-    messages,
-    start,
-    (current, nextMessage) => update(current, nextMessage).model
-  );
-
-/**
  * A `core.field` form, ready, on a stored definition.
  *
  * @param record - The stored field definition.
@@ -88,7 +74,7 @@ const after = (start: Model, ...messages: readonly Message[]): Model =>
  * @returns The page.
  */
 const formOn = (record: RecordJson, ...messages: readonly Message[]): Model =>
-  after(
+  formAfter(
     init({
       id: 1,
       maybeAppRevision: Option.none(),
@@ -211,7 +197,7 @@ describe("a definition's create form", () => {
       name: "core.role",
     };
 
-    const page = after(
+    const page = formAfter(
       init({
         id: 1,
         maybeAppRevision: Option.none(),

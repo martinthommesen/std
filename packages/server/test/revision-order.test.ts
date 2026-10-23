@@ -19,6 +19,7 @@ import {
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import {
   createRecord,
   deleteRecord,
@@ -31,7 +32,7 @@ import {
   recordsTestLayer,
   setUpAcme,
 } from "./records-support.ts";
-import { ACME, values } from "./schema-support.ts";
+import { values } from "./schema-support.ts";
 
 const UPDATES = 10;
 

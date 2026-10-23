@@ -31,8 +31,8 @@ import {
 } from "../src/catalog/definition-revisions.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { catalogDrift } from "./catalog-drift.ts";
-import { definitionVersion } from "./schema-paths-support.ts";
 import {
+  definitionVersion,
   addAccessRule,
   addField,
   addIndex,

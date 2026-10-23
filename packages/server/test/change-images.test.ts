@@ -16,6 +16,7 @@ import {
 import type { Arbitrary } from "fast-check";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { listResourceEvents } from "../src/events/resource-events.ts";
 import { getTopic } from "../src/events/tmf688-resources.ts";
@@ -44,7 +45,6 @@ import { Transactions } from "../src/sql/transactions.ts";
 import { apiCallers } from "./api-support.ts";
 import { hubTestLayer, register } from "./hub-support.ts";
 import {
-  ACME,
   addField,
   addRole,
   addAccessRule,

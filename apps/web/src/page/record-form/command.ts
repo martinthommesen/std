@@ -11,9 +11,9 @@ import { SchemaChangeSchema } from "@std/api/errors/schemas";
 import { FieldErrorSchema } from "@std/definitions/field-errors";
 import { Effect, Option, Predicate, Schema } from "effect";
 import { Command, Dom, Mount } from "foldkit";
-import { today } from "foldkit/calendar";
 import { replaceUrl } from "foldkit/navigation";
 
+import { calendarToday } from "../../calendar.ts";
 import { DefinitionProblem } from "../../domain/definition-problems.ts";
 import { WriteOnlyValue, sentBody } from "../../domain/form-input.ts";
 import { MetaFieldSchema } from "../../domain/metadata.ts";
@@ -48,9 +48,6 @@ import { Message, ReadPurpose, UnreadSavedRecord } from "./message.ts";
 import { WriteError } from "./model.ts";
 import type { HistoryError, RecordError, RelatedError } from "./model.ts";
 import { displayFieldOf } from "./picker-search.ts";
-
-/** The zone of the Date Pickers' "today": never the device's (5.7). */
-const CALENDAR_ZONE = "UTC";
 
 /** Typed client calls that also read the response's revision header. */
 const WITH_RESPONSE = "decoded-and-response";
@@ -1153,9 +1150,9 @@ export const LoadHistoryLabels = Command.define("LoadHistoryLabels", {
 
 /** Reads today's date in UTC, for the Date Pickers' "today" mark. */
 export const ReadToday = Command.define("ReadToday", {
-  execute: today
-    .inZone(CALENDAR_ZONE)
-    .pipe(Effect.map((date) => Message.CompletedReadToday({ today: date }))),
+  execute: calendarToday.pipe(
+    Effect.map((date) => Message.CompletedReadToday({ today: date }))
+  ),
   messages: [Message.CompletedReadToday],
 });
 

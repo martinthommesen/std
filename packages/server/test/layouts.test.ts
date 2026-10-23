@@ -13,7 +13,6 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import { TableMetadata } from "@std/api/table-metadata";
 import type { LayoutDraft } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
 import type { Requester } from "@std/definitions/requester";
@@ -21,8 +20,9 @@ import type { NamedSetFile, SetFile } from "@std/definitions/set-file";
 import type { MetaLayoutElement } from "@std/definitions/table-metadata";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
@@ -35,14 +35,14 @@ import {
   writeSetDirectory,
 } from "./config-support.ts";
 import {
+  fetchMetadata,
   codeOf,
-  collectionOf,
   listPath,
   readsTestLayer,
 } from "./reads-support.ts";
-import { definitionVersion, postChangeSet } from "./schema-paths-support.ts";
+import { postChangeSet } from "./schema-paths-support.ts";
 import {
-  ACME,
+  definitionVersion,
   addField,
   change,
   createClass,
@@ -145,8 +145,6 @@ const loadVersion = (version: Version) =>
     })
   );
 
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
-
 // A layout as names: `#label` for a section.
 const shown = (elements: readonly MetaLayoutElement[] | null) =>
   elements?.map((entry) =>
@@ -160,14 +158,7 @@ const metaOf = Effect.fn("Layouts.metaOf")(function* metaOf(
   token: string,
   table: string
 ) {
-  const http = yield* TestHttpClient;
-
-  const response = yield* http.get(
-    `/api/v1/tableMetadata/${collectionOf(table)}`,
-    { token }
-  );
-
-  const body = yield* decodeMetadata(response.json).pipe(Effect.orDie);
+  const { body } = yield* fetchMetadata(token, table);
 
   return body.layouts;
 });

@@ -6,7 +6,8 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect } from "effect";
 
-import { ACME, AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import { Catalog } from "../src/catalog/catalog.ts";

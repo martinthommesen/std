@@ -41,6 +41,7 @@ import {
 } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
   TestHttpClientApi,
@@ -84,10 +85,9 @@ import {
   postChangeSet,
   createBodyOf,
   inApiNames,
-  definitionVersion,
 } from "./schema-paths-support.ts";
 import {
-  ACME,
+  definitionVersion,
   ACME_SET_DIRECTORY,
   addAccessRule,
   addChoice,

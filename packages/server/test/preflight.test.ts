@@ -8,9 +8,9 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import type { Operation } from "@std/definitions/operation";
 import { Effect, Layer } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { duplicatePredicate } from "../src/schema/plan.ts";
 import {
-  ACME,
   addField,
   addIndex,
   addOverride,

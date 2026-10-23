@@ -15,10 +15,10 @@
  *   sent as the list API's `filter`.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { TableMetadata } from "@std/api/table-metadata";
+import type { TableMetadata } from "@std/api/table-metadata";
 import { isJsonString } from "@std/values/json-value";
 import type { JsonObject } from "@std/values/json-value";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer } from "effect";
 
 import {
   HELPDESK,
@@ -29,8 +29,8 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { numberOf } from "./api-support.ts";
 import {
+  fetchMetadata,
   allPages,
-  collectionOf,
   listPath,
   codeOf,
   recordPath,
@@ -46,25 +46,18 @@ const testLayer = () =>
     Layer.provideMerge(helpdeskTestLayer({ version: "v2" }))
   );
 
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
-
 type MetaTable = typeof TableMetadata.Type;
 
 const metadataOf = Effect.fn("HelpdeskAgent.metadataOf")(function* metadataOf(
   token: string,
   table: string
 ) {
-  const http = yield* TestHttpClient;
-
-  const response = yield* http.get(
-    `/api/v1/tableMetadata/${collectionOf(table)}`,
-    { token }
-  );
+  const { body, response } = yield* fetchMetadata(token, table);
 
   assert.strictEqual(response.status, 200, response.text);
 
   return {
-    table: yield* decodeMetadata(response.json).pipe(Effect.orDie),
+    table: body,
     text: response.text,
   };
 });

@@ -18,6 +18,7 @@ import { Deferred, Effect, Fiber, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Actor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -35,8 +36,8 @@ import {
   recordPath,
 } from "./reads-support.ts";
 import { rootVersion } from "./records-support.ts";
-import { ACME, addOverride, change, values } from "./schema-support.ts";
-import { waitUntil } from "./support.ts";
+import { addOverride, change } from "./schema-support.ts";
+import { lockWaiterCount, waitUntil } from "./support.ts";
 import { ASSET, create, history, LAPTOP, patch } from "./writes-support.ts";
 
 const COST = ACME.cost;
@@ -57,11 +58,9 @@ const updateDefinition = (
   });
 
 /** Bob's backend waits for a relation lock (Alice holds `core.change`). */
-const bobWaitsOnChangeLog = values(
-  `SELECT count(*)::text AS value FROM pg_stat_activity
-   WHERE datname = current_database() AND wait_event_type = 'Lock'
-     AND wait_event = 'relation'`
-).pipe(Effect.map(([count]) => Number(count) > 0));
+const bobWaitsOnChangeLog = lockWaiterCount({ event: "relation" }).pipe(
+  Effect.map((count) => count > 0)
+);
 
 describe("write-leaks", () => {
   it("keeps the secret date distinct", () => {

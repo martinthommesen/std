@@ -6,6 +6,7 @@ import { Deferred, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { eventIdOf } from "../src/events/event-id.ts";
 import { DeliveryFailed } from "../src/outbox/delivery-failed.ts";
@@ -17,7 +18,6 @@ import { asObject, textOf, apiCallers } from "./api-support.ts";
 import { killAndAwait } from "./cli-support.ts";
 import { hubTestLayer, listener, register } from "./hub-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
-import { ACME } from "./schema-support.ts";
 import { actingAs, expireLease } from "./worker-support.ts";
 import {
   create as createAsset,

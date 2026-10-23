@@ -39,6 +39,7 @@ import { Transactions } from "@std/server/sql/transactions";
 import type { JsonValue } from "@std/values/json-value";
 import { Context, Effect, Layer } from "effect";
 
+import { ACME } from "./acme-ids.ts";
 import { testDatabaseLayer } from "./test-database.ts";
 import type { TestDatabaseOptions } from "./test-database.ts";
 
@@ -46,13 +47,6 @@ import type { TestDatabaseOptions } from "./test-database.ts";
 export const ACME_SET_DIRECTORY = fileURLToPath(
   new URL("../../../examples/acme", import.meta.url)
 );
-
-/** Stable IDs of the acme set. */
-export const ACME = {
-  asset: "989151bb-a69f-4b18-b73d-9e19a4e7514c",
-  laptop: "6a365314-6d1b-4e4d-b166-73f29f808504",
-  monitor: "87363f0e-8122-4569-8fc8-ec8c5277a71b",
-} as const;
 
 /** A fixture user. */
 export interface FixtureUser {

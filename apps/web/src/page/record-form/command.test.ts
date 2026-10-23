@@ -14,6 +14,7 @@ import type { RecordJson } from "../../domain/record.ts";
 import { fakeStdApi, tmfError } from "../../fake-std-api.ts";
 import type { FakeAnswer } from "../../fake-std-api.ts";
 import {
+  present,
   REVISION_5,
   REVISION_6,
   TICKET,
@@ -49,13 +50,6 @@ const USERS_PATH = "/api/v1/coreUser";
  * @param value - The value, or undefined.
  * @returns The value.
  */
-const present = <A>(value: A | undefined): A => {
-  if (value === undefined) {
-    throw new RangeError("the fixture lacks a value the test needs");
-  }
-
-  return value;
-};
 
 const NAME = present(userTable.fields.find((field) => field.name === "name"));
 

@@ -14,12 +14,13 @@ import { isJsonObject } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { objectOf } from "./authz-support.ts";
 import { codeOf, readsTestLayer, recordPath } from "./reads-support.ts";
 import { rootVersion, changeLog, rowCount } from "./records-support.ts";
-import { ACME, change, values } from "./schema-support.ts";
+import { change, values } from "./schema-support.ts";
 import {
   ASSET,
   create,
@@ -31,9 +32,6 @@ import {
 } from "./writes-support.ts";
 
 const RULE_7 = "71fc933a-24a4-4573-8c96-13eb2650dc10";
-const EMPLOYEE = "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b";
-const OWNER = "6a373fb5-bd18-4d7f-b0b4-182470f5421e";
-const DOCKED_TO = "83ec3835-6898-46f3-ae2e-afdbc3f5d407";
 
 // The `password` field of `core.user`.
 const WRITE_ONLY_FIELD_ID = "e122cfbe-11ea-4469-8c9b-14f4eab4aa74";
@@ -66,7 +64,10 @@ const replaceRule7ForName = Effect.gen(function* replaceRule7() {
   const operations: Operation[] = [
     {
       changes: {
-        target: { fields: [ACME.status, OWNER, DOCKED_TO], kind: "fields" },
+        target: {
+          fields: [ACME.status, ACME.owner, ACME.dockedTo],
+          kind: "fields",
+        },
       },
       id: RULE_7,
       op: "update",
@@ -89,7 +90,7 @@ const replaceRule7ForName = Effect.gen(function* replaceRule7() {
         name: null,
         owner: { layer: "local" },
         protected: false,
-        roleIds: [EMPLOYEE],
+        roleIds: [ACME.employee],
         target: { fields: [ACME.name], kind: "fields" },
       },
       op: "createAccessRule",

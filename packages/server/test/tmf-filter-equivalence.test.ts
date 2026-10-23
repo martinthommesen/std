@@ -28,6 +28,7 @@ import {
 import type { Arbitrary } from "fast-check";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import {
   HelpdeskFixture,
   helpdeskTestLayer,
@@ -44,12 +45,7 @@ import {
 } from "./api-support.ts";
 import { createTicket, itilLayer } from "./itil-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import {
-  ACME,
-  addField,
-  change,
-  values as sqlValues,
-} from "./schema-support.ts";
+import { addField, change, values as sqlValues } from "./schema-support.ts";
 import { itemsOf, TICKETS, tmf621As } from "./tmf621-support.ts";
 import type { Tmf621Client } from "./tmf621-support.ts";
 

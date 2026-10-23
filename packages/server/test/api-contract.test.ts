@@ -15,6 +15,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { API_PREFIX } from "@std/api/api";
 import { Effect } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import {
   checkApiExchange,
   API_ENDPOINTS,
@@ -36,7 +37,7 @@ import {
   apiCallers,
 } from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import { ACME, addField } from "./schema-support.ts";
+import { addField } from "./schema-support.ts";
 
 type Outcome = "success" | "error";
 

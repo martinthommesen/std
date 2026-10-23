@@ -8,6 +8,7 @@ import type { Expr } from "@std/conditions/ast";
 import { ConditionSchema, conditionFieldIds } from "@std/definitions/condition";
 import type { Condition } from "@std/definitions/condition";
 import type { SubscriptionDefinition } from "@std/definitions/definition";
+import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import type { HubConfiguration } from "@std/definitions/hub";
 import { hasPermission } from "@std/definitions/requester";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -335,7 +336,7 @@ export const prepareRegistration = Effect.fn("Hubs.prepare")(
       queryFieldIds
     );
 
-    return {
+    const registration = {
       attributeCondition,
       callback,
       condition,
@@ -346,6 +347,33 @@ export const prepareRegistration = Effect.fn("Hubs.prepare")(
       standardCondition,
       target,
     } satisfies Registration;
+
+    if (target.api === "TMF688" && target.topicId !== null) {
+      const field = scope.snapshot.fieldByName(EVENT_CLASS_IDS.event, "topic");
+
+      if (field === undefined) {
+        return yield* new NotFound();
+      }
+
+      const topicCondition = {
+        left: { path: [field.id] },
+        op: "eq",
+        right: { value: target.topicId },
+      } as const;
+
+      const withTopic = (candidate: Condition | null): Condition =>
+        candidate === null
+          ? topicCondition
+          : { args: [candidate, topicCondition], op: "and" };
+
+      return {
+        ...registration,
+        condition: withTopic(registration.condition),
+        standardCondition: withTopic(registration.standardCondition),
+      };
+    }
+
+    return registration;
   }
 );
 

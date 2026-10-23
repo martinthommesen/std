@@ -9,6 +9,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
 import { Cause, Effect, Exit } from "effect";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import type {
   HistoryEntry,
   HistoryFilter,
@@ -26,7 +27,6 @@ import {
   setUpAcme,
   USERS,
 } from "./records-support.ts";
-import { ACME } from "./schema-support.ts";
 
 /** Every field of a laptop except `cost`. */
 const READABLE_WITHOUT_COST: ReadonlySet<string> = new Set([
@@ -201,17 +201,14 @@ describe("record-history", () => {
         }).pipe(asUser(USERS.bob));
 
         const { entries } = yield* readHistory({
-          readable: new Set([
-            ACME.name,
-            "9ecc19c5-8401-4887-ac05-d5dbdd937297",
-          ]),
+          readable: new Set([ACME.name, ACME.sizeInches]),
           recordId: monitor.id,
           selection: HISTORY_PAGE,
         });
 
         assert.deepStrictEqual(entries[1]?.fields, {
           [ACME.name]: { after: null, before: "M" },
-          "9ecc19c5-8401-4887-ac05-d5dbdd937297": { after: null, before: 27 },
+          [ACME.sizeInches]: { after: null, before: 27 },
         });
         assert.strictEqual(entries[1]?.kind, "delete");
         assert.strictEqual(entries[1]?.version, 2);

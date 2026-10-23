@@ -7,6 +7,7 @@ import {
 import { Duration, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { readLayerState } from "../src/config/layer-store.ts";
@@ -28,12 +29,7 @@ import { STD_VERSION } from "../src/version.ts";
 import { startServe, startWorker } from "./cli-support.ts";
 import { outboxTestLayer, subscribe } from "./outbox-support.ts";
 import { USERS, setUpAcme } from "./records-support.ts";
-import {
-  ACME,
-  ACME_SET_DIRECTORY,
-  addField,
-  addRole,
-} from "./schema-support.ts";
+import { ACME_SET_DIRECTORY, addField, addRole } from "./schema-support.ts";
 import { waitUntil } from "./support.ts";
 
 const FUTURE_ID = "9b8da80b-93d0-4a29-877c-e9a1d8e2c303";

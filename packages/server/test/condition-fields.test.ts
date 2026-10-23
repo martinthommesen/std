@@ -22,6 +22,7 @@ import type { JsonValue } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -32,9 +33,9 @@ import {
   recordPath,
   resourceOf,
 } from "./reads-support.ts";
-import { definitionVersion, postChangeSet } from "./schema-paths-support.ts";
+import { postChangeSet } from "./schema-paths-support.ts";
 import {
-  ACME,
+  definitionVersion,
   addField,
   createClass,
   ensureSite,

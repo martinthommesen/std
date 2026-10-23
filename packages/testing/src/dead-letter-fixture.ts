@@ -5,7 +5,8 @@ import { decodeRows } from "@std/server/sql/rows";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { ACME, AcmeFixture } from "./acme-fixture.ts";
+import { AcmeFixture } from "./acme-fixture.ts";
+import { ACME } from "./acme-ids.ts";
 import { TestHttpClient } from "./http-client.ts";
 import type { TestRequestOptions, TestResponse } from "./http-client.ts";
 

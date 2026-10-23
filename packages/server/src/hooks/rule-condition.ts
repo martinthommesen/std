@@ -25,7 +25,7 @@ import { isString } from "@std/values/field-value";
 import { Effect, Option } from "effect";
 
 import { loadRecord } from "../records/save-sql.ts";
-import type { StoredRecord } from "../records/stored-record.ts";
+import { imageOf } from "../records/stored-record.ts";
 
 /** What a rule condition is resolved with (5.10: `me`, `now`). */
 export interface RuleContext {
@@ -52,15 +52,6 @@ export interface RuleImages {
   /** The current record takes precedence over its shared settling image. */
   readonly liveRecordId?: string | null;
 }
-
-/**
- * A record's values as an image.
- *
- * @param record - A stored record.
- * @returns Its values by field ID.
- */
-export const imageOf = (record: StoredRecord): RecordImage =>
-  Object.fromEntries(record.values);
 
 const checkedConditions = new WeakMap<
   ConfigSnapshot,

@@ -42,6 +42,7 @@ import type { JsonValue } from "@std/values/json-value";
 import { Effect, Logger, Result } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { loadActor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -59,10 +60,9 @@ import {
   update as updateAggregate,
 } from "./aggregates-support.ts";
 import { codeOf, readsTestLayer } from "./reads-support.ts";
-import { ACME_FIELDS, asUser, USERS } from "./records-support.ts";
+import { asUser, USERS } from "./records-support.ts";
 import { postChangeSet } from "./schema-paths-support.ts";
 import {
-  ACME,
   addField,
   addRecordRule,
   createClass,
@@ -272,9 +272,9 @@ const startsWith = (fieldId: string, prefix: string): Condition => ({
 const laptopsOfOwner = {
   classId: ACME.laptop,
   where: {
-    left: path(ACME_FIELDS.owner),
+    left: path(ACME.owner),
     op: "eq",
-    right: path(ACME_FIELDS.owner, "record"),
+    right: path(ACME.owner, "record"),
   },
 } as const satisfies { readonly classId: string; readonly where: Condition };
 
@@ -576,9 +576,7 @@ describe("record-rule-actions", () => {
                 actions: [
                   {
                     type: "set",
-                    values: [
-                      { fieldId: ACME_FIELDS.dockedTo, value: { ctx: "me" } },
-                    ],
+                    values: [{ fieldId: ACME.dockedTo, value: { ctx: "me" } }],
                   },
                 ],
                 ruleKind: "derive",
@@ -613,7 +611,7 @@ describe("record-rule-actions", () => {
                     type: "set",
                     values: [
                       {
-                        fieldId: ACME_FIELDS.dockedTo,
+                        fieldId: ACME.dockedTo,
                         value: { copy: { fieldId: null, from: "record" } },
                       },
                     ],
@@ -674,7 +672,7 @@ describe("record-rule-actions", () => {
               addRecordRule(ACME.asset, {
                 actions: [
                   updateLaptopsWhere({
-                    arg: { path: [ACME_FIELDS.dockedTo, ACME.name] },
+                    arg: { path: [ACME.dockedTo, ACME.name] },
                     op: "empty",
                   }),
                 ],
