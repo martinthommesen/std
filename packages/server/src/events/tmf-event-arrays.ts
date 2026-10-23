@@ -25,9 +25,10 @@
  * - **A fixed number of statements**, whatever the number of parts: the
  *   touched parts in one, the array's members (today's parts and those
  *   deleted after the change) in two, and their versions at the change with
- *   their saved images (`core.change_image`) in one. Only a change entry the
- *   image backfill (migration 0028) has not reached yet is rebuilt alone,
- *   from its history (`readEntries`).
+ *   their saved images (`core.change_image`) in one. Change entries the
+ *   image backfill (migration 0028) has not reached yet are rebuilt
+ *   together (`readEntriesAt`, two statements for all, at most three
+ *   entries per version), with each class's field origins read once.
  * - **Reference paths** (`assigned_to.individual`): the target's field as
  *   the identity may read it now, for the reference the change's image
  *   holds; `statusChangeHistory` from the record's history up to the
@@ -72,10 +73,11 @@ import {
 } from "../http/tmf/sources.ts";
 import type { Delivery, RenderPrepared } from "../outbox/delivery-effects.ts";
 import {
+  entryTargetKey,
   PayloadUnreadable,
   payloadOf,
   readFieldOrigins,
-  readHistories,
+  readEntriesAt,
   versionImage,
 } from "../outbox/delivery-payload.ts";
 import type {
@@ -187,8 +189,9 @@ const savedEntries = (
 /**
  * Part changes as the identity may see them: each saved image masked by
  * `payloadOf`; the entries the image backfill (migration 0028) has not
- * reached yet are rebuilt together, from one read of their histories
- * (`readHistories`) and each class's field origins, read once.
+ * reached yet are rebuilt together (`readEntriesAt`: two statements for
+ * all, each version reduced in SQL to at most three entries), with each
+ * class's field origins read once.
  *
  * @param read - The delivery and scope.
  * @param rows - The part changes.
@@ -201,7 +204,7 @@ const partsAt = Effect.fnUntraced(function* partsAt(
   const { snapshot } = read.delivery;
   const legacy = rows.filter((row) => row.image === null);
 
-  const histories = yield* readHistories(
+  const histories = yield* readEntriesAt(
     legacy.map((row) => ({ recordId: row.record_id, version: row.version }))
   );
 
@@ -219,10 +222,12 @@ const partsAt = Effect.fnUntraced(function* partsAt(
   for (const row of rows) {
     const entries =
       row.image === null
-        ? histories.get(row.record_id)
+        ? histories.get(
+            entryTargetKey({ recordId: row.record_id, version: row.version })
+          )
         : savedEntries(row, row.image);
 
-    if (entries === undefined) {
+    if (entries === undefined || entries.length === 0) {
       return yield* new PayloadUnreadable({
         reason: `Part ${row.record_id} at version ${row.version} (change ${row.change_id}) is not readable.`,
       });
@@ -276,9 +281,12 @@ const arrayOfClass = (
 
 /**
  * The arrays an aggregate save's transaction wrote a part of that the
- * identity may see: the part changes of the save's operation (those
+ * identity may see: the parts the save's operation wrote (those
  * `cause.aggregate.parts` lists and those the settling wrote). Any other
- * owner change wrote no part (Contracts 4.9).
+ * owner change wrote no part (Contracts 4.9). A transaction commits at
+ * once, so only each part's state before it and after it can be seen: the
+ * part is read at those two versions, however often the operation wrote
+ * it.
  *
  * @param read - The delivery and scope.
  * @param arrays - The resource's arrays of parts.
@@ -292,12 +300,19 @@ const arraysWritten = Effect.fnUntraced(function* arraysWritten(
   const touched = new Set<string>();
 
   const rows = yield* readRows(
-    sql`SELECT ${PART_COLUMNS}
-FROM core."change" AS "o"
-JOIN core."change" AS "p" ON "p"."operation_id" = "o"."operation_id"
-${PART_IMAGES}
-WHERE "o"."id" = ${textParameter(delivery.changeId, "uuid")} AND "o"."cause" ? 'aggregate'
-  AND "p"."record_class_id" = ANY(${arrayParameter(partClassesOf(delivery, arrays), "uuid")})`
+    sql`WITH "written" AS (
+  SELECT "w"."record_id", min("w"."record_version") AS "first", max("w"."record_version") AS "last"
+  FROM core."change" AS "o"
+  JOIN core."change" AS "w" ON "w"."operation_id" = "o"."operation_id"
+  WHERE "o"."id" = ${textParameter(delivery.changeId, "uuid")} AND "o"."cause" ? 'aggregate'
+    AND "w"."record_class_id" = ANY(${arrayParameter(partClassesOf(delivery, arrays), "uuid")})
+  GROUP BY "w"."record_id"
+)
+SELECT ${PART_COLUMNS}
+FROM "written" AS "x"
+JOIN core."change" AS "p" ON "p"."record_id" = "x"."record_id"
+  AND "p"."record_version" IN ("x"."first" - 1, "x"."last")
+${PART_IMAGES}`
   ).pipe(Effect.flatMap(PartRows));
 
   for (const part of yield* partsAt(read, rows)) {

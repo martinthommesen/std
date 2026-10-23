@@ -48,6 +48,7 @@ import {
   characteristicsWith,
   etagOf,
   individualOf,
+  JSON_PATCH,
   itemsOf,
   SPECIFICATIONS,
   TICKETS,
@@ -577,6 +578,106 @@ describe("tmf621", () => {
             (yield* stored(ticket, "helpdeskIncident")).statusChangeHistory
           ).map((item) => asObject(item).status),
           ["acknowledged"]
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "notes and related parties of a colleague's ticket are refused through merge-patch and JSON Patch, changing nothing, while a new ticket's own notes are created",
+    () =>
+      Effect.gen(function* partOwners() {
+        const fixture = yield* HelpdeskFixture;
+        const admin = yield* tmf621As("admin");
+        const agent = yield* tmf621As("agent");
+        const colleague = yield* individualOf(fixture.agent2.id);
+        const customer = yield* individualOf(fixture.agent.id);
+
+        const assignee = {
+          partyOrPartyRole: { id: colleague },
+          role: "assignee",
+        };
+
+        const parties = [
+          assignee,
+          { partyOrPartyRole: { id: customer }, role: "customer" },
+        ];
+
+        // Assigned to a colleague: the agent may read it, not update it.
+        const ticket = yield* open(admin, {
+          note: [{ text: "original" }],
+          relatedParty: parties,
+        });
+
+        const path = `${TICKETS}/${textOf(ticket.id)}`;
+        const before = yield* agent.get(path);
+
+        assert.strictEqual(before.status, 200, before.text);
+
+        const notes = arrayOf(ticket, "note");
+        const related = arrayOf(ticket, "relatedParty");
+
+        const writes: readonly (readonly [string, string, JsonValue])[] = [
+          ["note", "create", [...notes, { text: "added" }]],
+          [
+            "note",
+            "update",
+            notes.map((note) => ({ ...note, text: "changed" })),
+          ],
+          ["note", "delete", []],
+          [
+            "relatedParty",
+            "create",
+            [
+              ...related,
+              { partyOrPartyRole: { id: customer }, role: "observer" },
+            ],
+          ],
+          [
+            "relatedParty",
+            "update",
+            related.map((party) =>
+              party.role === "customer" ? { ...party, role: "observer" } : party
+            ),
+          ],
+          [
+            "relatedParty",
+            "delete",
+            related.filter((party) => party.role === "assignee"),
+          ],
+        ];
+
+        for (const [attribute, action, value] of writes) {
+          const merged = yield* agent.patch(path, { [attribute]: value });
+
+          const patched = yield* agent.patch(
+            path,
+            [{ op: "replace", path: `/${attribute}`, value }],
+            { contentType: JSON_PATCH }
+          );
+
+          for (const response of [merged, patched]) {
+            assert.strictEqual(
+              outcome(response),
+              "403 NotAllowed",
+              `${attribute} ${action}: ${response.text}`
+            );
+          }
+        }
+
+        const after = yield* agent.get(path);
+
+        assert.strictEqual(after.text, before.text);
+        assert.strictEqual(etagOf(after), etagOf(before));
+
+        // The creator's own new ticket takes its notes and parties.
+        const own = yield* open(agent, {
+          note: [{ text: "creator content" }],
+          relatedParty: parties,
+        });
+
+        assert.deepStrictEqual(
+          arrayOf(own, "note").map((note) => note.text),
+          ["creator content"]
         );
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );

@@ -204,7 +204,10 @@ export interface CustomFilter {
   readonly kind: "custom";
   /**
    * The condition (paths are source keys) for the values, ORed; the
-   * caller must be able to read every source of the attribute.
+   * caller must be able to read every source of the attribute. Which paths
+   * the condition tests must not depend on the values, only the constants
+   * it compares with: a hub decides whether it can filter on the attribute
+   * from the condition built for a sample value (decision 0035).
    */
   readonly build: (
     comparison: FilterComparison,

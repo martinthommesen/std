@@ -35,15 +35,21 @@ import {
   mergePatchEventProblem,
   schemaValueProblem,
 } from "../../testing/src/tmf-oas-contract.ts";
+import { readEntriesAt } from "../src/outbox/delivery-payload.ts";
 import { ProductionDeliveryHandlers } from "../src/outbox/production-handlers.ts";
 import { WorkerSettings, workerPass } from "../src/outbox/worker.ts";
 import { OutboxSaveHooks } from "../src/records/outbox-producer.ts";
+import {
+  aggregateOperation,
+  lockAggregates,
+  updateRecord,
+} from "../src/records/save-pipeline.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { asArray, asObject, textOf } from "./api-support.ts";
 import { listener } from "./hub-support.ts";
 import type { CallbackCall } from "./hub-support.ts";
-import { upgradedHelpdesk } from "./itil-support.ts";
+import { recordServices, upgradedHelpdesk } from "./itil-support.ts";
 import { change } from "./schema-support.ts";
 import {
   arrayOf,
@@ -745,6 +751,85 @@ describe("tmf621-events", () => {
         assert.strictEqual(bodyOf(refused).code, "InvalidRequest");
         assert.notMatch(textOf(bodyOf(refused).message), /severity/u);
       }).pipe(Effect.provide(maskedLayer), Effect.scoped, TestClock.withLive)
+  );
+
+  it.effect(
+    "a note updated twice in one operation is delivered from history its images lack, and a long history reads at most three entries",
+    () =>
+      Effect.gen(function* twiceInOneOperation() {
+        const admin = yield* tmf621As("admin");
+        const sql = yield* SqlClient.SqlClient;
+        const calls = yield* listener();
+
+        yield* register(admin, calls.origin, `eventType=${AVC}`);
+
+        const created = yield* admin.post(
+          TICKETS,
+          ticketBody({ note: [{ text: "first" }] })
+        );
+
+        const [note] = arrayOf(bodyOf(created), "note");
+        const noteId = textOf(note?.id);
+
+        yield* deliverAll;
+        calls.calls.length = 0;
+
+        const revise = (revisions: readonly string[]) =>
+          aggregateOperation(
+            Effect.gen(function* revising() {
+              yield* lockAggregates([
+                { classId: HELPDESK_CLASS_IDS.note, id: noteId },
+              ]);
+
+              const [{ version } = { version: 0 }] = yield* sql<{
+                version: string;
+              }>`SELECT version::text AS version FROM helpdesk.ticket_note WHERE id = ${noteId}::uuid`;
+
+              for (const [index, text] of revisions.entries()) {
+                yield* updateRecord({
+                  body: { text },
+                  endpointClassId: HELPDESK_CLASS_IDS.note,
+                  expectedVersion: Number(version) + index,
+                  id: noteId,
+                });
+              }
+            })
+          ).pipe(Effect.provide(recordServices));
+
+        const removeImages = sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${noteId}::uuid)`;
+
+        // Versions 2 and 3 of one note, both rebuilt from history.
+        yield* revise(["second", "third"]);
+        yield* removeImages;
+        yield* deliverAll;
+
+        assert.deepStrictEqual(texts(carrying(calls.calls, "note")), [
+          ["third"],
+        ]);
+
+        // A thousand more versions: each target still reads three entries.
+        yield* revise(
+          Array.from({ length: 1000 }, (_, index) => `revision ${index}`)
+        );
+        yield* removeImages;
+
+        const entries = yield* readEntriesAt([
+          { recordId: noteId, version: 1003 },
+          { recordId: noteId, version: 2 },
+        ]);
+
+        assert.deepStrictEqual(
+          [...entries.values()].map((each) => each.length),
+          [3, 2]
+        );
+
+        yield* deliverAll;
+
+        assert.deepStrictEqual(texts(carrying(calls.calls, "note")).at(-1), [
+          "revision 999",
+        ]);
+      }).pipe(Effect.provide(eventsLayer), Effect.scoped, TestClock.withLive),
+    { timeout: 120_000 }
   );
 
   it.effect(

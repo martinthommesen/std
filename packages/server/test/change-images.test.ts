@@ -3,6 +3,17 @@ import { BUILT_IN_ROLE_IDS, SYSTEM_USER_ID } from "@std/definitions/well-known";
 import { Effect, Logger, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
+import {
+  array,
+  assert as check,
+  asyncProperty,
+  boolean,
+  constant,
+  constantFrom,
+  integer,
+  record,
+} from "fast-check";
+import type { Arbitrary } from "fast-check";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -11,8 +22,10 @@ import { getTopic } from "../src/events/tmf688-resources.ts";
 import {
   decodedImage,
   decisionHolds,
+  entryTargetKey,
   payloadOf,
   readEntries,
+  readEntriesAt,
   readFieldOrigins,
   versionImage,
 } from "../src/outbox/delivery-payload.ts";
@@ -530,5 +543,160 @@ describe("change images", () => {
       assert.isTrue(size?.single_image);
       assert.isAbove(size?.image_bytes ?? 0, 2000);
       assert.isBelow(size?.image_bytes ?? 0, 4000);
+    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+
+  test("readEntriesAt rebuilds every target as its saved image, whatever images are missing, with at most three entries each", () =>
+    Effect.gen(function* entriesAtProperty() {
+      const sql = yield* SqlClient.SqlClient;
+      const snapshot = yield* (yield* Catalog).refresh;
+      const origins = yield* readFieldOrigins(snapshot, ACME.asset);
+
+      // Each sample: records with some updates (and maybe a delete), the
+      // images to remove for each, and versions to read, repeated and mixed.
+      const samples = array(
+        record({
+          deleted: boolean(),
+          missing: constantFrom("none", "all", "some"),
+          updates: integer({ max: 6, min: 0 }),
+        }),
+        { maxLength: 3, minLength: 1 }
+      ).chain((records) =>
+        record({
+          records: constant(records),
+          seed: integer({ max: 1000, min: 0 }),
+          targets: array(
+            integer({ max: 99, min: 0 }).chain((pick) =>
+              integer({ max: 99, min: 0 }).map((version) => ({ pick, version }))
+            ),
+            { maxLength: 8, minLength: 1 }
+          ),
+        })
+      );
+
+      const run = Effect.fn("ChangeImages.entriesAtSample")(function* sample(
+        input: typeof samples extends Arbitrary<infer Sample> ? Sample : never
+      ) {
+        const written: {
+          readonly id: string;
+          readonly missing: string;
+          readonly truth: ReadonlyMap<number, unknown>;
+          readonly versions: number;
+        }[] = [];
+
+        for (const spec of input.records) {
+          const { id, remove, update } = yield* asset;
+
+          for (let version = 1; version <= spec.updates; version += 1) {
+            yield* update(version);
+          }
+
+          const last = spec.updates + 1;
+
+          if (spec.deleted) {
+            yield* remove(last);
+          }
+
+          const versions = spec.deleted ? last + 1 : last;
+
+          // The truth, while every version still has its saved image.
+          const truth = new Map<number, unknown>();
+
+          for (let version = 1; version <= versions; version += 1) {
+            truth.set(
+              version,
+              versionImage(snapshot, yield* readEntries(id, version), origins)
+            );
+          }
+
+          written.push({ id, missing: spec.missing, truth, versions });
+        }
+
+        for (const [index, entry] of written.entries()) {
+          const odd = (input.seed + index) % 2;
+
+          if (entry.missing === "all") {
+            yield* sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${entry.id}::uuid)`;
+          }
+
+          if (entry.missing === "some") {
+            yield* sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${entry.id}::uuid AND record_version % 2 = ${odd})`;
+          }
+        }
+
+        const targets = input.targets.map(({ pick, version }) => {
+          const entry = written[pick % written.length] ?? written[0];
+
+          return {
+            entry,
+            target: {
+              recordId: entry?.id ?? "",
+              version: (version % (entry?.versions ?? 1)) + 1,
+            },
+          };
+        });
+
+        const batch = yield* readEntriesAt(targets.map(({ target }) => target));
+
+        for (const { entry, target } of targets) {
+          const entries = batch.get(entryTargetKey(target)) ?? [];
+
+          assert.isAtMost(entries.length, 3);
+          assert.deepStrictEqual(
+            versionImage(snapshot, entries, origins),
+            entry?.truth.get(target.version),
+            JSON.stringify({ missing: entry?.missing, target })
+          );
+          assert.deepStrictEqual(
+            entries,
+            yield* readEntries(target.recordId, target.version)
+          );
+        }
+      });
+
+      const services =
+        yield* Effect.context<Effect.Services<ReturnType<typeof run>>>();
+
+      const runSample = Effect.runPromiseWith(services);
+
+      yield* Effect.promise(async () => {
+        await check(
+          asyncProperty(samples, async (input) => {
+            await runSample(run(input));
+          }),
+          { numRuns: 12, seed: 20_261_023 }
+        );
+      });
+    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+
+  test("readEntriesAt reads two versions of one record across a history gap as readEntries does each, in two statements", () =>
+    Effect.gen(function* entriesAtGap() {
+      const sql = yield* SqlClient.SqlClient;
+      const log = yield* StatementLog;
+      const { id, update } = yield* asset;
+
+      for (const version of [1, 2, 3, 4, 5]) {
+        yield* update(version);
+      }
+
+      yield* sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid)`;
+      yield* sql`DELETE FROM core.resource_event WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid AND record_version = 3)`;
+      yield* sql`DELETE FROM core.change WHERE record_id = ${id}::uuid AND record_version = 3`;
+
+      const targets = [5, 4, 6, 2].map((version) => ({
+        recordId: id,
+        version,
+      }));
+
+      yield* log.clear;
+      const batch = yield* readEntriesAt(targets);
+
+      assert.lengthOf(yield* log.texts, 2);
+
+      for (const target of targets) {
+        assert.deepStrictEqual(
+          batch.get(entryTargetKey(target)),
+          yield* readEntries(id, target.version)
+        );
+      }
     }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
 });
