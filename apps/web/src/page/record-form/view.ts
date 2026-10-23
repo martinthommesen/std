@@ -46,7 +46,7 @@ import { historyView, relatedListsView } from "./panels-view.ts";
 import {
   FORM_MESSAGES_ID,
   isRecordOutdated,
-  isReloading,
+  isSaveHeld,
   listUrlOf,
 } from "./update.ts";
 
@@ -694,22 +694,8 @@ const sectionView = (
   });
 };
 
-const isSaving = (model: Model): boolean =>
-  Submission.guards.Saving(model.submission);
-
-const isSaveBlocked = (model: Model): boolean => {
-  const isWaitingForServer =
-    isFormStatePending(model) || isSaving(model) || isReloading(model);
-
-  return (
-    isWaitingForServer ||
-    isRecordOutdated(model) ||
-    Submission.guards.SavedUnread(model.submission)
-  );
-};
-
 const saveText = (model: Model): string => {
-  if (isSaving(model)) {
+  if (Submission.guards.Saving(model.submission)) {
     return "Saving…";
   }
 
@@ -763,7 +749,7 @@ const actionBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
             ? h.empty
             : Button.view(
                 {
-                  isDisabled: isSaveBlocked(model),
+                  isDisabled: isSaveHeld(model),
                   onClick: Message.ClickedSave(),
                   toView: (attributes) =>
                     h.button(

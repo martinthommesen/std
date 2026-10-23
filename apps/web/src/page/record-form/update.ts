@@ -15,7 +15,14 @@ import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
 import type { FormState } from "@std/api/form-state";
 import type { MetaRelatedList } from "@std/definitions/table-metadata";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
-import { Equal, Option, Record, pipe } from "effect";
+import {
+  Array as EffectArray,
+  Equal,
+  Option,
+  Record,
+  Result,
+  pipe,
+} from "effect";
 import { AsyncData, Update } from "foldkit";
 import type { CalendarDate } from "foldkit/calendar";
 import { modifyFields } from "foldkit/struct";
@@ -108,7 +115,6 @@ import {
   WriteError,
 } from "./model.ts";
 import type {
-  HistoryEntries as HistoryEntriesState,
   HistoryError,
   Model,
   Picker,
@@ -117,7 +123,6 @@ import type {
   RecordError,
   RelatedError,
   RelatedList,
-  StoredRecord as StoredRecordState,
 } from "./model.ts";
 import {
   PickerFilter,
@@ -141,40 +146,6 @@ type Step = Update.Step<Model, Message, StdApi>;
 /** The reference pickers' Combobox, over record IDs. */
 export const ReferenceCombobox = Combobox.create();
 
-/**
- * Changes one entry of a record, if it has the key.
- *
- * @param entries - The record.
- * @param key - The key.
- * @param change - The change.
- * @returns The record, changed at that key.
- */
-const modifyEntry = <A>(
-  entries: Readonly<Record<string, A>>,
-  key: string,
-  change: (entry: A) => A
-): Readonly<Record<string, A>> =>
-  Option.match(Record.get(entries, key), {
-    onNone: () => entries,
-    onSome: (entry) => Record.set(entries, key, change(entry)),
-  });
-
-/**
- * Runs steps one after the other, each on the Model the one before made.
- *
- * @param steps - The steps.
- * @returns One step.
- */
-const inSequence =
-  (steps: readonly Step[]): Step =>
-  (model) => {
-    const [first, ...rest] = steps;
-
-    return first === undefined
-      ? { model }
-      : Update.combine(model, [first, inSequence(rest)]);
-  };
-
 /** The calendar's today until the page has read it (never shown in practice). */
 const FALLBACK_TODAY: CalendarDate = { day: 1, month: 1, year: 2000 };
 
@@ -183,6 +154,11 @@ export const DELETE_DIALOG_ID = "record-delete-dialog";
 
 /** The element ID of the messages at the top of the form. */
 export const FORM_MESSAGES_ID = "record-form-messages";
+
+const reloading = <A, E>(
+  state: AsyncData.AsyncData<A, E>
+): AsyncData.AsyncData<A, E> =>
+  Option.getOrElse(AsyncData.revalidateOrLoad(state), () => state);
 
 // INIT
 
@@ -359,12 +335,10 @@ const askForTarget =
           Record.set(
             known,
             table,
-            Option.match(
-              Option.flatMap(Record.get(known, table), AsyncData.getData),
-              {
-                onNone: () => TargetMetadata.Loading(),
-                onSome: (data) => TargetMetadata.Refreshing({ data }),
-              }
+            reloading(
+              Option.getOrElse(Record.get(known, table), () =>
+                TargetMetadata.Idle()
+              )
             )
           ),
       }),
@@ -423,7 +397,7 @@ const setUpControls: Step = (model) =>
         ),
       ];
 
-      return inSequence(
+      return Update.combine(
         targets.map((table) => askForTarget(table, meta.revision))
       )(
         modifyFields(model, {
@@ -588,29 +562,26 @@ const syncRelatedLists = (model: Model, table: MetaTable): Model => {
 
   const before = model.relatedLists;
 
-  const kept = table.relatedLists.map((entry) =>
-    Option.map(
-      Option.orElse(Option.fromNullishOr(before.find(isListOf(entry))), () =>
-        renamedListOf(before, table.relatedLists, entry)
-      ),
-      (list) => modifyFields(list, { entry: () => entry })
-    )
-  );
-
-  const created = kept.filter(Option.isNone).length;
-
-  const lists = table.relatedLists.map((entry, index) =>
-    Option.getOrElse(kept[index] ?? Option.none(), () =>
-      closedRelatedList(
-        model.nextRelatedListId +
-          kept.slice(0, index).filter(Option.isNone).length,
-        entry
+  const [nextRelatedListId, lists] = EffectArray.mapAccum(
+    table.relatedLists,
+    model.nextRelatedListId,
+    (nextId, entry): readonly [number, RelatedList] =>
+      Option.match(
+        Option.orElse(Option.fromNullishOr(before.find(isListOf(entry))), () =>
+          renamedListOf(before, table.relatedLists, entry)
+        ),
+        {
+          onNone: () => [nextId + 1, closedRelatedList(nextId, entry)],
+          onSome: (list) => [
+            nextId,
+            modifyFields(list, { entry: () => entry }),
+          ],
+        }
       )
-    )
   );
 
   return modifyFields(model, {
-    nextRelatedListId: (next) => next + created,
+    nextRelatedListId: () => nextRelatedListId,
     relatedLists: () => lists,
   });
 };
@@ -638,12 +609,6 @@ const relatedFilterOf = (
 ): string =>
   `${apiNameIn(related.fields.map(wireFieldOf), list.entry.field)} = ${JSON.stringify(recordId)}`;
 
-const reloadingRelated = (records: RelatedList["records"]) =>
-  Option.match(AsyncData.getData(records), {
-    onNone: () => RelatedRecords.Loading(),
-    onSome: (data) => RelatedRecords.Refreshing({ data }),
-  });
-
 type CursorStack = readonly Option.Option<string>[];
 
 const FIRST_PAGE: CursorStack = [Option.none()];
@@ -654,7 +619,7 @@ const loadingRelatedPage =
     modifyFields(list, {
       generation: () => generation,
       maybePendingCursors: () => Option.some(cursors),
-      records: reloadingRelated,
+      records: reloading,
     });
 
 const relatedPageRequest = (
@@ -715,11 +680,7 @@ const loadingRelatedMetadata =
   (generation: number) =>
   (list: RelatedList): RelatedList =>
     modifyFields(list, {
-      metadata: (metadata) =>
-        Option.match(AsyncData.getData(metadata), {
-          onNone: () => RelatedMetadata.Loading(),
-          onSome: (data) => RelatedMetadata.Refreshing({ data }),
-        }),
+      metadata: reloading,
       metadataGeneration: () => generation,
     });
 
@@ -894,10 +855,7 @@ const failRelatedMetadata = (
     isMetadataAnswerOf(list, answer)
       ? modifyFields(list, {
           metadata: (metadata) =>
-            Option.match(AsyncData.getData(metadata), {
-              onNone: () => RelatedMetadata.Failure({ error }),
-              onSome: (data) => RelatedMetadata.Stale({ data, error }),
-            }),
+            AsyncData.settle(metadata, Result.fail(error)),
         })
       : list
   ),
@@ -935,30 +893,12 @@ const failRelatedRecords = (
     list.generation === answer.generation
       ? modifyFields(list, {
           maybePendingCursors: () => Option.none(),
-          records: (records) =>
-            Option.match(AsyncData.getData(records), {
-              onNone: () => RelatedRecords.Failure({ error }),
-              onSome: (data) => RelatedRecords.Stale({ data, error }),
-            }),
+          records: (records) => AsyncData.settle(records, Result.fail(error)),
         })
       : list
   );
 
 // HISTORY
-
-const reloadingHistory = (entries: HistoryEntriesState): HistoryEntriesState =>
-  Option.match(AsyncData.getData(entries), {
-    onNone: () => HistoryEntries.Loading(),
-    onSome: (data) => HistoryEntries.Refreshing({ data }),
-  });
-
-const failedHistory =
-  (reason: HistoryError) =>
-  (entries: HistoryEntriesState): HistoryEntriesState =>
-    Option.match(AsyncData.getData(entries), {
-      onNone: () => HistoryEntries.Failure({ error: reason }),
-      onSome: (data) => HistoryEntries.Stale({ data, error: reason }),
-    });
 
 const requestHistory: Step = (model) =>
   Option.match(Option.all([metaOf(model), recordOf(model)]), {
@@ -978,7 +918,7 @@ const requestHistory: Step = (model) =>
         model: modifyFields(model, {
           history: (history) =>
             modifyFields(history, {
-              entries: reloadingHistory,
+              entries: reloading,
               generation: () => generation,
             }),
         }),
@@ -1194,6 +1134,30 @@ const sawRevision = (
     )
   );
 
+const respondedAt = (
+  model: Model,
+  maybeRevision: Option.Option<SchemaRevision>,
+  receive: Step
+): UpdateReturn =>
+  sawRevision(
+    Update.combine(model, [receive, refreshIfNewer(maybeRevision)]),
+    maybeRevision
+  );
+
+const sawCurrentRevision = (
+  result: PlainReturn,
+  maybeRevision: Option.Option<SchemaRevision>
+): UpdateReturn =>
+  Update.withOutMessage(
+    result,
+    Option.getOrUndefined(
+      pipe(
+        maybeRevision,
+        Option.map((revision) => OutMessage.SawCurrentRevision({ revision }))
+      )
+    )
+  );
+
 // RELATED LISTS AFTER A REFRESH
 
 /**
@@ -1247,7 +1211,7 @@ const isWaitingForPage = (list: RelatedList): boolean => {
  * @returns It, with the requests.
  */
 const requestWaitingRelated: Step = (model) =>
-  inSequence(
+  Update.combine(
     model.relatedLists.flatMap((list) =>
       isWaitingForPage(list) ? [firstRelatedPage(list.id)] : []
     )
@@ -1304,7 +1268,9 @@ const failHistory = (
 
   const failed = modifyFields(model, {
     history: (history) =>
-      modifyFields(history, { entries: failedHistory(error) }),
+      modifyFields(history, {
+        entries: (entries) => AsyncData.settle(entries, Result.fail(error)),
+      }),
   });
 
   return error === "SchemaChanged"
@@ -1340,11 +1306,8 @@ const editField = (
   toInput: (field: MetaField, current: FieldInput) => FieldInput
 ): PlainReturn =>
   Option.match(
-    pipe(
-      fieldOf(model, fieldId),
-      Option.filter((field) =>
-        editableFieldsOf(model).some((editable) => editable.id === field.id)
-      )
+    Option.fromNullishOr(
+      editableFieldsOf(model).find((field) => field.id === fieldId)
     ),
     {
       onNone: () => ({ model }),
@@ -1473,7 +1436,8 @@ const writePicker = (
   change: (picker: Picker) => Picker
 ): Model =>
   modifyFields(model, {
-    pickers: (pickers) => modifyEntry(pickers, fieldId, change),
+    pickers: (pickers) =>
+      Option.getOrElse(Record.modify(pickers, fieldId, change), () => pickers),
   });
 
 /**
@@ -1493,11 +1457,7 @@ const searchingPicker =
       maybeNextCursor: (cursor) => (isMore ? cursor : Option.none()),
       maybeRefusedAt: () => Option.none(),
       query: () => query,
-      results: (results) =>
-        Option.match(AsyncData.getData(results), {
-          onNone: () => PickerResults.Loading(),
-          onSome: (data) => PickerResults.Refreshing({ data }),
-        }),
+      results: reloading,
     });
 
 const targetOfField = (model: Model, fieldId: string): string | null =>
@@ -1780,7 +1740,7 @@ const retryRefusedSearches: Step = (model) =>
     {
       onNone: () => ({ model }),
       onSome: (meta) =>
-        inSequence(
+        Update.combine(
           Record.toEntries(model.pickers).flatMap(([fieldId, picker]) => {
             const isTargetLoaded = pipe(
               Option.fromNullishOr(targetOfField(model, fieldId)),
@@ -1816,13 +1776,13 @@ const receiveTarget = (
 
   const waiting = Record.toEntries(model.pickers).flatMap(
     ([fieldId, picker]) =>
-      AsyncData.isLoading(picker.results) ||
-      AsyncData.isRefreshing(picker.results)
+      targetOfField(known, fieldId) === target.name &&
+      AsyncData.isPending(picker.results)
         ? [searchTargets(fieldId, picker.query)]
         : []
   );
 
-  return inSequence([...waiting, retryRefusedSearches])(known);
+  return Update.combine([...waiting, retryRefusedSearches])(known);
 };
 
 /**
@@ -1955,10 +1915,7 @@ const failSearch = (
           ? Option.some(failure.revision)
           : Option.none(),
       results: (results) =>
-        Option.match(AsyncData.getData(results), {
-          onNone: () => PickerResults.Failure({ error: failure.error }),
-          onSome: (data) => PickerResults.Stale({ data, error: failure.error }),
-        }),
+        AsyncData.settle(results, Result.fail(failure.error)),
     })
   );
 
@@ -1966,27 +1923,16 @@ const failSearch = (
     return { model: failed };
   }
 
-  return Update.withOutMessage(
+  return sawCurrentRevision(
     Update.combine(failed, [
       refreshTarget(targetOfField(model, fieldId)),
       refreshMetadata,
     ]),
-    Option.getOrUndefined(
-      pipe(
-        failure.maybeRevision,
-        Option.map((revision) => OutMessage.SawCurrentRevision({ revision }))
-      )
-    )
+    failure.maybeRevision
   );
 };
 
 // THE RECORD
-
-const reloadingRecord = (record: StoredRecordState): StoredRecordState =>
-  Option.match(AsyncData.getData(record), {
-    onNone: () => StoredRecord.Loading(),
-    onSome: (data) => StoredRecord.Refreshing({ data }),
-  });
 
 const requestRecord =
   (purpose: ReadPurpose): Step =>
@@ -2008,7 +1954,7 @@ const requestRecord =
               ],
               model: modifyFields(model, {
                 generation: (generation) => generation + 1,
-                record: reloadingRecord,
+                record: reloading,
               }),
             }
           : { model },
@@ -2281,9 +2227,7 @@ const receiveMetadata = (
   const next = Update.combine(loaded, [
     nextRecordStep(isFirstLoad || hadRecordRefused, isOtherRevision),
     setUpControls,
-    isOtherRevision
-      ? retryRefusedHistory
-      : (stepModel) => ({ model: stepModel }),
+    ...(isOtherRevision ? [retryRefusedHistory] : []),
     requestWaitingRelated,
     retryRefusedSearches,
     requestFormState,
@@ -2420,15 +2364,7 @@ const failRecord = (
     return { model: refused };
   }
 
-  return Update.withOutMessage(
-    refreshMetadata(refused),
-    Option.getOrUndefined(
-      pipe(
-        maybeRevision,
-        Option.map((revision) => OutMessage.SawCurrentRevision({ revision }))
-      )
-    )
-  );
+  return sawCurrentRevision(refreshMetadata(refused), maybeRevision);
 };
 
 // SAVE
@@ -2476,16 +2412,23 @@ const isAwaitingSave = (submission: Submission): boolean =>
 /**
  * Whether a click on Save does nothing now: a save is in flight, a save's
  * record could not be read back, the form is not loaded, its definitions
- * or record are reloading, or the record is not the metadata's.
+ * or record are reloading, the record is not the metadata's, or its
+ * form-state verdict is pending.
  *
  * @param model - The page.
  * @returns True when Save is held back.
  */
-const isSaveHeld = (model: Model): boolean =>
-  isAwaitingSave(model.submission) ||
-  !isReady(model) ||
-  isReloading(model) ||
-  isRecordOutdated(model);
+export const isSaveHeld = (model: Model): boolean => {
+  const isWaitingForForm =
+    isFormStatePending(model) || isAwaitingSave(model.submission);
+
+  return (
+    isWaitingForForm ||
+    !isReady(model) ||
+    isReloading(model) ||
+    isRecordOutdated(model)
+  );
+};
 
 /**
  * "Save": judges the edits with `recordSchema`; with problems, shows them
@@ -2498,7 +2441,7 @@ const isSaveHeld = (model: Model): boolean =>
  * @returns The page and its Commands.
  */
 const save = (model: Model): UpdateReturn => {
-  if (isReadOnlyForm(model) || isFormStatePending(model) || isSaveHeld(model)) {
+  if (isReadOnlyForm(model) || isSaveHeld(model)) {
     return { model };
   }
 
@@ -2653,11 +2596,7 @@ const markUnreadSave = (
     droppedEdits: () => [],
     edits: (edits) => editsAfterSave(edits, sentEdits),
     maybeEditsFrom: () => Option.none(),
-    record: (record) =>
-      Option.match(AsyncData.getData(record), {
-        onNone: () => StoredRecord.Failure({ error: "Unavailable" }),
-        onSome: (data) => StoredRecord.Stale({ data, error: "Unavailable" }),
-      }),
+    record: (record) => AsyncData.settle(record, Result.fail("Unavailable")),
     serverErrors: () => ({}),
     staleChanges: () => [],
     submission: () => Submission.SavedUnread({ version }),
@@ -2774,9 +2713,7 @@ const receiveSave = (
   return sawRevision(
     Update.combine(resetPickerInputs(shown), [
       (stepModel) => ({ commands: navigation, model: stepModel }),
-      isAtFormRevision
-        ? (stepModel) => ({ model: stepModel })
-        : requestRecord("Refresh"),
+      ...(isAtFormRevision ? [] : [requestRecord("Refresh")]),
       refreshHistory,
       requestClassMetadata,
       setUpControls,
@@ -2851,20 +2788,11 @@ const failSave = (
     return Update.combine(refused, [() => focused, refreshMetadata]);
   }
 
-  const sawCurrent = Option.getOrUndefined(
-    pipe(
-      maybeRevision,
-      Option.map((revision) => OutMessage.SawCurrentRevision({ revision }))
-    )
-  );
-
-  if (!WriteError.guards.SchemaChanged(error)) {
-    return Update.withOutMessage(focused, sawCurrent);
-  }
-
-  return Update.withOutMessage(
-    reloadAfterSchemaChanged(refused, maybeRevision),
-    sawCurrent
+  return sawCurrentRevision(
+    WriteError.guards.SchemaChanged(error)
+      ? reloadAfterSchemaChanged(refused, maybeRevision)
+      : focused,
+    maybeRevision
   );
 };
 
@@ -2952,13 +2880,9 @@ const failDelete = (model: Model, error: WriteError): UpdateReturn => {
   }
 
   return WriteError.guards.SchemaChanged(error)
-    ? Update.withOutMessage(
+    ? sawCurrentRevision(
         refreshMetadata(refused),
-        Option.getOrUndefined(
-          Option.map(parseSchemaRevision(error.currentRevision), (revision) =>
-            OutMessage.SawCurrentRevision({ revision })
-          )
-        )
+        parseSchemaRevision(error.currentRevision)
       )
     : { model: refused };
 };
@@ -3062,11 +2986,7 @@ const failFormState = (
   maybeRevision: Option.Option<SchemaRevision>
 ): UpdateReturn => {
   const failed = modifyFields(model, {
-    formState: (state) =>
-      Option.match(AsyncData.getData(state), {
-        onNone: () => FormStateVerdict.Failure({ error }),
-        onSome: (data) => FormStateVerdict.Stale({ data, error }),
-      }),
+    formState: (state) => AsyncData.settle(state, Result.fail(error)),
     isShowingProblems: (showing) =>
       showing ||
       WriteError.guards.ValidationFailed(error) ||
@@ -3236,12 +3156,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadHistory: ({ entries, generation, maybeRevision }) =>
-      sawRevision(
-        Update.combine(model, [
-          (stepModel) => receiveHistory(stepModel, generation, entries),
-          refreshIfNewer(maybeRevision),
-        ]),
-        maybeRevision
+      respondedAt(model, maybeRevision, (stepModel) =>
+        receiveHistory(stepModel, generation, entries)
       ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadHistoryLabels: ({ labels, table }) => ({
@@ -3266,13 +3182,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       maybeRevision,
       page,
     }) =>
-      sawRevision(
-        Update.combine(model, [
-          (stepModel) =>
-            receiveRelatedRecords(stepModel, { generation, listId }, page),
-          refreshIfNewer(maybeRevision),
-        ]),
-        maybeRevision
+      respondedAt(model, maybeRevision, (stepModel) =>
+        receiveRelatedRecords(stepModel, { generation, listId }, page)
       ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadTarget: ({ request, table }) =>
@@ -3282,12 +3193,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       receiveSave(model, generation, saved, maybeRevision),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededSearchTargets: ({ fieldId, maybeRevision, ...answer }) =>
-      sawRevision(
-        Update.combine(model, [
-          (stepModel) => receiveSearch(stepModel, fieldId, answer),
-          refreshIfNewer(maybeRevision),
-        ]),
-        maybeRevision
+      respondedAt(model, maybeRevision, (stepModel) =>
+        receiveSearch(stepModel, fieldId, answer)
       ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ToggledFlag: ({ fieldId, isChecked }) =>
