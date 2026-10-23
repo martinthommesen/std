@@ -24,6 +24,8 @@ import { inject } from "vitest";
 
 import {
   apiCall,
+  collectionOf,
+  sentAttributes,
   apiPages,
   apiRecord,
   assertHiddenValuesAbsent,
@@ -75,9 +77,11 @@ const visitorOf = (user: HelpdeskUser): Visitor => ({
 
 const incident = (id: string) => ({ id, table: INCIDENTS });
 
-const decodeBody = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
-);
+/**
+ * The attributes a save sent, by API name (a JSON Patch's values or a
+ * create's members).
+ */
+const decodeBody = sentAttributes;
 
 /**
  * A signed-in page of its own browser context, closed with the test.
@@ -127,7 +131,7 @@ const adminEditsAnIncident = async (
   assert.strictEqual(saved.ifMatch, '"1"');
   assert.deepStrictEqual(decodeBody(saved.body), {
     priority: "critical",
-    short_description: "VPN drops at the top of every hour",
+    shortDescription: "VPN drops at the top of every hour",
   });
   assert.include(await formOutcome(page), "Saved.");
   assert.include(await facts(page), "version 2");
@@ -137,7 +141,7 @@ const adminEditsAnIncident = async (
   assert.strictEqual(stored.version, 2);
   assert.strictEqual(stored.values.priority, "critical");
   assert.strictEqual(
-    stored.values.short_description,
+    stored.values.shortDescription,
     "VPN drops at the top of every hour"
   );
   await page.context().close();
@@ -206,9 +210,9 @@ const agentCreatesAnIncident = async (
   assert.strictEqual(saved.status, 201);
   // Untouched fields are left out: the server applies their defaults.
   assert.deepStrictEqual(decodeBody(saved.body), {
-    assignee: fixture.agent.id,
+    assignee: { id: fixture.agent.id },
     category: "hardware",
-    short_description: "Projector in room 4 flickers",
+    shortDescription: "Projector in room 4 flickers",
   });
 
   await page.waitForURL(/\/tables\/helpdesk\.incident\/records\/[\da-f-]+$/u);
@@ -306,12 +310,15 @@ const restrictedFieldNeverReachesTheBrowser = async (
   const received = responseBodies.join("\n");
   const sent = requests().join("\n");
 
-  assert.include(received, '"withheld":["customer_email"]');
+  assert.include(received, '"withheld":["customerEmail"]');
   assert.notInclude(received, "pat@example.com");
   assert.notInclude(received, "internal_cost");
+  assert.notInclude(received, "internalCost");
   assert.notInclude(received, "20.00");
   assert.notInclude(sent, "customer_email");
+  assert.notInclude(sent, "customerEmail");
   assert.notInclude(sent, "internal_cost");
+  assert.notInclude(sent, "internalCost");
   await context.close();
 };
 
@@ -334,7 +341,7 @@ const versionConflictKeepsTheInput = async (
   const theirs = await apiCall(origin, token, {
     body: { description: "Theirs: replace the roller." },
     method: "PATCH",
-    path: `/tables/${INCIDENTS}/records/${printer.id}`,
+    path: `/${collectionOf(INCIDENTS)}/${printer.id}`,
     version: 1,
   });
 
@@ -342,7 +349,8 @@ const versionConflictKeepsTheInput = async (
 
   const refused = await saveRecordForm(page);
 
-  assert.strictEqual(refused.status, 409);
+  // A stale If-Match (Contracts 10.5, decision 0025 M2).
+  assert.strictEqual(refused.status, 412);
   assert.include(
     await formOutcome(page),
     "Someone else saved this record first"
@@ -394,10 +402,8 @@ const CORE_USER_LOGIN = "b3cabaa4-77cb-4845-9221-2105b21425eb";
 const decodeLayout = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
-      record: Schema.Struct({
-        values: Schema.Struct({ elements: Schema.Array(Schema.Unknown) }),
-        version: Schema.Number,
-      }),
+      elements: Schema.Array(Schema.Unknown),
+      revision: Schema.Number,
     })
   )
 );
@@ -448,23 +454,23 @@ const addEscalationContact = async (origin: string, token: string) => {
       ],
     },
     method: "POST",
-    path: "/schema/change-sets",
+    path: "/applyChangeSet",
   });
 
   assert.include([200, 201], added.status, added.text);
 
-  const path = `/tables/core.layout/records/${HELPDESK.layouts.incidentForm}`;
+  const path = `/${collectionOf("core.layout")}/${HELPDESK.layouts.incidentForm}`;
 
   const read = await apiCall(origin, token, { method: "GET", path });
-  const layout = decodeLayout(read.text).record;
+  const layout = decodeLayout(read.text);
 
   const placed = await apiCall(origin, token, {
     body: {
-      elements: [...layout.values.elements, { fieldId, kind: "field" }],
+      elements: [...layout.elements, { fieldId, kind: "field" }],
     },
     method: "PATCH",
     path,
-    version: layout.version,
+    version: layout.revision,
   });
 
   assert.strictEqual(placed.status, 200, placed.text);
@@ -500,9 +506,9 @@ const pickerOffersOnlyAllowedTargets = async (
 
   // The server refuses the target anyway, exactly like an unknown ID.
   const refused = await apiCall(origin, token, {
-    body: { escalation_contact: fixture.agent2.id },
+    body: { escalationContact: { id: fixture.agent2.id } },
     method: "PATCH",
-    path: `/tables/${INCIDENTS}/records/${printer.id}`,
+    path: `/${collectionOf(INCIDENTS)}/${printer.id}`,
     version: 1,
   });
 
@@ -517,16 +523,14 @@ const pickerOffersOnlyAllowedTargets = async (
   assert.strictEqual(saved.status, 200);
   const stored = await apiRecord(page, origin, printer);
 
-  assert.strictEqual(stored.values.escalation_contact, fixture.agent.id);
+  assert.strictEqual(stored.values.escalationContact, fixture.agent.id);
   await page.context().close();
 };
 
 // HISTORY
 
 const decodeVersion = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.Struct({ record: Schema.Struct({ version: Schema.Number }) })
-  )
+  Schema.fromJsonString(Schema.Struct({ revision: Schema.Number }))
 );
 
 const historyShowsTheOldChoiceLabel = async (
@@ -545,10 +549,10 @@ const historyShowsTheOldChoiceLabel = async (
 
   // The administrator relabels the choice afterwards.
   const token = await bearerToken(origin, visitorOf(fixture.admin));
-  const path = `/tables/core.choice/records/${HELPDESK.choices.onHold}`;
+  const path = `/${collectionOf("core.choice")}/${HELPDESK.choices.onHold}`;
 
   const read = await apiCall(origin, token, { method: "GET", path });
-  const choice = decodeVersion(read.text).record.version;
+  const choice = decodeVersion(read.text).revision;
 
   const relabelled = await apiCall(origin, token, {
     body: { label: "Paused" },

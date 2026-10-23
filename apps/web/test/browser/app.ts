@@ -9,8 +9,141 @@
  * Text is waited for as attached, not visible: without system fonts,
  * headless Chromium gives text no height (decision 0018).
  */
+import { apiTableNameOf } from "@std/definitions/names";
 import { Option, Predicate, Schema } from "effect";
 import type { Locator, Page, Response } from "playwright";
+
+/**
+ * Where the API lives. Every helper here names its paths relative to it,
+ * so moving the API (`/api/v2` to `/api/v1`) is a change of this line.
+ */
+export const API_PREFIX = "/api/v2";
+
+/** The API's fixed resources: any other first segment is a collection. */
+const FIXED_RESOURCES: ReadonlySet<string> = new Set([
+  "applyChangeSet",
+  "openapi.json",
+  "session",
+  "tableMetadata",
+]);
+
+/**
+ * A table's collection in the API (`helpdesk.incident` is
+ * `helpdeskIncident`, Contracts 10.1).
+ *
+ * @param table - The qualified name.
+ * @returns The collection.
+ */
+export const collectionOf = (table: string): string => {
+  const [namespace = "", name = ""] = table.split(".");
+
+  return apiTableNameOf(namespace, name);
+};
+
+/**
+ * The API path segments of a URL under the API, or none for any other.
+ *
+ * @param url - A request's URL.
+ * @returns The segments after `API_PREFIX`.
+ */
+const apiSegmentsOf = (url: string): readonly string[] | undefined => {
+  const { pathname } = new URL(url);
+
+  return pathname.startsWith(`${API_PREFIX}/`)
+    ? pathname.slice(API_PREFIX.length + 1).split("/")
+    : undefined;
+};
+
+/**
+ * Whether a URL names a collection or one of its records (not a fixed
+ * resource such as the session).
+ *
+ * @param url - A request's URL.
+ * @param depth - 1 for the collection, 2 for a record.
+ * @returns True for such a path.
+ */
+const isRecordPath = (url: string, depth: number): boolean => {
+  const segments = apiSegmentsOf(url);
+
+  return (
+    segments !== undefined &&
+    segments.length === depth &&
+    !FIXED_RESOURCES.has(segments[0] ?? "")
+  );
+};
+
+/**
+ * Whether a request writes a record: a create (`POST {collection}`) or an
+ * update (`PATCH {collection}/{id}`).
+ *
+ * @param url - The request's URL.
+ * @param method - Its method.
+ * @returns True for a write.
+ */
+const isRecordWrite = (url: string, method: string): boolean =>
+  (method === "POST" && isRecordPath(url, 1)) ||
+  (method === "PATCH" && isRecordPath(url, 2));
+
+const decodeJsonPatch = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        op: Schema.String,
+        path: Schema.String,
+        value: Schema.optionalKey(Schema.Json),
+      })
+    )
+  )
+);
+
+const decodeMergeBody = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))
+);
+
+/**
+ * The attributes a write's body sets, by API name: a create's or merge
+ * patch's members, or a JSON Patch's `add` and `replace` values.
+ *
+ * @param body - The request body as sent.
+ * @returns The attributes.
+ */
+export const sentAttributes = (
+  body: string
+): Readonly<Record<string, Schema.Json>> => {
+  const sent: Record<string, Schema.Json> = Option.match(
+    decodeJsonPatch(body),
+    {
+      onNone: () => decodeMergeBody(body),
+      onSome: (operations) =>
+        Object.fromEntries(
+          operations.flatMap((operation) =>
+            operation.op === "add" || operation.op === "replace"
+              ? [[operation.path.slice(1), operation.value ?? null] as const]
+              : []
+          )
+        ),
+    }
+  );
+
+  return sent;
+};
+
+/** Attributes of a resource that hold no field value. */
+const IDENTITY_MEMBERS: ReadonlySet<string> = new Set([
+  "href",
+  "id",
+  "revision",
+  "withheld",
+]);
+
+/**
+ * Whether a member of a resource is one of its field attributes.
+ *
+ * @param name - The member's name.
+ * @returns False for the identity members and `@type` and its kin.
+ */
+const isAttribute = (name: string): boolean =>
+  !IDENTITY_MEMBERS.has(name) && !name.startsWith("@");
 
 /** Who signs in. */
 export interface Visitor {
@@ -20,18 +153,14 @@ export interface Visitor {
   readonly name: string;
 }
 
-const LIST_PATH = /\/api\/v1\/tables\/[^/]+\/records(?:\?|$)/u;
-
 /**
  * Whether a response answers a list request of the app.
  *
  * @param response - A response the page received.
- * @returns True for `GET /api/v1/tables/{table}/records`.
+ * @returns True for `GET {collection}`.
  */
 export const isListResponse = (response: Response): boolean =>
-  LIST_PATH.test(
-    new URL(response.url()).pathname + new URL(response.url()).search
-  ) && response.request().method() === "GET";
+  isRecordPath(response.url(), 1) && response.request().method() === "GET";
 
 /**
  * Signs in through the sign-in page and waits for the shell.
@@ -235,7 +364,10 @@ export const listedPages = async (page: Page): Promise<string[][]> => {
   return [shown, ...(await listedPages(page))];
 };
 
-/** A list request to the API, in its own terms. */
+/**
+ * A list request to the API, in its own terms: `filter` is the `condition`
+ * text, with API names.
+ */
 export interface ApiListQuery {
   // oxlint-disable-next-line sonarjs/no-redundant-optional -- under exactOptionalPropertyTypes, `| undefined` lets callers pass a scenario's optional filter as it is
   readonly filter?: string | undefined;
@@ -244,12 +376,38 @@ export interface ApiListQuery {
   readonly limit: number;
 }
 
-const RecordListBody = Schema.Struct({
-  nextCursor: Schema.NullOr(Schema.String),
-  records: Schema.Array(Schema.Struct({ id: Schema.String })),
-});
+const ResourceListBody = Schema.Array(
+  Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [
+    Schema.Record(Schema.String, Schema.Json),
+  ])
+);
 
-const decodeRecordList = Schema.decodeUnknownSync(RecordListBody);
+const decodeResourceList = Schema.decodeUnknownSync(
+  Schema.fromJsonString(ResourceListBody)
+);
+
+/**
+ * The cursor of a list's next page: `after` in its `Link` header's `next`
+ * entry.
+ *
+ * @param link - The `Link` header, if any.
+ * @returns The cursor, or null on the last page.
+ */
+export const nextCursorIn = (
+  link: string | null | undefined
+): string | null => {
+  const next = (link ?? "")
+    .split(",")
+    .find((entry) => entry.includes('rel="next"'));
+
+  if (next === undefined) {
+    return null;
+  }
+
+  const url = next.slice(next.indexOf("<") + 1, next.indexOf(">"));
+
+  return new URL(url).searchParams.get("after");
+};
 
 const listParameters = (
   query: ApiListQuery,
@@ -258,7 +416,7 @@ const listParameters = (
   const params = new URLSearchParams({ limit: String(query.limit) });
 
   if (query.filter !== undefined) {
-    params.set("filter", query.filter);
+    params.set("condition", query.filter);
   }
 
   if (query.sort !== undefined) {
@@ -266,7 +424,7 @@ const listParameters = (
   }
 
   if (cursor !== null) {
-    params.set("cursor", cursor);
+    params.set("after", cursor);
   }
 
   return params;
@@ -293,7 +451,7 @@ const apiPagesFrom = async (
   const response = await page
     .context()
     .request.get(
-      `${origin}/api/v1/tables/${table}/records?${listParameters(query, cursor)}`
+      `${origin}${API_PREFIX}/${collectionOf(table)}?${listParameters(query, cursor)}`
     );
 
   if (!response.ok()) {
@@ -302,15 +460,15 @@ const apiPagesFrom = async (
     );
   }
 
-  const listed = decodeRecordList(await response.json());
-  const ids = listed.records.map((record) => record.id);
+  const ids = decodeResourceList(await response.text()).map(
+    (record) => record.id
+  );
 
-  return listed.nextCursor === null
+  const next = nextCursorIn(response.headers().link);
+
+  return next === null
     ? [ids]
-    : [
-        ids,
-        ...(await apiPagesFrom(page, origin, table, query, listed.nextCursor)),
-      ];
+    : [ids, ...(await apiPagesFrom(page, origin, table, query, next))];
 };
 
 /**
@@ -684,14 +842,38 @@ const SHORTEST_ANYWHERE = 4;
 const isShort = (value: string): boolean => value.length < SHORTEST_ANYWHERE;
 
 /**
- * The JSON members that carry field values: a record's `values`, its
- * reference `labels`, and a history entry's `changes`.
+ * The JSON members that carry field values: a history entry's `changes`,
+ * and, in the app's own state (a DevTools snapshot), a record's `values`
+ * and its reference `labels`. A resource's field attributes carry them
+ * too (`isResource`).
  */
 const VALUE_MEMBERS: ReadonlySet<string> = new Set([
   "changes",
   "labels",
   "values",
 ]);
+
+const decodeResourceHead = Schema.decodeUnknownOption(
+  Schema.Struct({
+    "@type": Schema.String,
+    href: Schema.String,
+    revision: Schema.Number,
+  })
+);
+
+/**
+ * Whether a JSON object is a record as the API answers it: a resource with
+ * `href`, `@type` and `revision`, other than a history entry (whose
+ * values are its `changes`).
+ *
+ * @param value - The object.
+ * @returns True for a record's resource.
+ */
+const isResource = (value: Schema.Json): boolean =>
+  Option.match(decodeResourceHead(value), {
+    onNone: () => false,
+    onSome: (head) => head["@type"] !== "ChangeEntry",
+  });
 
 /**
  * The leaves (strings, and numbers as text) of a JSON value that sit inside
@@ -723,8 +905,13 @@ const fieldValueLeaves = (
     );
   }
 
+  const isRecord = isResource(value);
+
   return Object.entries(value).flatMap(([key, member]) =>
-    fieldValueLeaves(member, isInValues || VALUE_MEMBERS.has(key))
+    fieldValueLeaves(
+      member,
+      isInValues || VALUE_MEMBERS.has(key) || (isRecord && isAttribute(key))
+    )
   );
 };
 
@@ -1148,8 +1335,12 @@ export const bearerToken = async (
   origin: string,
   visitor: Visitor
 ): Promise<string> => {
-  const response = await fetch(`${origin}/api/v1/auth/sign-in`, {
-    body: JSON.stringify({ login: visitor.login, password: visitor.password }),
+  const response = await fetch(`${origin}${API_PREFIX}/session`, {
+    body: JSON.stringify({
+      login: visitor.login,
+      password: visitor.password,
+      tokenDelivery: "body",
+    }),
     headers: { "content-type": "application/json" },
     method: "POST",
   });
@@ -1167,11 +1358,13 @@ export const bearerToken = async (
 export interface ApiCall {
   /** `GET`, `POST`, `PATCH` or `DELETE`. */
   readonly method: string;
-  /** The path under `/api/v1`. */
+  /** The path under `API_PREFIX`. */
   readonly path: string;
   readonly body?: unknown;
   /** The version for `If-Match`. */
   readonly version?: number;
+  /** The body's media type; JSON by default. */
+  readonly contentType?: string;
 }
 
 /**
@@ -1190,7 +1383,7 @@ export const apiCall = async (
   const headers = new Headers({ authorization: `Bearer ${token}` });
 
   if (call.body !== undefined) {
-    headers.set("content-type", "application/json");
+    headers.set("content-type", call.contentType ?? "application/json");
   }
 
   if (call.version !== undefined) {
@@ -1203,29 +1396,34 @@ export const apiCall = async (
     init.body = JSON.stringify(call.body);
   }
 
-  const response = await fetch(`${origin}/api/v1${call.path}`, init);
+  const response = await fetch(`${origin}${API_PREFIX}${call.path}`, init);
 
   return { status: response.status, text: await response.text() };
 };
 
 // VALUES HIDDEN FROM A USER
 
-const RecordPageBody = Schema.Struct({
-  nextCursor: Schema.NullOr(Schema.String),
-  records: Schema.Array(
-    Schema.Struct({
-      id: Schema.String,
-      values: Schema.Record(Schema.String, Schema.Json),
-      withheld: Schema.optionalKey(Schema.Array(Schema.String)),
-    })
+/** A record as a list answered it: its field attributes by API name. */
+interface ListedRecord {
+  readonly id: string;
+  readonly values: Readonly<Record<string, Schema.Json>>;
+}
+
+/**
+ * A listed resource's field attributes (an EntityRef's `href` and `@`
+ * members left out, its `id` and `name` kept).
+ *
+ * @param resource - The resource.
+ * @returns The record.
+ */
+const listedRecordOf = (
+  resource: (typeof ResourceListBody.Type)[number]
+): ListedRecord => ({
+  id: resource.id,
+  values: Object.fromEntries(
+    Object.entries(resource).filter(([name]) => isAttribute(name))
   ),
 });
-
-const decodeRecordPage = Schema.decodeUnknownSync(
-  Schema.fromJsonString(RecordPageBody)
-);
-
-type ListedRecord = (typeof RecordPageBody.Type)["records"][number];
 
 /** The largest page the list API serves (`limit`). */
 const LARGEST_PAGE = 1000;
@@ -1247,25 +1445,23 @@ const everyRecord = async (
 ): Promise<readonly ListedRecord[]> => {
   const query = listParameters({ limit: LARGEST_PAGE }, cursor);
 
-  const answered = await apiCall(origin, token, {
-    method: "GET",
-    path: `/tables/${table}/records?${query}`,
-  });
+  const response = await fetch(
+    `${origin}${API_PREFIX}/${collectionOf(table)}?${query}`,
+    { headers: { authorization: `Bearer ${token}` } }
+  );
 
-  if (answered.status !== 200) {
-    throw new Error(
-      `GET ${table} records: ${answered.status} ${answered.text}`
-    );
+  const text = await response.text();
+
+  if (response.status !== 200) {
+    throw new Error(`GET ${table} records: ${response.status} ${text}`);
   }
 
-  const listed = decodeRecordPage(answered.text);
+  const listed = decodeResourceList(text).map(listedRecordOf);
+  const next = nextCursorIn(response.headers.get("link"));
 
-  return listed.nextCursor === null
-    ? listed.records
-    : [
-        ...listed.records,
-        ...(await everyRecord(origin, token, table, listed.nextCursor)),
-      ];
+  return next === null
+    ? listed
+    : [...listed, ...(await everyRecord(origin, token, table, next))];
 };
 
 /**
@@ -1287,7 +1483,13 @@ const leavesOf = (value: Schema.Json): readonly string[] => {
     return [];
   }
 
-  return Object.values(value).flatMap(leavesOf);
+  if (Array.isArray(value)) {
+    return value.flatMap((item: Schema.Json) => leavesOf(item));
+  }
+
+  return Object.entries(value).flatMap(([name, member]) =>
+    name === "href" || name.startsWith("@") ? [] : leavesOf(member)
+  );
 };
 
 /** The sessions `valuesHiddenFrom` compares. */
@@ -1579,8 +1781,7 @@ export const pickReference = async (
 const REVISION_HEADER = "std-schema-revision";
 
 const isWriteResponse = (response: Response): boolean =>
-  new URL(response.url()).pathname.startsWith("/api/v1/tables/") &&
-  ["POST", "PATCH"].includes(response.request().method());
+  isRecordWrite(response.url(), response.request().method());
 
 /** What a save sent and got. */
 export interface SaveOutcome {
@@ -1714,11 +1915,7 @@ export const countRecordWrites = (page: Page): (() => number) => {
   const sent: string[] = [];
 
   page.on("request", (request) => {
-    const isWrite =
-      new URL(request.url()).pathname.startsWith("/api/v1/tables/") &&
-      ["POST", "PATCH"].includes(request.method());
-
-    if (isWrite) {
+    if (isRecordWrite(request.url(), request.method())) {
       sent.push(request.url());
     }
   });
@@ -1857,17 +2054,31 @@ export const formFieldText = async (
     ""
   ).trim();
 
-const decodeRecordResponse = Schema.decodeUnknownSync(
+const decodeResource = Schema.decodeUnknownSync(
   Schema.fromJsonString(
-    Schema.Struct({
-      record: Schema.Struct({
-        id: Schema.String,
-        values: Schema.Record(Schema.String, Schema.Json),
-        version: Schema.Number,
-      }),
-    })
+    Schema.StructWithRest(
+      Schema.Struct({ id: Schema.String, revision: Schema.Number }),
+      [Schema.Record(Schema.String, Schema.Json)]
+    )
   )
 );
+
+const decodeEntityRef = Schema.decodeUnknownOption(
+  Schema.Struct({ "@type": Schema.String, id: Schema.String })
+);
+
+/**
+ * A field attribute's value with a reference reduced to its ID (an
+ * EntityRef has an `@type` ending in `Ref`).
+ *
+ * @param value - The attribute's value.
+ * @returns The value, or the referenced record's ID.
+ */
+export const attributeValue = (value: Schema.Json): Schema.Json =>
+  Option.match(decodeEntityRef(value), {
+    onNone: () => value,
+    onSome: (ref) => (ref["@type"].endsWith("Ref") ? ref.id : value),
+  });
 
 /**
  * Reads a record through the API with the browser context's own session
@@ -1876,7 +2087,8 @@ const decodeRecordResponse = Schema.decodeUnknownSync(
  * @param page - A signed-in page.
  * @param origin - The server's origin.
  * @param record - The table and the record's ID.
- * @returns The record JSON's `record` member.
+ * @returns Its ID, revision and field attributes by API name (references
+ *   as their IDs; an empty attribute is absent).
  */
 export const apiRecord = async (
   page: Page,
@@ -1887,17 +2099,26 @@ export const apiRecord = async (
   readonly version: number;
   readonly values: Readonly<Record<string, Schema.Json>>;
 }> => {
-  const response = await page
-    .context()
-    .request.get(`${origin}/api/v1${recordPath(record)}`);
+  const path = `${API_PREFIX}/${collectionOf(record.table)}/${record.id}`;
+  const response = await page.context().request.get(`${origin}${path}`);
 
   if (!response.ok()) {
     throw new Error(
-      `GET ${recordPath(record)}: ${response.status()} ${await response.text()}`
+      `GET ${path}: ${response.status()} ${await response.text()}`
     );
   }
 
-  return decodeRecordResponse(await response.text()).record;
+  const resource = decodeResource(await response.text());
+
+  return {
+    id: resource.id,
+    values: Object.fromEntries(
+      Object.entries(resource).flatMap(([name, value]) =>
+        isAttribute(name) ? [[name, attributeValue(value)] as const] : []
+      )
+    ),
+    version: resource.revision,
+  };
 };
 
 /**
@@ -1996,23 +2217,52 @@ export const openRelatedList = async (
     .evaluateAll((rows) => rows.map((row) => row.dataset.recordId ?? ""));
 };
 
-const ReceivedRecordSchema = Schema.Struct({
-  id: Schema.String,
-  values: Schema.Record(Schema.String, Schema.Json),
-  withheld: Schema.optionalKey(Schema.Array(Schema.String)),
-});
-
-/** A record as an API response carried it. */
-export type ReceivedRecord = typeof ReceivedRecordSchema.Type;
-
-const decodeReceived = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Union([
-      Schema.Struct({ records: Schema.Array(ReceivedRecordSchema) }),
-      Schema.Struct({ record: ReceivedRecordSchema }),
-    ])
-  )
+const ReceivedResourceSchema = Schema.StructWithRest(
+  Schema.Struct({
+    "@type": Schema.String,
+    href: Schema.String,
+    id: Schema.String,
+    revision: Schema.Number,
+    withheld: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
+  [Schema.Record(Schema.String, Schema.Json)]
 );
+
+/**
+ * A record as an API response carried it: its field attributes by API
+ * name (an empty one absent), and the attributes withheld.
+ */
+export interface ReceivedRecord {
+  readonly id: string;
+  readonly values: Readonly<Record<string, Schema.Json>>;
+  readonly withheld?: readonly string[];
+}
+
+const decodeReceivedList = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Array(ReceivedResourceSchema))
+);
+
+const decodeReceivedOne = Schema.decodeUnknownOption(
+  Schema.fromJsonString(ReceivedResourceSchema)
+);
+
+/**
+ * A received resource as a record.
+ *
+ * @param resource - The resource.
+ * @returns Its ID, field attributes and withheld attributes.
+ */
+const receivedRecordOf = (
+  resource: typeof ReceivedResourceSchema.Type
+): ReceivedRecord => {
+  const values = Object.fromEntries(
+    Object.entries(resource).filter(([name]) => isAttribute(name))
+  );
+
+  return resource.withheld === undefined
+    ? { id: resource.id, values }
+    : { id: resource.id, values, withheld: resource.withheld };
+};
 
 /**
  * The records an API response body holds: a list's or a single read's, so
@@ -2022,8 +2272,9 @@ const decodeReceived = Schema.decodeUnknownOption(
  * @returns Its records; none for other responses.
  */
 export const receivedRecords = (body: string): readonly ReceivedRecord[] =>
-  Option.match(decodeReceived(body), {
-    onNone: () => [],
-    onSome: (decoded) =>
-      "records" in decoded ? decoded.records : [decoded.record],
-  });
+  Option.getOrElse(
+    Option.orElse(decodeReceivedList(body), () =>
+      Option.map(decodeReceivedOne(body), (resource) => [resource])
+    ),
+    () => []
+  ).map(receivedRecordOf);
