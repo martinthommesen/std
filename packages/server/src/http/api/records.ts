@@ -25,11 +25,7 @@ import type { DefinitionId } from "@std/definitions/ids";
 import { apiAttributeNameOf } from "@std/definitions/names";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { stringifyJson } from "@std/values/json";
-import {
-  isJsonArray,
-  isJsonObject,
-  isJsonString,
-} from "@std/values/json-value";
+import { isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Option } from "effect";
 import { HttpServerResponse } from "effect/http";
@@ -59,7 +55,12 @@ import type { parseRequestRevision } from "../stale-request.ts";
 import type { ScopeParameters } from "../stale-scope.ts";
 import { bodyNames, translateBody, TYPE_MEMBERS } from "./body.ts";
 import { allowOf } from "./methods.ts";
-import { parseListQuery, parseReadQuery, parseSelection } from "./query.ts";
+import {
+  parseListQuery,
+  parseReadQuery,
+  parseSelection,
+  scopeOfQuery,
+} from "./query.ts";
 import { queryOf } from "./request.ts";
 import type { QueryParameters } from "./request.ts";
 import { recordHref, resourceOf, typeAttributes } from "./resource.ts";
@@ -68,34 +69,6 @@ import {
   collectionNameOf,
   tableOfCollection,
 } from "./table-names.ts";
-
-/** Directives that are not attribute filters, for the stale scope. */
-const DIRECTIVES: ReadonlySet<string> = new Set([
-  "fields",
-  "sort",
-  "offset",
-  "limit",
-  "after",
-  "before",
-  "filter",
-  "condition",
-  "count",
-  "allowedFor",
-  "@type",
-]);
-
-const COMPARISON_SUFFIX = /(?:\.(?:eq|gt|gte|lt|lte|regex)|>=|<=|>|<|=)$/u;
-
-const IDENTITY: ReadonlySet<string> = new Set([
-  "id",
-  "href",
-  "@type",
-  "@baseType",
-  "@schemaLocation",
-  "revision",
-  "withheld",
-  "none",
-]);
 
 /**
  * A response with a JSON body written with `stringifyJson` (jsonb key
@@ -119,80 +92,9 @@ export const jsonAnswer = (
 
 const etagOf = (revision: number): string => `"${revision}"`;
 
-// A path item of `fields` or a filter as the stale scope reads it: one
-// attribute or one hop, the EntityRef's own `id` and `name` being the
-// reference itself.
-const scopeItem = (item: string): string[] => {
-  const name =
-    item.startsWith("!") || item.startsWith(".") ? item.slice(1) : item;
-
-  const [reference = "", member] = name.split(".");
-
-  if (IDENTITY.has(name) || name === "") {
-    return [];
-  }
-
-  return member === "id" || member === "name" ? [reference] : [name];
-};
-
-// What `fields` selects, for the stale scope: inclusions as `fields`,
-// exclusions alone as the default selection minus them (`excluded`),
-// `none` or identity attributes only as nothing.
-const selectionScope = (fields: string): [string, string][] => {
-  const items = fields.split(",").map((item) => item.trim());
-  const included = items.filter((item) => !item.startsWith("!"));
-  const excluded = items.filter((item) => item.startsWith("!"));
-
-  if (included.length === 0 && excluded.length > 0) {
-    return [["excluded", excluded.flatMap(scopeItem).join(",")]];
-  }
-
-  return [["fields", included.flatMap(scopeItem).join(",")]];
-};
-
-/**
- * The names a list or read uses, for the stale-request scope (Contracts
- * 6.4), read from the query before anything resolves.
- *
- * @param query - The query parameters.
- * @returns The scope parameters, in API names.
- */
 // The `fields` parameter of a query, if any.
 const fieldsOf = (query: QueryParameters): string | undefined =>
   query.find(([key]) => key === "fields")?.[1];
-
-const scopeOfQuery = (query: QueryParameters): ScopeParameters => {
-  const first = (name: string) => query.find(([key]) => key === name)?.[1];
-
-  const fields = first("fields");
-  const condition = first("condition");
-  const sort = first("sort");
-
-  const paths = query.flatMap(([key]) =>
-    DIRECTIVES.has(key) ? [] : scopeItem(key.replace(COMPARISON_SUFFIX, ""))
-  );
-
-  const optional: [string, string][] = [];
-
-  if (fields !== undefined) {
-    optional.push(...selectionScope(fields));
-  }
-
-  if (condition !== undefined) {
-    optional.push(["filter", condition]);
-  }
-
-  if (sort !== undefined) {
-    optional.push(["sort", sort.replaceAll("+", "")]);
-  }
-
-  return {
-    labels: "true",
-    naming: "api",
-    paths: paths.join(","),
-    ...Object.fromEntries(optional),
-  };
-};
 
 /**
  * The qualified name of the table a collection names; `UnknownTable`
@@ -261,7 +163,7 @@ export interface PageLinks {
   readonly cursorPage: boolean;
   /** Whether the page was asked for with a cursor (it then has a `prev`). */
   readonly fromCursor: boolean;
-  readonly page: Page;
+  readonly page: Pick<Page, "count" | "firstCursor" | "nextCursor" | "hasMore">;
 }
 
 /**
@@ -349,10 +251,9 @@ const concreteRecords = Effect.fn("Api.concreteRecords")(
 
     for (const record of records) {
       if (fields === undefined && record.classId !== view.classId) {
-        children.set(record.classId, [
-          ...(children.get(record.classId) ?? []),
-          record.id,
-        ]);
+        const ids = children.get(record.classId) ?? [];
+        ids.push(record.id);
+        children.set(record.classId, ids);
       }
     }
 
@@ -610,11 +511,8 @@ export interface RouteInput {
   readonly collection: string;
 }
 
-/** What the record service answers for a record's history. */
-type HistoryAnswer = Effect.Success<ReturnType<typeof recordHistory>>;
-
 // A record or table the caller cannot see has no history to link.
-const noHistory = () => Effect.succeed(Option.none<HistoryAnswer>());
+const noHistory = () => Effect.succeed(Option.none<string>());
 
 /**
  * The ID of the latest history entry of a record the caller may see
@@ -634,24 +532,16 @@ const latestChangeOf = Effect.fn("Api.latestChange")(function* latestChangeOf(
     return Option.none<string>();
   }
 
-  const history = yield* recordHistory({
+  return yield* recordHistory({
     id: record.id,
     selection: { kind: "latest" },
     table,
   }).pipe(
-    Effect.map((found): Option.Option<HistoryAnswer> => Option.some(found)),
+    Effect.map((found) =>
+      Option.fromNullishOr(found.page.entries.at(-1)?.changeId)
+    ),
     Effect.catchTags({ NotFound: noHistory, UnknownTable: noHistory })
   );
-
-  const entries = Option.isSome(history) ? history.value.body.entries : null;
-  const last = isJsonArray(entries) ? entries.at(-1) : undefined;
-
-  const changeId =
-    last !== undefined && isJsonObject(last) ? last.changeId : undefined;
-
-  return changeId !== undefined && isJsonString(changeId)
-    ? Option.some(changeId)
-    : Option.none<string>();
 });
 
 /**
@@ -759,10 +649,11 @@ export const getIn = Effect.fn("Api.get")(function* getIn(
 /**
  * The answer after a write: the record read again with the caller's read
  * rights through `view`, or, when the caller can no longer see it (3.9),
- * only its identity and revision.
+ * only its identity and revision. The view belongs to the supplied scope.
  */
 export const savedAnswer = Effect.fn("Api.savedAnswer")(function* savedAnswer(
   input: RouteInput,
+  scope: ReadScope,
   saved: {
     readonly id: string;
     readonly classId: DefinitionId;
@@ -771,7 +662,6 @@ export const savedAnswer = Effect.fn("Api.savedAnswer")(function* savedAnswer(
   view: ReadView,
   status: number
 ) {
-  const scope = yield* currentReadScope();
   const query = queryOf(input.request);
   const fields = yield* parseReadQuery(query);
 
@@ -994,5 +884,5 @@ export const createIn = Effect.fn("Api.create")(function* createIn(
     endpointClassId: classId,
   }).pipe(writeFailures);
 
-  return yield* savedAnswer(input, saved, scope.view(classId), 201);
+  return yield* savedAnswer(input, scope, saved, scope.view(classId), 201);
 });

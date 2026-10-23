@@ -15,6 +15,14 @@ import { jsonBodyOf } from "./request.ts";
 
 const issuePaths = SchemaIssue.makeFormatterStandardSchemaV1();
 
+// JSON syntax is already checked. Leave proposal values to their field types.
+const decodeEnvelope = Schema.decodeUnknownEffect(
+  FormStateRequest.mapFields((fields) => ({
+    ...fields,
+    values: Schema.Unknown,
+  }))
+);
+
 /**
  * Checks a typed proposal inside the caller's authenticated request transaction.
  * @param input - The authenticated request context.
@@ -25,13 +33,7 @@ export const formStateIn = Effect.fn("Api.formState")(function* formStateIn(
 ) {
   const parsed = yield* jsonBodyOf(input.request);
 
-  // JSON syntax is already checked. Leave proposal values to their field types.
-  const envelope = yield* Schema.decodeUnknownEffect(
-    FormStateRequest.mapFields((fields) => ({
-      ...fields,
-      values: Schema.Unknown,
-    }))
-  )(parsed).pipe(
+  const envelope = yield* decodeEnvelope(parsed).pipe(
     Effect.mapError(
       (error) =>
         new InvalidRequest({

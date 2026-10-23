@@ -47,22 +47,21 @@ import type { FieldError } from "@std/definitions/field-errors";
 import type { DefinitionId } from "@std/definitions/ids";
 import { OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
-import { stringifyJson } from "@std/values/json";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect, Predicate, Result, Schema, SchemaIssue } from "effect";
+import { jsonbEquals } from "@std/values/jsonb";
+import { Clock, Effect, Predicate, Result, Schema, SchemaIssue } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
-import { SqlClient } from "effect/sql";
 
 import { Actor } from "../auth/actor.ts";
 import type { ActingUser } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { TABLE_OF } from "../catalog/definition-tables.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
+import { uuidv7At } from "../records/change-entry.ts";
 import { currentReadScope, resolveTable } from "../records/read-records.ts";
+import type { ReadScope } from "../records/read-view.ts";
 import { stepBoundary } from "../schema/recovery-settings.ts";
-import { decodeRows } from "../sql/rows.ts";
-import { readOnly } from "../sql/statement-marks.ts";
 import type { TransactionsApi } from "../sql/transactions.ts";
 import { mergePatch } from "./api/patch.ts";
 import {
@@ -182,8 +181,6 @@ interface Candidate {
 }
 
 const decodeOperation = Schema.decodeUnknownResult(OperationSchema);
-
-const decodeId = decodeRows(Schema.Struct({ id: Schema.String }));
 
 const readOnlyField = (field: string) =>
   new ValidationFailed({ errors: [{ _tag: "ReadOnlyField", field }] });
@@ -420,16 +417,6 @@ const fromResult = <A, E>(result: Result.Result<A, E>): Effect.Effect<A, E> =>
     ? Effect.succeed(result.success)
     : Effect.fail(result.failure);
 
-const newId = Effect.gen(function* newDefinitionId() {
-  const sql = yield* SqlClient.SqlClient;
-
-  const [row] = yield* readOnly(sql`SELECT uuidv7()::text AS id`).pipe(
-    Effect.flatMap(decodeId)
-  );
-
-  return row?.id ?? "";
-});
-
 /**
  * The operation a generic `DELETE` stands for.
  *
@@ -524,7 +511,7 @@ const PATCH_BUILDERS: Readonly<
 };
 
 const sameValue = (left: JsonValue, right: JsonValue | undefined): boolean =>
-  stringifyJson(left) === stringifyJson(right ?? null);
+  jsonbEquals(left, right ?? null);
 
 /** The codecs of JSON-valued definition columns. */
 const JSON_CODECS: ReadonlySet<string> = new Set(["json", "nullableJson"]);
@@ -718,6 +705,7 @@ type TargetedWrite = Exclude<DefinitionWrite, { readonly action: "create" }>;
  * depends on the record. Runs in the request transaction and again under
  * the change set's exclusive `CONFIG_KEY`.
  *
+ * @param scope - The caller's read scope.
  * @param table - The qualified table name.
  * @param kind - Its definition kind.
  * @param write - The update or delete.
@@ -725,12 +713,11 @@ type TargetedWrite = Exclude<DefinitionWrite, { readonly action: "create" }>;
  */
 const visibleTarget = Effect.fn("Http.definitionTarget")(
   function* visibleTarget(
+    scope: ReadScope,
     table: string,
     kind: DefinitionKind,
     write: TargetedWrite
   ) {
-    const scope = yield* currentReadScope();
-
     yield* resolveTable(scope, table);
 
     const current = scope.snapshot.get(write.id);
@@ -759,7 +746,7 @@ const visibleTarget = Effect.fn("Http.definitionTarget")(
  * definition the operations refer to afterwards, as the change-set
  * endpoint checks it (`checkTargetsVisible`: a create's references and
  * those an update introduces or keeps; a hidden one is refused like a
- * missing one).
+ * missing one), then authorization of every operation at this snapshot.
  *
  * @param stated - The revision the request stated.
  * @param table - The qualified table name.
@@ -778,11 +765,18 @@ const recheck = (
   Effect.gen(function* recheckWrite() {
     yield* staleCheck(stated, table, write);
 
+    const scope = yield* currentReadScope();
+
     if (write.action !== "create") {
-      yield* visibleTarget(table, kind, write);
+      yield* visibleTarget(scope, table, kind, write);
     }
 
-    yield* checkTargetsVisible(operations);
+    yield* checkTargetsVisible(
+      scope,
+      operations,
+      new Set(write.action === "create" ? [] : [write.id])
+    );
+    yield* authorizeOperations(scope.snapshot, yield* Actor, operations);
   });
 
 /**
@@ -813,10 +807,10 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
   let operations: readonly Operation[];
 
   if (write.action === "create") {
-    id = yield* newId;
+    id = uuidv7At(yield* Clock.currentTimeMillis);
     operations = [yield* createOperation(kind, id, write.body)];
   } else {
-    const current = yield* visibleTarget(table, kind, write);
+    const current = yield* visibleTarget(scope, table, kind, write);
 
     ({ id } = current);
     operations =
@@ -825,7 +819,11 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
         : yield* updateOperations(current, write.expectedVersion, write.body);
   }
 
-  yield* checkTargetsVisible(operations);
+  yield* checkTargetsVisible(
+    scope,
+    operations,
+    new Set(write.action === "create" ? [] : [write.id])
+  );
   yield* authorizeOperations(snapshot, actor, operations);
 
   return { actor, id, operations };
@@ -878,7 +876,6 @@ export const applyDefinitionWrite = Effect.fn("Http.applyDefinitionWrite")(
           // A database failure here aborts the main transaction: a 500.
           Effect.catchTags({ DatabaseError: Effect.die, SqlError: Effect.die })
         ),
-      operations: prepared.operations,
       token,
       userId: prepared.actor.userId,
     });

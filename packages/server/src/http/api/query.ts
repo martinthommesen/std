@@ -47,6 +47,7 @@ import {
 } from "../../records/read-query.ts";
 import type { SelectedValue, SortKey } from "../../records/read-query.ts";
 import type { ReadScope, ReadView } from "../../records/read-view.ts";
+import type { ScopeParameters } from "../stale-scope.ts";
 import type { QueryParameters } from "./request.ts";
 import { classOfType } from "./table-names.ts";
 
@@ -200,6 +201,92 @@ const dotSuffix = (parameter: string): SplitParameter => {
     : { comparison, path: segments.slice(0, -1) };
 };
 
+const selectionTokens = (text: string): string[] =>
+  text.split(",").map((item) => item.trim());
+
+const filterSyntax = (name: string): SplitParameter =>
+  symbolSuffix(name) ?? dotSuffix(name);
+
+// A path item of `fields` or a filter as the stale scope reads it: one
+// attribute or one hop, the EntityRef's own `id` and `name` being the
+// reference itself.
+const scopeItem = (item: string): string[] => {
+  const name =
+    item.startsWith("!") || item.startsWith(".") ? item.slice(1) : item;
+
+  const [reference = "", member] = name.split(".");
+
+  if (IDENTITY_ATTRIBUTES.has(name) || name === "none" || name === "") {
+    return [];
+  }
+
+  return member === "id" || member === "name" ? [reference] : [name];
+};
+
+// What `fields` selects, for the stale scope: inclusions as `fields`,
+// exclusions alone as the default selection minus them (`excluded`),
+// `none` or identity attributes only as nothing.
+const selectionScope = (fields: string): [string, string][] => {
+  const items = selectionTokens(fields);
+  const included = items.filter((item) => !item.startsWith("!"));
+  const excluded = items.filter((item) => item.startsWith("!"));
+
+  if (included.length === 0 && excluded.length > 0) {
+    return [["excluded", excluded.flatMap(scopeItem).join(",")]];
+  }
+
+  return [["fields", included.flatMap(scopeItem).join(",")]];
+};
+
+/**
+ * The names a list or read uses, for the stale-request scope (Contracts
+ * 6.4), read from the query before anything resolves.
+ *
+ * @param query - The query parameters.
+ * @returns The scope parameters, in API names.
+ */
+export const scopeOfQuery = (query: QueryParameters): ScopeParameters => {
+  const first = (name: string) => query.find(([key]) => key === name)?.[1];
+
+  const fields = first("fields");
+  const condition = first("condition");
+  const sort = first("sort");
+
+  const paths = query.flatMap(([key]) => {
+    // @type selects classes, rather than attributes, in the stale scope.
+    if (DIRECTIVES.has(key) || key === "@type") {
+      return [];
+    }
+
+    return scopeItem(
+      key.endsWith(".regex")
+        ? key.slice(0, -".regex".length)
+        : filterSyntax(key).path.join(".")
+    );
+  });
+
+  const optional: [string, string][] = [];
+
+  if (fields !== undefined) {
+    optional.push(...selectionScope(fields));
+  }
+
+  if (condition !== undefined) {
+    optional.push(["filter", condition]);
+  }
+
+  if (sort !== undefined) {
+    optional.push(["sort", sort.replaceAll("+", "")]);
+  }
+
+  return {
+    labels: "true",
+    naming: "api",
+    paths: paths.join(","),
+    ...Object.fromEntries(optional),
+  };
+};
+
 /**
  * Splits an attribute filter's name into its attribute path and comparison.
  *
@@ -218,7 +305,7 @@ export const splitParameter = Effect.fn("ApiQuery.splitParameter")(
       );
     }
 
-    const split = symbolSuffix(name) ?? dotSuffix(name);
+    const split = filterSyntax(name);
 
     const malformed =
       split.path.length === 0 ||
@@ -443,7 +530,7 @@ const groupFilters = Effect.fn("ApiQuery.groupFilters")(function* groupFilters(
  * @param scope - The caller's scope.
  * @param view - The endpoint's view.
  * @param query - The query parameters.
- * @returns The atoms, and the paths they used for the stale scope.
+ * @returns The atoms.
  */
 const attributeFilters = Effect.fn("ApiQuery.attributeFilters")(
   function* attributeFilters(
@@ -452,7 +539,6 @@ const attributeFilters = Effect.fn("ApiQuery.attributeFilters")(
     query: QueryParameters
   ) {
     const atoms: Expr[] = [];
-    const paths: string[] = [];
 
     for (const filter of yield* groupFilters(query)) {
       const typed =
@@ -464,14 +550,13 @@ const attributeFilters = Effect.fn("ApiQuery.attributeFilters")(
         const { comparison, path } = yield* splitParameter(filter.parameter);
         const resolved = yield* resolveAttribute(scope, view, path);
 
-        paths.push(path[1] === "id" ? (path[0] ?? "") : path.join("."));
         atoms.push(atomOf(resolved, comparison, filter.values));
       } else {
         atoms.push(typed);
       }
     }
 
-    return { atoms, paths };
+    return atoms;
   }
 );
 
@@ -492,7 +577,7 @@ interface FieldsSpec {
  */
 export const fieldsSpecOf = Effect.fn("ApiQuery.fieldsSpec")(
   function* fieldsSpecOf(text: string) {
-    const items = text.split(",").map((item) => item.trim());
+    const items = selectionTokens(text);
 
     if (items.includes("")) {
       return yield* invalidParameter(
@@ -655,14 +740,6 @@ export interface PageCursors {
   readonly before: CursorPosition | undefined;
 }
 
-/** The query's names, for the stale-request scope (Contracts 6.4). */
-export interface QueryScope {
-  readonly filter: string | undefined;
-  readonly sort: string | undefined;
-  readonly fields: string | undefined;
-  readonly paths: string;
-}
-
 /** The parsed query of a list. */
 export interface ListQuery {
   /** The TMF filters and `condition`, ANDed; none when there are none. */
@@ -689,7 +766,6 @@ export interface ListQuery {
   readonly withCount: boolean;
   /** Whether the page was asked for with `offset`. */
   readonly offsetPage: boolean;
-  readonly scope: QueryScope;
 }
 
 const cursorsOf = Effect.fn("ApiQuery.cursors")(function* cursorsOf(
@@ -742,7 +818,7 @@ export const parseListQuery = Effect.fn("ApiQuery.parseList")(
       );
     }
 
-    const { atoms, paths } = yield* attributeFilters(scope, view, query);
+    const atoms = yield* attributeFilters(scope, view, query);
 
     const parsedCondition =
       condition === undefined || condition.trim() === ""
@@ -780,7 +856,6 @@ export const parseListQuery = Effect.fn("ApiQuery.parseList")(
       limit,
       offset,
       offsetPage,
-      scope: { fields, filter: condition, paths: paths.join(","), sort },
       selection,
       sortKeys,
       tmf:

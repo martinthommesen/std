@@ -221,6 +221,7 @@ export const definitionWriteIn = Effect.fn("Api.definitionWriteIn")(
 
           return yield* savedAnswer(
             answering,
+            scope,
             {
               classId,
               id: applied.id,

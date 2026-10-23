@@ -181,7 +181,9 @@ export const entityRef = (
   const declared = reference.declaredClassId;
   const known = knowsTable(snapshot, caller, declared) ? declared : null;
   const referredId = reference.targetClassId ?? known;
-  const refType = refTypeOf(snapshot, caller, declared);
+
+  const refType =
+    known === null ? "EntityRef" : `${typeNameOf(snapshot, declared)}Ref`;
 
   const ref = new Map<string, JsonValue>([
     ["@type", refType],
