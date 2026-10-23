@@ -130,6 +130,7 @@ const updateRequest = (
   UpdateRecord({
     fields: TICKET_WIRE,
     generation: 2,
+    isDefinitionTable: false,
     recordId: TICKET_ID,
     revision: REVISION_5,
     secrets: {},
@@ -362,6 +363,20 @@ describe("opening a form", () => {
     );
   });
 });
+
+/**
+ * Whether the save a click on Save sends is a definition table's.
+ *
+ * @param page - A form with an edit.
+ * @returns The flag of each Command sent.
+ */
+const isDefinitionTableOf = (page: Model) =>
+  (update(page, Message.ClickedSave()).commands ?? []).map(
+    (command) =>
+      command.args !== undefined &&
+      "isDefinitionTable" in command.args &&
+      command.args.isDefinitionTable
+  );
 
 describe("editing and saving", () => {
   it("sends only the changed fields with If-Match and the form's revision; a cleared field is null", () => {
@@ -690,7 +705,9 @@ describe("editing and saving", () => {
       })
     );
 
-    expect(unread.submission).toStrictEqual(Submission.SavedUnread());
+    expect(unread.submission).toStrictEqual(
+      Submission.SavedUnread({ version: 4 })
+    );
     expect(AsyncData.isStale(unread.record)).toBeTruthy();
     expect(Object.keys(unread.edits)).toStrictEqual([
       TICKET_FIELDS.shortDescription,
@@ -735,6 +752,139 @@ describe("editing and saving", () => {
         ]);
       })
     );
+  });
+
+  /** A save of the description sent from `ready` (generation 2). */
+  const savingDescription = after(
+    ready,
+    Message.UpdatedText({ fieldId: TICKET_FIELDS.description, text: "Mine" }),
+    Message.ClickedSave()
+  );
+
+  it("a read from before an unread save never replaces it: version 3 arriving after the save committed version 4 is ignored (review round 2)", () => {
+    // The definitions move on while the save is in flight: the record is
+    // asked for again (generation 3), then the save commits version 4
+    // without its record being read back.
+    const unread = after(
+      savingDescription,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_6,
+        table: ticketTable,
+      }),
+      Message.SucceededSaveRecord({
+        generation: 2,
+        maybeRevision: Option.none(),
+        saved: UnreadSavedRecord.make({ id: TICKET_ID, version: 4 }),
+      })
+    );
+
+    story(
+      update,
+      given(unread),
+      message(
+        Message.SucceededLoadRecord({
+          generation: 3,
+          maybeRevision: Option.some(REVISION_6),
+          purpose: "Refresh",
+          record: ticketRecord,
+        })
+      ),
+      model((page) => {
+        expect(page.submission).toStrictEqual(
+          Submission.SavedUnread({ version: 4 })
+        );
+        expect(AsyncData.isStale(page.record)).toBeTruthy();
+      }),
+      message(Message.ClickedSave()),
+      Command.expectNone()
+    );
+  });
+
+  it("after an unread save, a later version is someone else's change: the edits are marked against what the page showed (review round 2)", () => {
+    const unread = after(
+      savingDescription,
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.shortDescription,
+        text: "Typed while saving",
+      }),
+      Message.SucceededSaveRecord({
+        generation: 2,
+        maybeRevision: Option.none(),
+        saved: UnreadSavedRecord.make({ id: TICKET_ID, version: 4 }),
+      }),
+      Message.ClickedRetry()
+    );
+
+    const theirs = {
+      ...ticketRecord,
+      values: {
+        ...ticketRecord.values,
+        description: "Mine",
+        short_description: "Theirs",
+      },
+      version: 5,
+    };
+
+    const reread = after(
+      unread,
+      Message.SucceededLoadRecord({
+        generation: 3,
+        maybeRevision: Option.some(REVISION_5),
+        purpose: "Refresh",
+        record: theirs,
+      })
+    );
+
+    expect(reread.submission).toStrictEqual(
+      Submission.Saved({ isVisible: true })
+    );
+    expect(reread.maybeEditsFrom).toStrictEqual(Option.some(ticketRecord));
+    expect(Object.keys(reread.edits)).toStrictEqual([
+      TICKET_FIELDS.shortDescription,
+    ]);
+
+    // Exactly the committed version is the page's own save: no mark.
+    const own = after(
+      unread,
+      Message.SucceededLoadRecord({
+        generation: 3,
+        maybeRevision: Option.some(REVISION_5),
+        purpose: "Refresh",
+        record: { ...theirs, version: 4 },
+      })
+    );
+
+    expect(own.maybeEditsFrom).toStrictEqual(Option.none());
+  });
+
+  it("updates a definition table with a merge patch, as its metadata says (definitionTable)", () => {
+    const definitionForm = after(
+      editing.model,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_5,
+        table: { ...ticketTable, definitionTable: true },
+      }),
+      Message.SucceededLoadRecord({
+        generation: 1,
+        maybeRevision: Option.some(REVISION_5),
+        purpose: "Open",
+        record: ticketRecord,
+      }),
+      Message.UpdatedText({ fieldId: TICKET_FIELDS.description, text: "Mine" })
+    );
+
+    expect(isDefinitionTableOf(definitionForm)).toStrictEqual([true]);
+    expect(
+      isDefinitionTableOf(
+        after(
+          ready,
+          Message.UpdatedText({
+            fieldId: TICKET_FIELDS.description,
+            text: "Mine",
+          })
+        )
+      )
+    ).toStrictEqual([false]);
   });
 
   it("ignores the answer to a save the page no longer waits for", () => {
@@ -1022,6 +1172,7 @@ describe("creating", () => {
         UpdateRecord({
           fields: TICKET_WIRE,
           generation: 2,
+          isDefinitionTable: false,
           recordId: NEW_ID,
           revision: REVISION_5,
           secrets: {},

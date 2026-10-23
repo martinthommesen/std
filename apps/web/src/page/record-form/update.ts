@@ -2150,6 +2150,17 @@ const failMetadata = (model: Model, error: MetaError): UpdateReturn => ({
   }),
 });
 
+/**
+ * The version a save committed whose record could not be read back.
+ *
+ * @param submission - Where saving stands.
+ * @returns The version, while the form waits to read it.
+ */
+const unreadSaveVersionOf = (submission: Submission): Option.Option<number> =>
+  Submission.guards.SavedUnread(submission)
+    ? Option.some(submission.version)
+    : Option.none();
+
 const receiveRecord = (
   model: Model,
   generation: number,
@@ -2158,24 +2169,33 @@ const receiveRecord = (
   maybeRevision: Option.Option<SchemaRevision>
 ): UpdateReturn => {
   // NOTE: a reread that left before a save and arrives after it holds an
-  // older version than the saved record; it is not shown.
-  const isOlder = Option.exists(
-    recordOf(model),
-    (current) => current.id === record.id && current.version > record.version
-  );
+  // older version than the saved record; it is not shown. After a save
+  // whose record could not be read back, the version it committed is the
+  // floor: an older read is from before that save.
+  const maybeUnreadVersion = unreadSaveVersionOf(model.submission);
+
+  const isOlder =
+    Option.exists(
+      recordOf(model),
+      (current) => current.id === record.id && current.version > record.version
+    ) || Option.exists(maybeUnreadVersion, (saved) => record.version < saved);
 
   if (generation !== model.generation || isOlder) {
     return { model };
   }
 
   const afterConflict = purpose === "ReloadAfterConflict";
-  const afterUnreadSave = Submission.guards.SavedUnread(model.submission);
+  const afterUnreadSave = Option.isSome(maybeUnreadVersion);
 
-  // NOTE: after a save whose record could not be read back, the newer
-  // version is this page's own save, not someone else's change.
+  // NOTE: after a save whose record could not be read back, exactly the
+  // version it committed is this page's own save; a later one is someone
+  // else's change, marked under the edits as after any reread (decision
+  // 0020), against the record the page showed before the save.
+  const isOwnSave = Option.contains(maybeUnreadVersion, record.version);
+
   const isChangedUnderEdits =
     purpose !== "Open" &&
-    !afterUnreadSave &&
+    !isOwnSave &&
     !Record.isEmptyRecord(model.edits) &&
     Option.exists(
       recordOf(model),
@@ -2360,6 +2380,7 @@ const save = (model: Model): UpdateReturn => {
           UpdateRecord({
             fields: meta.table.fields.map(wireFieldOf),
             generation,
+            isDefinitionTable: meta.table.definitionTable === true,
             recordId: record.id,
             revision: meta.revision,
             secrets: check.body.secrets,
@@ -2460,11 +2481,13 @@ export const editsAfterSave = (
  *
  * @param editing - The page, editing the saved record.
  * @param sentEdits - The edits the save was built from.
+ * @param version - The version the save committed.
  * @returns The page.
  */
 const markUnreadSave = (
   editing: Model,
-  sentEdits: Readonly<Record<string, FieldInput>>
+  sentEdits: Readonly<Record<string, FieldInput>>,
+  version: number
 ): Model =>
   modifyFields(editing, {
     droppedEdits: () => [],
@@ -2477,7 +2500,7 @@ const markUnreadSave = (
       }),
     serverErrors: () => ({}),
     staleChanges: () => [],
-    submission: () => Submission.SavedUnread(),
+    submission: () => Submission.SavedUnread({ version }),
   });
 
 const receiveSave = (
@@ -2516,7 +2539,7 @@ const receiveSave = (
     return sawRevision(
       {
         commands: navigation,
-        model: markUnreadSave(editing, submission.sentEdits),
+        model: markUnreadSave(editing, submission.sentEdits, saved.version),
       },
       maybeRevision
     );

@@ -128,6 +128,7 @@ const REVISION_HEADER = { "std-schema-revision": REVISION_6 };
 const updateCommand = UpdateRecord({
   fields: TICKET_WIRE,
   generation: 7,
+  isDefinitionTable: false,
   recordId: TICKET_ID,
   revision: REVISION_5,
   secrets: { pin: toWriteOnlyValue("n3w-pin") },
@@ -355,6 +356,7 @@ describe("form Commands against the server", () => {
       UpdateRecord({
         fields: TICKET_WIRE,
         generation: 7,
+        isDefinitionTable: true,
         recordId: TICKET_ID,
         revision: REVISION_5,
         secrets: {},

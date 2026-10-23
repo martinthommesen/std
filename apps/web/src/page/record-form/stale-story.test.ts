@@ -216,6 +216,7 @@ describe("a save refused with SchemaChanged", () => {
         UpdateRecord({
           fields: TICKET_WIRE,
           generation: 2,
+          isDefinitionTable: false,
           recordId: TICKET_ID,
           revision: REVISION_5,
           secrets: {},
@@ -308,6 +309,7 @@ describe("a save refused with SchemaChanged", () => {
         UpdateRecord({
           fields: changedTable.fields.map(wireFieldOf),
           generation: 4,
+          isDefinitionTable: false,
           recordId: TICKET_ID,
           revision: REVISION_6,
           secrets: {},
@@ -893,6 +895,7 @@ describe("edits made while a save is in flight (review round 1)", () => {
         {
           fields: TICKET_WIRE,
           generation: 2,
+          isDefinitionTable: false,
           recordId: TICKET_ID,
           revision: REVISION_5,
           secrets: {},
@@ -950,6 +953,7 @@ describe("edits made while a save is in flight (review round 1)", () => {
         UpdateRecord({
           fields: TICKET_WIRE,
           generation: 3,
+          isDefinitionTable: false,
           recordId: TICKET_ID,
           revision: REVISION_5,
           secrets: {},
@@ -1028,6 +1032,7 @@ describe("a record not read again under new definitions (review round 1)", () =>
         UpdateRecord({
           fields: changedTable.fields.map(wireFieldOf),
           generation: 4,
+          isDefinitionTable: false,
           recordId: TICKET_ID,
           revision: REVISION_6,
           secrets: {},
@@ -1310,6 +1315,7 @@ describe("a rename while a save is in flight (review round 2)", () => {
         UpdateRecord({
           fields: renamed.fields.map(wireFieldOf),
           generation: 5,
+          isDefinitionTable: false,
           recordId: TICKET_ID,
           revision: REVISION_6,
           secrets: {},
@@ -1416,6 +1422,7 @@ describe("a rename while a save is in flight (review round 2)", () => {
         {
           fields: renamed.fields.map(wireFieldOf),
           generation: 3,
+          isDefinitionTable: false,
           recordId: NEW_ID,
           revision: REVISION_6,
           secrets: {},
@@ -1513,6 +1520,7 @@ describe("a rename while a save is in flight (review round 2)", () => {
         {
           fields: renamed.fields.map(wireFieldOf),
           generation: 5,
+          isDefinitionTable: false,
           recordId: INCIDENT_ID,
           revision: REVISION_6,
           secrets: {},
