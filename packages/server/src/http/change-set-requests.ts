@@ -28,7 +28,6 @@ import { readOnly } from "../sql/statement-marks.ts";
 import type { TransactionsApi } from "../sql/transactions.ts";
 import {
   applyAsActor,
-  authorizeOperations,
   checkChangeSetRequest,
   sessionAuthorization,
 } from "./change-sets.ts";
@@ -177,11 +176,6 @@ export const applyChangeSetRequest = Effect.fn("Http.applyChangeSetRequest")(
           const acting = yield* Actor;
 
           yield* checkChangeSetRequest(stated, operations);
-          yield* authorizeOperations(
-            yield* catalog.current,
-            acting,
-            operations
-          );
 
           return acting;
         })
@@ -202,7 +196,6 @@ export const applyChangeSetRequest = Effect.fn("Http.applyChangeSetRequest")(
               SqlError: Effect.die,
             })
           ),
-        operations,
         token: yield* SessionToken,
         userId: actor.userId,
       }),

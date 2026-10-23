@@ -1,4 +1,10 @@
 import { fieldDecision, recordDecision } from "@std/access/rules";
+import { ExistingDataViolates } from "@std/api/errors/existing-data-violates";
+import { NotAllowed } from "@std/api/errors/not-allowed";
+import { SchemaBusy } from "@std/api/errors/schema-busy";
+import { SchemaLockTimeout } from "@std/api/errors/schema-lock-timeout";
+import { SchemaNeedsAttention } from "@std/api/errors/schema-needs-attention";
+import type { SchemaChange } from "@std/api/errors/schemas";
 /**
  * Change sets over HTTP (Contracts 1.4, 1.5): what the change-set endpoint
  * and generic writes to definition tables share.
@@ -19,12 +25,7 @@ import { fieldDecision, recordDecision } from "@std/access/rules";
  *   `SchemaLockTimeout`) become their API forms, naming no session; any
  *   other failure is a 500 with an empty body.
  */
-import { ExistingDataViolates } from "@std/api/errors/existing-data-violates";
-import { NotAllowed } from "@std/api/errors/not-allowed";
-import { SchemaBusy } from "@std/api/errors/schema-busy";
-import { SchemaLockTimeout } from "@std/api/errors/schema-lock-timeout";
-import { SchemaNeedsAttention } from "@std/api/errors/schema-needs-attention";
-import type { SchemaChange } from "@std/api/errors/schemas";
+import { arrayParameter, identSql, sql } from "@std/conditions/sql-fragment";
 import {
   AccessRuleDraftSchema,
   ClassDraftSchema,
@@ -54,8 +55,8 @@ import { DefinitionInvalid, problem } from "@std/definitions/problems";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import type { PlatformTable } from "@std/definitions/well-known";
-import { stringifyJson } from "@std/values/json";
 import type { JsonObject } from "@std/values/json-value";
+import { jsonbEquals } from "@std/values/jsonb";
 import { Effect, Option, Schema } from "effect";
 import type { Redacted } from "effect";
 
@@ -68,7 +69,9 @@ import type { ConfigEditRefused } from "../config/config-edit-refused.ts";
 import { applyLocalChangeSet } from "../config/config-service.ts";
 import { currentReadScope } from "../records/read-records.ts";
 import type { ReadScope } from "../records/read-view.ts";
-import { readableOnRecord } from "../records/record-access.ts";
+import { truthColumn } from "../records/record-access.ts";
+import { recordRelation } from "../records/relation.ts";
+import { readRows } from "../records/sql-run.ts";
 import type {
   AuthorizeServices,
   ChangeSetAuthorizationError,
@@ -265,7 +268,7 @@ const writtenColumns = (
     properties = Object.keys(draft).filter(
       (key) =>
         before === undefined ||
-        stringifyJson(before[key] ?? null) !== stringifyJson(draft[key] ?? null)
+        !jsonbEquals(before[key] ?? null, draft[key] ?? null)
     );
   }
 
@@ -344,54 +347,93 @@ const unknownDefinition = (id: DefinitionId) =>
     problems: [problem("unknownDefinition", id, `No definition has ID ${id}.`)],
   });
 
-/**
- * Whether the caller may see a stored definition record (Contracts 3.2):
- * the record's visibility on its definition table, at the snapshot the
- * caller's scope was built at.
- *
- * @param scope - The caller's read scope.
- * @param definition - The definition.
- * @returns True when visible.
- */
-export const definitionVisible = Effect.fn("Http.definitionVisible")(
-  function* definitionVisible(scope: ReadScope, definition: Definition) {
-    const classId = PLATFORM_CLASS_IDS[DEFINITION_TABLE[definition.kind]];
-    const readable = yield* readableOnRecord(scope, classId, definition.id);
+const visibleDefinitions = Effect.fn("Http.visibleDefinitions")(
+  function* visibleDefinitions(
+    scope: ReadScope,
+    ids: ReadonlySet<DefinitionId>
+  ) {
+    const groups = new Map<DefinitionId, DefinitionId[]>();
 
-    return Option.isSome(readable);
+    for (const id of ids) {
+      const stored = scope.snapshot.get(id);
+
+      if (stored === undefined) {
+        continue;
+      }
+
+      const classId = PLATFORM_CLASS_IDS[DEFINITION_TABLE[stored.kind]];
+      const group = groups.get(classId) ?? [];
+      group.push(id);
+      groups.set(classId, group);
+    }
+
+    const visible = new Set<DefinitionId>();
+
+    for (const [classId, group] of groups) {
+      const view = scope.view(classId, true);
+
+      const rows = yield* readRows(
+        sql`SELECT ${identSql("r", "id")}::text AS id, ${truthColumn(view.visibility("r"), "visible")}
+FROM ${recordRelation(scope.snapshot, classId)} AS ${identSql("r")}
+WHERE ${identSql("r", "id")} = ANY(${arrayParameter(group, "uuid")})`
+      );
+
+      for (const row of rows) {
+        if (row.visible === "true" && row.id !== null && row.id !== undefined) {
+          visible.add(row.id);
+        }
+      }
+    }
+
+    return visible;
   }
 );
 
 /**
- * The definitions the operations need that the caller cannot see: every
- * target, and for a create every definition it references, that is
- * missing or hidden from the caller (Contracts 3.8). Definitions created
- * earlier in the same change set count as present.
- *
- * @param operations - The operations, in order.
- * @returns Their IDs, in the order the operations name them.
+ * Whether the caller may see a stored definition record (Contracts 3.2).
+ * @param scope - The caller's read scope.
+ * @param definition - The stored definition.
+ * @returns True when visible.
+ */
+export const definitionVisible = Effect.fn("Http.definitionVisible")(
+  function* definitionVisible(scope: ReadScope, definition: Definition) {
+    return (yield* visibleDefinitions(scope, new Set([definition.id]))).has(
+      definition.id
+    );
+  }
+);
+
+/**
+ * Missing or hidden definitions in operation order. Earlier creates count as
+ * present; a hidden target's stored references are never inspected.
  */
 const hiddenTargets = Effect.fn("Http.hiddenTargets")(function* hiddenTargets(
-  operations: readonly Operation[]
+  scope: ReadScope,
+  operations: readonly Operation[],
+  knownVisible: ReadonlySet<DefinitionId> = new Set()
 ) {
-  const scope = yield* currentReadScope();
   const hidden: DefinitionId[] = [];
   const views = batchViews(scope.snapshot, operations);
 
-  const visibleStored = Effect.fnUntraced(function* visibleStored(
-    view: BatchView,
-    id: DefinitionId
-  ) {
-    if (view.created.has(id)) {
-      return true;
-    }
+  const targets = new Set(
+    operations.flatMap((operation, index) => {
+      const target = storedTargetId(operation);
 
-    const stored = scope.snapshot.get(id);
+      return target === undefined ||
+        views[index]?.created.has(target) === true ||
+        knownVisible.has(target)
+        ? []
+        : [target];
+    })
+  );
 
-    return stored !== undefined && (yield* definitionVisible(scope, stored));
-  });
+  // Check targets before reading their stored references.
+  const visible = new Set([
+    ...knownVisible,
+    ...(yield* visibleDefinitions(scope, targets)),
+  ]);
 
-  for (const [index, operation] of operations.entries()) {
+  const needed = operations.map((operation, index) => {
     const view = views[index] ?? {
       created: new Map(),
       snapshot: scope.snapshot,
@@ -399,15 +441,35 @@ const hiddenTargets = Effect.fn("Http.hiddenTargets")(function* hiddenTargets(
 
     const target = storedTargetId(operation);
 
-    // The target first: nothing stored about it (its references included)
-    // is read until it has proved visible.
-    if (target !== undefined && !(yield* visibleStored(view, target))) {
-      hidden.push(target);
-    } else {
-      for (const id of neededIds(view, operation)) {
-        if (!(yield* visibleStored(view, id))) {
-          hidden.push(id);
-        }
+    return target !== undefined &&
+      !view.created.has(target) &&
+      !visible.has(target)
+      ? [target]
+      : neededIds(view, operation);
+  });
+
+  const references = new Set<DefinitionId>();
+
+  for (const [index, ids] of needed.entries()) {
+    for (const id of ids) {
+      if (
+        views[index]?.created.has(id) !== true &&
+        !visible.has(id) &&
+        !targets.has(id)
+      ) {
+        references.add(id);
+      }
+    }
+  }
+
+  for (const id of yield* visibleDefinitions(scope, references)) {
+    visible.add(id);
+  }
+
+  for (const [index, ids] of needed.entries()) {
+    for (const id of ids) {
+      if (views[index]?.created.has(id) !== true && !visible.has(id)) {
+        hidden.push(id);
       }
     }
   }
@@ -421,12 +483,18 @@ const hiddenTargets = Effect.fn("Http.hiddenTargets")(function* hiddenTargets(
  * (`DefinitionInvalid` with `unknownDefinition`), before any version,
  * validation or dependency check reveals anything about it.
  *
+ * @param scope - The caller's read scope.
  * @param operations - The operations, in order.
+ * @param knownVisible - IDs already proved visible in this transaction.
  * @returns Fails with `DefinitionInvalid`.
  */
 export const checkTargetsVisible = Effect.fn("Http.checkTargetsVisible")(
-  function* checkTargetsVisible(operations: readonly Operation[]) {
-    const [first] = yield* hiddenTargets(operations);
+  function* checkTargetsVisible(
+    scope: ReadScope,
+    operations: readonly Operation[],
+    knownVisible: ReadonlySet<DefinitionId> = new Set()
+  ) {
+    const [first] = yield* hiddenTargets(scope, operations, knownVisible);
 
     return first === undefined
       ? yield* Effect.void
@@ -649,7 +717,7 @@ export const checkChangeSetRequest = Effect.fn("Http.checkChangeSetRequest")(
     stated: Option.Option<ConfigState>,
     operations: readonly Operation[]
   ) {
-    const hidden = yield* hiddenTargets(operations);
+    const hidden = yield* hiddenTargets(yield* currentReadScope(), operations);
 
     // A revision this database does not have: SchemaChanged before
     // anything else, listing only what does not reveal hidden targets.
@@ -774,16 +842,15 @@ const schemaNeedsAttention = (failure: { readonly changeSetId: string }) =>
  * against.
  *
  * @param options - The session token, the user it authenticated, the
- *   operations, and an optional extra check run as the re-authenticated
- *   actor.
+ *   required request check, including operation authorization, run as the
+ *   re-authenticated actor.
  * @returns The `authorize` hook of a change-set request.
  */
 export const sessionAuthorization =
   (options: {
     readonly token: Redacted.Redacted;
     readonly userId: string;
-    readonly operations: readonly Operation[];
-    readonly check?: (
+    readonly check: (
       actor: ActingUser
     ) => Effect.Effect<void, ChangeSetAuthorizationError, AuthorizeServices>;
   }) =>
@@ -795,11 +862,7 @@ export const sessionAuthorization =
         return yield* new NotAllowed();
       }
 
-      if (options.check !== undefined) {
-        yield* options.check(actor);
-      }
-
-      yield* authorizeOperations(snapshot, actor, options.operations);
+      yield* options.check(actor);
 
       return { roleIds: actor.roleIds, userId: actor.userId };
     }).pipe(Effect.catchTag("SqlError", Effect.die));

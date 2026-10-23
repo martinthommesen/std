@@ -535,7 +535,7 @@ export const patchIn = Effect.fn("Api.patch")(function* patchIn(
     id: id.toLowerCase(),
   }).pipe(writeFailures);
 
-  return yield* savedAnswer(input, saved, view, 200);
+  return yield* savedAnswer(input, scope, saved, view, 200);
 });
 
 /**

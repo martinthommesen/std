@@ -22,6 +22,7 @@ import {
   requireDeadLetterAdmin,
   retryDeadDelivery,
 } from "../../outbox/dead-letters.ts";
+import { DeliveryStatusSchema } from "../../outbox/delivery-claims.ts";
 import type { DeliveryHandlers } from "../../outbox/delivery-effects.ts";
 import type { ReadField } from "../../records/read-field.ts";
 import { apiNameOfField } from "../../records/read-field.ts";
@@ -179,13 +180,7 @@ const list = Effect.fn("DeadLetters.list")(function* list(
   for (const [name, text] of parameters) {
     if (["status", ".status", "status.eq", "status="].includes(name)) {
       for (const value of alternativesOf(text)) {
-        yield* Schema.decodeEffect(
-          Schema.String.check(
-            Schema.makeFilter((status) =>
-              ["pending", "in_flight", "done", "dead"].includes(status)
-            )
-          )
-        )(value).pipe(
+        yield* Schema.decodeUnknownEffect(DeliveryStatusSchema)(value).pipe(
           Effect.mapError(
             () =>
               new InvalidRequest({
@@ -298,6 +293,7 @@ const task = (action: "retry" | "discard") =>
         request,
         stated: yield* parseRequestRevision(request),
       },
+      scope,
       saved,
       scope.view(PLATFORM_CLASS_IDS.dead_delivery_action),
       201

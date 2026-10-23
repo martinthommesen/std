@@ -333,7 +333,7 @@ const added = (
   replace: boolean
 ): JsonValue | undefined =>
   updateAt(document, path, (parent, last) =>
-    withMember(parent, last, structuredClone(value), replace)
+    withMember(parent, last, value, replace)
   );
 
 const copiedOrMoved = (

@@ -37,7 +37,7 @@ import { currentReadScope } from "../../records/read-records.ts";
 import type { ReadScope } from "../../records/read-view.ts";
 import { checkRequestRevision } from "../stale-request.ts";
 import { alternativesOf } from "./query.ts";
-import { jsonAnswer, tableOf } from "./records.ts";
+import { jsonAnswer, linkHeader, tableOf } from "./records.ts";
 import type { RouteInput } from "./records.ts";
 import { queryOf } from "./request.ts";
 import { entityRef, recordHref } from "./resource.ts";
@@ -539,59 +539,6 @@ const visibleEntries = Effect.fn("Api.historyEntries")(function* entries(
   };
 });
 
-const linkTo = (
-  input: RouteInput,
-  changes: Readonly<Record<string, string>>
-): string => {
-  const path = input.request.url.split("?")[0] ?? "";
-
-  const search = new URLSearchParams([
-    ...queryOf(input.request).flatMap(([key, value]) =>
-      ["offset", "after", "before"].includes(key) ? [] : [[key, value]]
-    ),
-    ...Object.entries(changes),
-  ]).toString();
-
-  const queryText = search === "" ? "" : `?${search}`;
-
-  return `<${input.origin}${path}${queryText}>`;
-};
-
-const linkHeader = (
-  input: RouteInput,
-  offset: number,
-  limit: number,
-  total: number,
-  latest: string | undefined
-): string => {
-  const lastOffset = Math.max(0, Math.floor((total - 1) / limit) * limit);
-
-  const links = [
-    `<${input.origin}${input.request.url}>; rel="self"`,
-    `${linkTo(input, { offset: "0" })}; rel="first"`,
-  ];
-
-  if (offset > 0) {
-    const previous = String(Math.max(0, offset - limit));
-
-    links.push(`${linkTo(input, { offset: previous })}; rel="prev"`);
-  }
-
-  if (offset + limit < total) {
-    const next = String(offset + limit);
-
-    links.push(`${linkTo(input, { offset: next })}; rel="next"`);
-  }
-
-  links.push(`${linkTo(input, { offset: String(lastOffset) })}; rel="last"`);
-
-  if (latest !== undefined) {
-    links.push(`<${latest}>; rel="latest-version"`);
-  }
-
-  return links.join(", ");
-};
-
 /**
  * The `Link` header of one entry (TMF630 v5.0.0 Part 1 §12.3.3 pp.231-232,
  * §12.4 p.238): `self`, `version-history`, `latest-version`, and
@@ -653,39 +600,35 @@ export const historyIn = Effect.fn("Api.history")(function* historyIn(
   );
 
   const latest = page.latestId === undefined ? undefined : href(page.latestId);
-  let link: string;
+  const [first] = page.entries;
+  const last = page.entries.at(-1);
 
-  if (query.cursorPage) {
-    const links = [`<${input.origin}${input.request.url}>; rel="self"`];
-    const [first] = page.entries;
-    const last = page.entries.at(-1);
+  const navigation = linkHeader({
+    cursorPage: query.cursorPage,
+    fromCursor: query.fromCursor,
+    limit: query.limit,
+    offset: query.offset,
+    origin: input.origin,
+    page: {
+      count: page.total ?? 0,
+      firstCursor:
+        first !== undefined && page.hasPrevious
+          ? encodeHistoryCursor(first.version, query.selection.range)
+          : null,
+      hasMore: query.offset + query.limit < (page.total ?? 0),
+      nextCursor:
+        last !== undefined && page.hasNext
+          ? encodeHistoryCursor(last.version, query.selection.range)
+          : null,
+    },
+    query: queryOf(input.request),
+    request: input.request,
+  });
 
-    if (query.fromCursor && first !== undefined && page.hasPrevious) {
-      links.push(
-        `${linkTo(input, { before: encodeHistoryCursor(first.version, query.selection.range) })}; rel="prev"`
-      );
-    }
-
-    if (last !== undefined && page.hasNext) {
-      links.push(
-        `${linkTo(input, { after: encodeHistoryCursor(last.version, query.selection.range) })}; rel="next"`
-      );
-    }
-
-    if (latest !== undefined) {
-      links.push(`<${latest}>; rel="latest-version"`);
-    }
-
-    link = links.join(", ");
-  } else {
-    link = linkHeader(
-      input,
-      query.offset,
-      query.limit,
-      page.total ?? 0,
-      latest
-    );
-  }
+  const link =
+    latest === undefined
+      ? navigation
+      : `${navigation}, <${latest}>; rel="latest-version"`;
 
   const body = entries.map((entry) => selected(query.fields, entry));
   const headers = { link, "x-result-count": String(entries.length) };
