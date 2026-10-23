@@ -23,6 +23,9 @@ import { migration0015 } from "./migrations/0015-delivery-done.ts";
 import { migration0016 } from "./migrations/0016-system-user-history.ts";
 import { migration0017 } from "./migrations/0017-rolling-groundwork.ts";
 import { migration0018 } from "./migrations/0018-hubs.ts";
+import { migration0019 } from "./migrations/0019-event-lookups.ts";
+import { migration0020 } from "./migrations/0020-change-topic-page.ts";
+import { migration0021 } from "./migrations/0021-event-lookup-backfill.ts";
 
 /** Every platform migration this version of STD knows. */
 export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
@@ -45,4 +48,7 @@ export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
     migration0016,
     migration0017,
     migration0018,
+    migration0019,
+    migration0020,
+    migration0021,
   ]);

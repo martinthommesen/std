@@ -153,6 +153,12 @@ const upgradedDatabase = Effect.gen(function* upgradedDatabaseTest() {
   // An installation from before the fix: no version-1 entry, migration
   // 0016 not yet in the ledger.
   yield* values(
+    `DELETE FROM core.resource_event e USING core.change c
+     WHERE e.change_id = c.id AND c.record_id = $1::uuid AND c.record_version = 1
+     RETURNING e.event_id::text AS value`,
+    [SYSTEM_USER_ID]
+  );
+  yield* values(
     `DELETE FROM core."change" WHERE record_id = $1::uuid AND record_version = 1
      RETURNING id::text AS value`,
     [SYSTEM_USER_ID]

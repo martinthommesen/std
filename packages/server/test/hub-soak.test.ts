@@ -28,13 +28,17 @@ const CHILD = fileURLToPath(
   new URL("fixtures/hub-worker-child.ts", import.meta.url)
 );
 
+// The alias remains Effect-aware and lets Sonar recognize the test file.
+const test = it.effect;
+
 describe("hub-soak", () => {
-  it("event identifiers follow the standard UUIDv5 namespace and name vector", () => {
-    assert.strictEqual(
-      eventIdOf("6ba7b810-9dad-11d1-80b4-00c04fd430c8", "www.example.com"),
-      "2ed6657d-e927-568b-95e1-2665a8aea6a2"
-    );
-  });
+  test("event identifiers follow the standard UUIDv5 namespace and name vector", () =>
+    Effect.sync(() => {
+      assert.strictEqual(
+        eventIdOf("6ba7b810-9dad-11d1-80b4-00c04fd430c8", "www.example.com"),
+        "2ed6657d-e927-568b-95e1-2665a8aea6a2"
+      );
+    }));
   it.effect(
     "eight workers recover a process killed mid-delivery, retry 20 percent failures, preserve order and eventId, and never deliver rollback",
     () =>
@@ -156,7 +160,16 @@ describe("hub-soak", () => {
           );
         });
 
-        yield* retryWave.pipe(Effect.repeat({ times: 7 }));
+        yield* retryWave.pipe(
+          Effect.repeat({
+            times: 100,
+            while: () =>
+              deliveriesWhere(
+                "subscription_id = $1::uuid AND status IN ('pending', 'running')",
+                [hub]
+              ).pipe(Effect.map((rows) => rows.length > 0)),
+          })
+        );
 
         const deliveries = yield* deliveriesWhere(
           "subscription_id = $1::uuid",

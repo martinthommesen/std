@@ -12,7 +12,10 @@ import { Result, Effect } from "effect";
 import { TestClock } from "effect/testing";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import { checkTmf688Notification } from "../../testing/src/tmf688-contract.ts";
+import {
+  checkTmf688Notification,
+  checkTmf688Exchange,
+} from "../../testing/src/tmf688-contract.ts";
 import { workerPass } from "../src/outbox/worker.ts";
 import { hubTestLayer, listener } from "./hub-support.ts";
 import { change, createClass, ensureSite } from "./schema-support.ts";
@@ -20,97 +23,101 @@ import { asArray, asObject, textOf, v2Callers } from "./v2-support.ts";
 
 const BASE = TMF688_PREFIX;
 
+// The alias remains Effect-aware and lets Sonar recognize the test file.
+const test = it.effect;
+
 describe("tmf688-topics", () => {
+  test("pending client events are suppressed when topic read rights are revoked", () =>
+    Effect.gen(function* revokedTopic() {
+      const http = yield* TestHttpClient;
+      const { admin } = yield* v2Callers;
+      const callback = yield* listener();
+      yield* http.request("POST", `${BASE}/hub`, {
+        ...admin,
+        body: { callback: callback.origin },
+      });
+
+      const created = yield* http.request("POST", `${BASE}/topic`, {
+        ...admin,
+        body: { name: "private topic" },
+      });
+
+      const id = textOf(asObject(created.json).id);
+      yield* workerPass();
+      assert.lengthOf(callback.calls, 1);
+      yield* http.request("POST", `${BASE}/topic/${id}/event`, {
+        ...admin,
+        body: {
+          "@type": "Custom",
+          event: {},
+          eventId: "hidden-topic",
+          eventType: "Custom",
+        },
+      });
+      yield* change([
+        {
+          definition: {
+            actions: ["read"],
+            active: true,
+            classId: EVENT_CLASS_IDS.topic,
+            condition: null,
+            description: null,
+            effect: "deny",
+            id: randomUUID(),
+            kind: "accessRule",
+            name: null,
+            owner: { layer: "local" },
+            protected: false,
+            roleIds: [BUILT_IN_ROLE_IDS.admin],
+            target: { kind: "records" },
+          },
+          op: "createAccessRule",
+        },
+      ]);
+      yield* workerPass();
+      assert.lengthOf(callback.calls, 1);
+    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+
   it.effect(
-    "pending client events are suppressed when topic read rights are revoked",
+    "the served path matches the pinned TMF688 swagger and pin record",
     () =>
-      Effect.gen(function* revokedTopic() {
-        const http = yield* TestHttpClient;
-        const { admin } = yield* v2Callers;
-        const callback = yield* listener();
-        yield* http.request("POST", `${BASE}/hub`, {
-          ...admin,
-          body: { callback: callback.origin },
-        });
+      Effect.sync(() => {
+        const swagger = parseJson(
+          readFileSync(
+            new URL(
+              "../../tmf/specs/TMF688-Event-v4.0.0.swagger.json",
+              import.meta.url
+            ),
+            "utf-8"
+          )
+        );
 
-        const created = yield* http.request("POST", `${BASE}/topic`, {
-          ...admin,
-          body: { name: "private topic" },
-        });
+        const pins = parseJson(
+          readFileSync(
+            new URL("../../tmf/specs/pins.json", import.meta.url),
+            "utf-8"
+          )
+        );
 
-        const id = textOf(asObject(created.json).id);
-        yield* workerPass();
-        assert.lengthOf(callback.calls, 1);
-        yield* http.request("POST", `${BASE}/topic/${id}/event`, {
-          ...admin,
-          body: {
-            "@type": "Custom",
-            event: {},
-            eventId: "hidden-topic",
-            eventType: "Custom",
-          },
-        });
-        yield* change([
-          {
-            definition: {
-              actions: ["read"],
-              active: true,
-              classId: EVENT_CLASS_IDS.topic,
-              condition: null,
-              description: null,
-              effect: "deny",
-              id: randomUUID(),
-              kind: "accessRule",
-              name: null,
-              owner: { layer: "local" },
-              protected: false,
-              roleIds: [BUILT_IN_ROLE_IDS.admin],
-              target: { kind: "records" },
-            },
-            op: "createAccessRule",
-          },
-        ]);
-        yield* workerPass();
-        assert.lengthOf(callback.calls, 1);
-      }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive)
+        assert.isTrue(swagger.ok);
+        assert.isTrue(pins.ok);
+
+        if (!swagger.ok || !pins.ok) {
+          return;
+        }
+
+        assert.strictEqual(
+          textOf(asObject(swagger.value).basePath).replace(/\/$/u, ""),
+          TMF688_PREFIX
+        );
+        assert.strictEqual(
+          Result.getOrThrow(decodePinsFile(pins.value)).specifications.find(
+            (entry) => entry.spec === "TMF688"
+          )?.basePath,
+          TMF688_PREFIX
+        );
+      })
   );
-
-  it("the served path matches the pinned TMF688 swagger and pin record", () => {
-    const swagger = parseJson(
-      readFileSync(
-        new URL(
-          "../../tmf/specs/TMF688-Event-v4.0.0.swagger.json",
-          import.meta.url
-        ),
-        "utf-8"
-      )
-    );
-
-    const pins = parseJson(
-      readFileSync(
-        new URL("../../tmf/specs/pins.json", import.meta.url),
-        "utf-8"
-      )
-    );
-
-    assert.isTrue(swagger.ok);
-    assert.isTrue(pins.ok);
-
-    if (!swagger.ok || !pins.ok) {
-      return;
-    }
-
-    assert.strictEqual(
-      textOf(asObject(swagger.value).basePath).replace(/\/$/u, ""),
-      TMF688_PREFIX
-    );
-    assert.strictEqual(
-      Result.getOrThrow(decodePinsFile(pins.value)).specifications.find(
-        (entry) => entry.spec === "TMF688"
-      )?.basePath,
-      TMF688_PREFIX
-    );
-  });
   it.effect(
     "resource topics appear and disappear with tables and notify top-level hubs",
     () =>
@@ -245,6 +252,38 @@ describe("tmf688-topics", () => {
 });
 
 describe("tmf-oas-contract", () => {
+  it.effect(
+    "the contract validator refuses undeclared routes, methods and non-hub rate limits",
+    () =>
+      Effect.gen(function* rejectedExchanges() {
+        const base = {
+          contentType: "application/json;charset=utf-8",
+          json: {},
+          text: "{}",
+        };
+
+        for (const request of [
+          { method: "GET", path: `${BASE}/missing`, status: 404 },
+          { method: "PATCH", path: `${BASE}/topic`, status: 405 },
+          { method: "POST", path: `${BASE}/topic`, status: 429 },
+        ]) {
+          const failure = yield* checkTmf688Exchange({
+            ...base,
+            ...request,
+          }).pipe(Effect.flip);
+
+          assert.include(failure, "undeclared");
+        }
+
+        yield* checkTmf688Exchange({
+          ...base,
+          method: "POST",
+          path: `${BASE}/hub`,
+          status: 429,
+        });
+      })
+  );
+
   it.effect(
     "all six TMF688 GET forms support first-level fields and retain required hub identity",
     () =>

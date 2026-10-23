@@ -24,6 +24,34 @@ import {
 } from "../outbox/delivery-payload.ts";
 import { eventIdOf } from "./event-id.ts";
 
+const topicClasses = new WeakMap<ConfigSnapshot, ReadonlyMap<string, string>>();
+
+const resourceTopicClass = (
+  snapshot: ConfigSnapshot,
+  classId: string,
+  recordId: string
+): string | undefined => {
+  if (classId !== EVENT_CLASS_IDS.topic) {
+    return undefined;
+  }
+
+  let classes = topicClasses.get(snapshot);
+
+  if (classes === undefined) {
+    classes = new Map(
+      snapshot
+        .all("class")
+        .map((definition) => [
+          eventIdOf(definition.id, "TMF688.ResourceTopic"),
+          definition.id,
+        ])
+    );
+    topicClasses.set(snapshot, classes);
+  }
+
+  return classes.get(recordId);
+};
+
 type RenderContext = Parameters<
   NonNullable<ExternalDeliveryEffect["render"]>
 >[1];
@@ -313,12 +341,11 @@ const notificationOf = (
   const name =
     nameField === undefined ? null : (payload.image[nameField.id] ?? null);
 
-  const synthetic = snapshot
-    .all("class")
-    .find(
-      (definition) =>
-        eventIdOf(definition.id, "TMF688.ResourceTopic") === payload.recordId
-    );
+  const synthetic = resourceTopicClass(
+    snapshot,
+    payload.classId,
+    payload.recordId
+  );
 
   const publicId =
     synthetic !== undefined && isJsonString(name) ? name : payload.recordId;
@@ -353,16 +380,15 @@ export const renderHubEvents = (
     return [];
   }
 
-  const synthetic = delivery.snapshot
-    .all("class")
-    .find(
-      (definition) =>
-        eventIdOf(definition.id, "TMF688.ResourceTopic") === delivery.recordId
-    );
+  const synthetic = resourceTopicClass(
+    delivery.snapshot,
+    delivery.payload.classId,
+    delivery.recordId
+  );
 
   if (
     synthetic !== undefined &&
-    !knowsTable(delivery.snapshot, context.actor, synthetic.id)
+    !knowsTable(delivery.snapshot, context.actor, synthetic)
   ) {
     return [];
   }

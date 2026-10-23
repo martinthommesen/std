@@ -4,6 +4,7 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { Clock, Effect } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { InstanceSettings } from "../config/instance-settings.ts";
 import { collectionNameOf } from "../http/v2/table-names.ts";
 import { readEntries } from "../outbox/delivery-payload.ts";
 import { writeChangeEntry } from "../records/change-entry.ts";
@@ -47,6 +48,7 @@ export const writeResourceTopicChanges = Effect.fn(
 
   const sql = yield* SqlClient.SqlClient;
   const now = yield* Clock.currentTimeMillis;
+  const { timeZone } = yield* InstanceSettings;
 
   for (const definition of changed.filter((entry) => entry.kind === "class")) {
     const oldName = topicName(before, definition.id);
@@ -96,7 +98,7 @@ export const writeResourceTopicChanges = Effect.fn(
         },
         kind,
       },
-      { now, timeZone: "UTC" }
+      { now, timeZone }
     );
 
     for (const subscription of subscriptions) {

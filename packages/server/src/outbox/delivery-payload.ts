@@ -211,10 +211,11 @@ const entryOf = Effect.fnUntraced(function* entryOf(row: TextRow) {
  *
  * @param recordId - The record.
  * @param version - The delivery's version.
+ * @param limit - Optional request history budget.
  * @returns The entries, the delivery's own last.
  */
 export const readEntries = Effect.fn("Outbox.readEntries")(
-  function* readEntries(recordId: string, version: number) {
+  function* readEntries(recordId: string, version: number, limit?: number) {
     const rows = yield* readRows(
       sql`SELECT "id"::text AS "id", "operation_id"::text AS "operation_id",
   "record_class_id"::text AS "record_class_id",
@@ -224,8 +225,14 @@ export const readEntries = Effect.fn("Outbox.readEntries")(
 FROM core."change" AS "c"
 WHERE "record_id" = ${textParameter(recordId, "uuid")}
   AND "record_version" <= ${textParameter(String(version), "int8")}
-ORDER BY "c"."record_version"`
+ORDER BY "c"."record_version" LIMIT ${textParameter(String(limit === undefined ? Number.MAX_SAFE_INTEGER : limit + 1), "int8")}`
     );
+
+    if (limit !== undefined && rows.length > limit) {
+      return yield* unreadable(
+        "Resource event history exceeds the request budget."
+      );
+    }
 
     const entries: StoredEntry[] = [];
 

@@ -2250,7 +2250,7 @@ rows:
     tests:
       - "packages/server/test/hubs.test.ts#committed create, attribute update and delete arrive in order with TMF envelopes"
       - "packages/server/test/tmf688.test.ts#TMF688 top-level hubs receive its TopicCreateEvent, TopicChangeEvent, TopicDeleteEvent and EventCreateEvent notifications"
-    note: "hubs (3H, C12): Contracts 12.1 renders every event type, TMF621 Resolved and InformationRequired included, in the one v5 Event envelope"
+    note: "hubs (3H, C12): Contracts 12.1 renders generic and TMF688 notifications in the v5 Event envelope; TMF621 Resolved and InformationRequired remain pending with that API"
   - id: TMF630@5.0.0/P1/11.6.1/create-event-full-resource
     source: TMF630 v5.0.0 P1 §11.6.1 p.199
     level: mandatory
@@ -2302,7 +2302,7 @@ rows:
     status: tested
     tests:
       - "packages/server/test/hubs.test.ts#committed create, attribute update and delete arrive in order with TMF envelopes"
-    note: "gap: Contracts 12.1 with 4.5 renders a delete event's payload as the masked before image, not id/href only (conflicts in substance with 4.5, which is outside Contracts 10, so not flagged as a contradiction)"
+    note: "Contracts 12.1 authorizes against the before image and emits only id, href and @type"
   - id: TMF630@5.0.0/P1/11.6.5/version-create-event-full-metadata
     source: TMF630 v5.0.0 P1 §11.6.5 p.205
     level: mandatory

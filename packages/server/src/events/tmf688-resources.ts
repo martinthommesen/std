@@ -11,7 +11,8 @@ import {
   isJsonNumber,
 } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Clock, Effect, Schema } from "effect";
+import { Clock, Effect, Option, Schema, Stream } from "effect";
+import { SqlClient } from "effect/sql";
 
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
@@ -19,6 +20,7 @@ import { collectionNameOf } from "../http/v2/table-names.ts";
 import { getRecord, listRecords } from "../records/read-records.ts";
 import type { ListRequest } from "../records/read-records.ts";
 import { createRecord, deleteRecord } from "../records/save-pipeline.ts";
+import { decodeRows } from "../sql/rows.ts";
 import type { HubTarget } from "./hubs.ts";
 
 const objectOf = (value: JsonValue | undefined): JsonObject =>
@@ -127,32 +129,34 @@ export const getTopic = Effect.fn("Tmf688.getTopic")(function* getTopic(
   } satisfies EventTopic;
 });
 
-/** Walk the record service's authorized cursor pages; hidden values never enter this adapter. */
-export const allRecords = Effect.fn("Tmf688.allRecords")(function* allRecords(
-  table: string,
-  filter?: string
-) {
-  const records: JsonObject[] = [];
-  let cursor: string | undefined;
+/** Read at most one request window using authorized record cursor pages. */
+export const allRecords = Effect.fn("Tmf688.recordsWindow")(
+  function* allRecords(table: string, limit: number, filter?: string) {
+    return yield* Stream.paginate(null, (cursor: string | null) => {
+      const request: ListRequest = {
+        count: "false",
+        limit: String(Math.min(limit, 1000)),
+        table,
+      };
 
-  do {
-    const request: ListRequest = { limit: "1000", table };
-    const filtered = filter === undefined ? request : { ...request, filter };
+      const filtered = filter === undefined ? request : { ...request, filter };
 
-    const page = yield* listRecords(
-      cursor === undefined ? filtered : { ...filtered, cursor }
-    );
-
-    records.push(...page.records);
-    cursor = page.nextCursor ?? undefined;
-  } while (cursor !== undefined);
-
-  return records;
-});
+      return listRecords(
+        cursor === null ? filtered : { ...filtered, cursor }
+      ).pipe(
+        Effect.map(
+          (page) =>
+            [page.records, Option.fromNullishOr(page.nextCursor)] as const
+        )
+      );
+    }).pipe(Stream.take(limit), Stream.runCollect);
+  }
+);
 
 /** Topics comprise readable table topics and ordinary authorized client topics. */
 export const listTopics = Effect.fn("Tmf688.listTopics")(function* listTopics(
-  origin: string
+  origin: string,
+  limit: number
 ) {
   const topics = (yield* resourceTopics).map(({ id }) =>
     topicRepresentation(origin, id, { name: id })
@@ -162,14 +166,17 @@ export const listTopics = Effect.fn("Tmf688.listTopics")(function* listTopics(
   const snapshot = yield* (yield* Catalog).current;
 
   if (knowsTable(snapshot, actor, EVENT_CLASS_IDS.topic)) {
-    for (const record of yield* allRecords("core.event_topic")) {
+    for (const record of yield* allRecords(
+      "core.event_topic",
+      Math.max(1, limit - topics.length)
+    )) {
       topics.push(
         topicRepresentation(origin, textOf(record.id), objectOf(record.values))
       );
     }
   }
 
-  return topics;
+  return topics.slice(0, limit);
 });
 
 /** Create via the save pipeline, with the caller's normal write rights. */
@@ -260,10 +267,10 @@ const receivedEvent = Effect.fn("Tmf688.receivedEvent")(function* receivedEvent(
 });
 
 /** The client supplied event's stable ID is preserved across reads and callbacks.
- * @param payload - The payload for this operation.
- * @param topicId - The topicId for this operation.
- * @param origin - The origin for this operation.
- * @returns The result of the operation.
+ * @param payload - The client-supplied event content.
+ * @param topicId - The containing topic ID.
+ * @param origin - The public server origin.
+ * @returns The addressable client event.
  */
 export const clientEvent = (
   payload: JsonObject,
@@ -285,10 +292,14 @@ export const createEvent = Effect.fn("Tmf688.createEvent")(
     }
 
     const payload = yield* receivedEvent(body);
-    yield* createRecord({
+
+    const saved = yield* createRecord({
       body: { payload, topic: topicId },
       endpointClassId: EVENT_CLASS_IDS.event,
     });
+
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO core.client_event (topic_id, event_id, record_id) VALUES (${topicId}::uuid, ${textOf(payload.eventId)}, ${saved.id}::uuid)`;
 
     return clientEvent(payload, topicId, origin);
   }
@@ -296,13 +307,14 @@ export const createEvent = Effect.fn("Tmf688.createEvent")(
 
 /** Client event reads use row predicates and the payload field's mask. */
 export const listClientEvents = Effect.fn("Tmf688.listClientEvents")(
-  function* listClientEvents(topicId: string, origin: string) {
+  function* listClientEvents(topicId: string, origin: string, limit: number) {
     const rows = yield* allRecords(
       "core.event",
+      limit,
       `topic = ${JSON.stringify(topicId)}`
     );
 
-    return rows.toReversed().flatMap((record) => {
+    return rows.flatMap((record) => {
       const value = objectOf(record.values).payload;
 
       return value !== undefined && isJsonObject(value)
@@ -315,14 +327,30 @@ export const listClientEvents = Effect.fn("Tmf688.listClientEvents")(
 /** Retrieve by the public event ID, under the same authorization as a list. */
 export const findClientEvent = Effect.fn("Tmf688.findClientEvent")(
   function* findClientEvent(topicId: string, eventId: string, origin: string) {
-    const found = (yield* listClientEvents(topicId, origin)).find(
-      (event) => event.eventId === eventId
-    );
+    const sql = yield* SqlClient.SqlClient;
 
-    if (found === undefined) {
+    const rows =
+      yield* sql`SELECT record_id::text AS id FROM core.client_event WHERE topic_id = ${topicId}::uuid AND event_id = ${eventId} ORDER BY record_id LIMIT 1`.pipe(
+        Effect.flatMap(decodeRows(Schema.Struct({ id: Schema.String })))
+      );
+
+    const [row] = rows;
+
+    if (row === undefined) {
       return yield* new NotFound();
     }
 
-    return found;
+    const read = yield* getRecord({ id: row.id, table: "core.event" });
+    const { payload } = objectOf(objectOf(read.record).values);
+
+    if (
+      payload === undefined ||
+      !isJsonObject(payload) ||
+      payload.eventId !== eventId
+    ) {
+      return yield* new NotFound();
+    }
+
+    return clientEvent(payload, topicId, origin);
   }
 );

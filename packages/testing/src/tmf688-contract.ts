@@ -71,9 +71,9 @@ const validate = (
 };
 
 /** Validate a notification against the pinned swagger's named definition.
- * @param name - The name for this operation.
- * @param body - The body for this operation.
- * @returns The result of the operation.
+ * @param name - The notification definition name.
+ * @param body - The received notification.
+ * @returns A validation problem, when present.
  */
 export const checkTmf688Notification = (
   name: string,
@@ -82,8 +82,8 @@ export const checkTmf688Notification = (
   validate(name, { $ref: `#/definitions/${name}` }, body);
 
 /** Every TMF688 response, in every HTTP suite, must use a declared status and schema.
- * @param exchange - The exchange for this operation.
- * @returns The result of the operation.
+ * @param exchange - The observed HTTP request and response.
+ * @returns Fails when the response violates the pinned contract.
  */
 export const checkTmf688Exchange = (exchange: {
   readonly contentType: string | null;
@@ -125,11 +125,19 @@ export const checkTmf688Exchange = (exchange: {
   );
 
   if (Object.keys(operation).length === 0) {
-    return Effect.void;
+    return Effect.fail(
+      `TMF688 ${exchange.method} ${route}: undeclared path or method`
+    );
   }
 
   // Hub registration's 429 is the accepted deviation E29.
-  if (exchange.status === 429) {
+  const hubPost =
+    exchange.method === "POST" &&
+    (path === "/hub" ||
+      path === "/topic/{topicId}/hub" ||
+      path === "/topic/{id}/hub");
+
+  if (exchange.status === 429 && hubPost) {
     return Effect.void;
   }
 

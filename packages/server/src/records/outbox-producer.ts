@@ -43,6 +43,7 @@ import { Clock, Effect, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { InstanceSettings } from "../config/instance-settings.ts";
+import { acceptsHubEvent } from "../events/filter.ts";
 import { CurrentTransaction } from "../sql/transaction-context.ts";
 import { WorkerWakeup } from "../sql/wake-up.ts";
 import { STD_VERSION } from "../version.ts";
@@ -210,6 +211,13 @@ export const matchingSubscriptions = (
       (subscription) =>
         watches(subscription) &&
         subscription.operations.includes(change.kind) &&
+        acceptsHubEvent(
+          snapshot,
+          subscription,
+          change.classId,
+          change.kind,
+          new Map(Object.entries(image))
+        ) &&
         conditionHolds(snapshot, subscription, image, context)
     )
     .toSorted((left, right) => compareIds(left.id, right.id));

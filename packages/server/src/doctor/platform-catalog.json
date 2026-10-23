@@ -1006,6 +1006,15 @@
       },
       {
         "included": [],
+        "keys": ["record_class_id", "occurred_at", "id"],
+        "method": "btree",
+        "name": "change_topic_page",
+        "predicate": null,
+        "unique": false,
+        "valid": true
+      },
+      {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_edde151df2044639bcbfa4793f86a219",
@@ -2014,6 +2023,94 @@
         "when": "old.class_id IS DISTINCT FROM new.class_id"
       }
     ]
+  },
+  "core.client_event": {
+    "columns": [
+      {
+        "default": null,
+        "name": "topic_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "event_id",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "record_id",
+        "notNull": true,
+        "type": "uuid"
+      }
+    ],
+    "constraints": [
+      {
+        "check": null,
+        "columns": ["event_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "client_event_event_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["topic_id", "event_id", "record_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "client_event_pkey",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["record_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "client_event_record_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["topic_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "client_event_topic_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["topic_id", "event_id", "record_id"],
+        "method": "btree",
+        "name": "client_event_pkey",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": []
   },
   "core.config_base": {
     "columns": [
@@ -7820,6 +7917,110 @@
         "when": "old.class_id IS DISTINCT FROM new.class_id"
       }
     ]
+  },
+  "core.resource_event": {
+    "columns": [
+      {
+        "default": null,
+        "name": "event_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "change_id",
+        "notNull": true,
+        "type": "uuid"
+      }
+    ],
+    "constraints": [
+      {
+        "check": null,
+        "columns": ["change_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": "a",
+        "name": "resource_event_change_id_fkey",
+        "referencedColumns": ["id"],
+        "references": "core.change",
+        "type": "f",
+        "updateAction": "a",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["change_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "resource_event_change_id_key",
+        "referencedColumns": [],
+        "references": null,
+        "type": "u",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["change_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "resource_event_change_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["event_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "resource_event_event_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["event_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "resource_event_pkey",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["change_id"],
+        "method": "btree",
+        "name": "resource_event_change_id_key",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["event_id"],
+        "method": "btree",
+        "name": "resource_event_pkey",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": []
   },
   "core.role": {
     "columns": [

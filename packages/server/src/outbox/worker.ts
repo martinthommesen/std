@@ -78,6 +78,7 @@ import { Actor, effectiveRoles, readUserRoles } from "../auth/actor.ts";
 import type { ActingUser } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
+import { acceptsHubEvent, EventFiltered } from "../events/filter.ts";
 import { EventNotAuthorized } from "../events/not-authorized.ts";
 import type { ChangeCause } from "../records/change-entry.ts";
 import { RuleWriteAccess } from "../records/write-access-rules.ts";
@@ -296,6 +297,8 @@ export type AttemptOutcome =
   | "unrecorded";
 
 const LEASE_LOST: AttemptOutcome = "lease-lost";
+const leaseLostOutcome = () => Effect.succeed(LEASE_LOST);
+const unrecordedOutcome = () => Effect.succeed<AttemptOutcome>("unrecorded");
 
 const IDENTITY_UNAVAILABLE =
   "The subscription's identity is missing or inactive.";
@@ -425,6 +428,18 @@ const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
   }
 
   if (served.effect.kind === "external" && served.effect.render !== undefined) {
+    if (
+      !acceptsHubEvent(
+        snapshot,
+        subscription,
+        payload.classId,
+        payload.kind,
+        new Map(Object.entries(payload.image))
+      )
+    ) {
+      return yield* new EventFiltered();
+    }
+
     const events = served.effect.render(delivery, {
       actor,
       entries,
@@ -686,13 +701,19 @@ export const runDelivery = Effect.fn("Outbox.runDelivery")(
 
     const failure = taggedFailure(exit.cause);
 
-    if (failure instanceof EventNotAuthorized) {
-      return yield* markDone(claimed, "notAuthorized").pipe(
+    if (
+      failure instanceof EventNotAuthorized ||
+      failure instanceof EventFiltered
+    ) {
+      return yield* markDone(
+        claimed,
+        failure instanceof EventFiltered ? "filtered" : "notAuthorized"
+      ).pipe(
         Effect.as<AttemptOutcome>("done"),
-        Effect.catchTag("LeaseLost", () => Effect.succeed(LEASE_LOST)),
-        Effect.catchTag("DatabaseError", () =>
-          Effect.succeed<AttemptOutcome>("unrecorded")
-        )
+        Effect.catchTags({
+          DatabaseError: unrecordedOutcome,
+          LeaseLost: leaseLostOutcome,
+        })
       );
     }
 

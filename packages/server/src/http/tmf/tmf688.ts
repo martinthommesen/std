@@ -18,12 +18,12 @@ import {
   ownedHub,
   prepareRegistration,
   registerHub,
-  TooManyRequests,
   unregisterHub,
 } from "../../events/hubs.ts";
 import type { HubTarget } from "../../events/hubs.ts";
 import { listResourceEvents } from "../../events/resource-events.ts";
 import {
+  findClientEvent,
   createEvent,
   createTopic,
   deleteTopic,
@@ -31,6 +31,7 @@ import {
   listClientEvents,
   listTopics,
 } from "../../events/tmf688-resources.ts";
+import { TooManyRequests } from "../../events/too-many-requests.ts";
 import type { SaveHooks } from "../../records/save-hooks.ts";
 import { RuleWriteAccess } from "../../records/write-access-rules.ts";
 import type { WriteOnlyValues } from "../../records/write-only-values.ts";
@@ -44,12 +45,13 @@ import {
   checkUnscopedRevision,
   parseRequestRevision,
 } from "../stale-request.ts";
+import { answered } from "../v2/answered.ts";
 import { withoutBody } from "../v2/methods.ts";
 import { jsonAnswer } from "../v2/records.ts";
 import { jsonBodyOf, mediaTypeOf, withSession } from "../v2/request.ts";
 import { originOf } from "../v2/resource.ts";
 import { isTmfFailure, tmfErrorResponse } from "../v2/tmf-error.ts";
-import { pageAnswer, selectedResource } from "./page.ts";
+import { pageAnswer, pageBounds, selectedResource } from "./page.ts";
 
 type EventSaveServices = SaveHooks | WriteOnlyValues;
 
@@ -149,7 +151,7 @@ const errorResponse = (
   );
 };
 
-const targetOf = Effect.fn("Tmf688.hubTarget")(function* operation1(
+const targetOf = Effect.fn("Tmf688.hubTarget")(function* targetOf(
   input: RequestInput
 ) {
   if (["register", "unregister", "retrieve"].includes(input.operation)) {
@@ -165,7 +167,7 @@ const targetOf = Effect.fn("Tmf688.hubTarget")(function* operation1(
 });
 
 const prepareHubMutation = Effect.fn("Tmf688.prepareHubMutation")(
-  function* operation2(input: RequestInput) {
+  function* prepareHubMutation(input: RequestInput) {
     const actor = yield* Actor;
     const target = yield* targetOf(input);
 
@@ -233,7 +235,7 @@ const prepareHubMutation = Effect.fn("Tmf688.prepareHubMutation")(
   }
 );
 
-const hubMutation = Effect.fn("Tmf688.hubMutation")(function* operation3(
+const hubMutation = Effect.fn("Tmf688.hubMutation")(function* hubMutation(
   input: RequestInput
 ) {
   const transactions = yield* Transactions;
@@ -277,7 +279,7 @@ const hubMutation = Effect.fn("Tmf688.hubMutation")(function* operation3(
   return jsonAnswer(resource, 201, { location: resource.href });
 });
 
-const readHubs = Effect.fn("Tmf688.readHubs")(function* operation4(
+const readHubs = Effect.fn("Tmf688.readHubs")(function* readHubs(
   input: RequestInput
 ) {
   const actor = yield* Actor;
@@ -332,22 +334,58 @@ const readHubs = Effect.fn("Tmf688.readHubs")(function* operation4(
   );
 });
 
-const readEvents = Effect.fn("Tmf688.readEvents")(function* operation5(
+const readEvents = Effect.fn("Tmf688.readEvents")(function* readEvents(
   input: RequestInput
 ) {
   const topicId = input.params.topicId ?? "";
   const topic = yield* getTopic(topicId, input.origin);
 
-  const events =
-    topic.version === null
-      ? yield* listResourceEvents(topic, input.origin)
-      : yield* listClientEvents(topicId, input.origin);
+  const bounds = pageBounds(input.query);
 
-  if (input.operation === "listEvents") {
-    return yield* pageAnswer(events, input.query, EVENT_FIELDS);
+  if (bounds === undefined) {
+    return yield* new InvalidRequest({
+      message: "offset plus limit must be at most 1000.",
+      parameter: "limit",
+    });
   }
 
-  const event = events.find((entry) => entry.eventId === input.params.id);
+  const hasFilters = [...input.query.keys()].some(
+    (name) =>
+      !["fields", "offset", "limit", "after", "sort", "count"].includes(name)
+  );
+
+  const window = hasFilters ? 1000 : bounds.offset + bounds.limit;
+
+  if (input.operation === "listEvents") {
+    const events =
+      topic.version === null
+        ? yield* listResourceEvents(
+            topic,
+            input.origin,
+            window,
+            undefined,
+            input.query.get("after") ?? undefined
+          )
+        : yield* listClientEvents(topicId, input.origin, window);
+
+    const params = new URLSearchParams(input.query);
+
+    if (topic.version === null) {
+      params.delete("after");
+    }
+
+    return yield* pageAnswer(
+      events,
+      params,
+      EVENT_FIELDS,
+      topic.version !== null && events.length < window
+    );
+  }
+
+  const event =
+    topic.version === null
+      ? (yield* listResourceEvents(topic, input.origin, 1, input.params.id))[0]
+      : yield* findClientEvent(topicId, input.params.id ?? "", input.origin);
 
   if (event === undefined) {
     return yield* new NotFound();
@@ -360,15 +398,27 @@ const readEvents = Effect.fn("Tmf688.readEvents")(function* operation5(
 });
 
 const resourceRequest = Effect.fn("Tmf688.resourceRequest")(
-  function* operation6(input: RequestInput) {
+  function* resourceRequest(input: RequestInput) {
     const id = input.params.id ?? "";
 
     switch (input.operation) {
       case "listTopics": {
+        const bounds = pageBounds(input.query);
+
+        if (bounds === undefined) {
+          return yield* new InvalidRequest({
+            message: "offset plus limit must be at most 1000.",
+            parameter: "limit",
+          });
+        }
+
+        const topics = yield* listTopics(input.origin, 1000);
+
         return yield* pageAnswer(
-          yield* listTopics(input.origin),
+          topics,
           input.query,
-          TOPIC_FIELDS
+          TOPIC_FIELDS,
+          topics.length < 1000
         );
       }
 
@@ -445,7 +495,7 @@ const resourceRequest = Effect.fn("Tmf688.resourceRequest")(
   }
 );
 
-const handleRequest = Effect.fn("Tmf688.request")(function* operation7(
+const handleRequest = Effect.fn("Tmf688.request")(function* handleRequest(
   operation: string,
   request: HttpServerRequest
 ) {
@@ -501,8 +551,7 @@ export const Tmf688Routes = Layer.unwrap(
     const route = (operation: string) => (request: HttpServerRequest) => {
       const effect = withSession(request, handleRequest(operation, request));
 
-      // oxlint-disable-next-line promise/valid-params, promise/prefer-await-to-then, promise/prefer-await-to-callbacks, github/no-then -- Effect.catch is a typed Effect combinator, not Promise.catch
-      return Effect.catch(effect, (failure) =>
+      return answered(effect, (failure) =>
         errorResponse(failure, operation)
       ).pipe(
         Effect.map((response) => {

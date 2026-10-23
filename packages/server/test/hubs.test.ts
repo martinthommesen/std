@@ -4,14 +4,22 @@ import { assert, describe, it } from "@effect/vitest";
 import { GENERIC_API_PREFIX } from "@std/api/v2/paths";
 import { TMF688_PREFIX } from "@std/api/v2/tmf688";
 import { PERMISSION_IDS } from "@std/definitions/well-known";
-import { Effect, ConfigProvider } from "effect";
+import { Effect, ConfigProvider, Layer, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
-import { publicAddress, CallbackTransport } from "../src/events/callback.ts";
+import {
+  publicAddress,
+  CallbackTransport,
+  callbackUrl,
+  allowedAddress,
+  resolveCallbackAddress,
+} from "../src/events/callback.ts";
 import { workerPass } from "../src/outbox/worker.ts";
+import { StatementLog } from "../src/sql/statement-log.ts";
 import { hubTestLayer, listener, register } from "./hub-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
 import { change } from "./schema-support.ts";
@@ -19,7 +27,158 @@ import { asArray, asObject, textOf, v2Callers } from "./v2-support.ts";
 
 const ASSET = `${GENERIC_API_PREFIX}/acmeAsset`;
 
+// The alias remains Effect-aware and lets Sonar recognize the test file.
+const test = it.effect;
+
 describe("hub-delivery", () => {
+  it.effect(
+    "event-type filters avoid new deliveries and finish queued exclusions as filtered",
+    () =>
+      Effect.gen(function* eventTypeFilters() {
+        const http = yield* TestHttpClient;
+        const { admin } = yield* v2Callers;
+        const callback = yield* listener();
+
+        const hubId = yield* register(
+          admin.token ?? "",
+          callback.origin,
+          "resource=acmeAsset&eventType=RecordCreateEvent"
+        );
+
+        const created = yield* http.request("POST", ASSET, {
+          ...admin,
+          body: { name: "queued filter", status: "in_use" },
+        });
+
+        assert.strictEqual(created.status, 201, created.text);
+
+        const hub = (yield* (yield* Catalog).refresh).getKind(
+          "subscription",
+          hubId
+        );
+
+        assert.isDefined(hub?.hub);
+
+        if (hub?.hub === undefined || hub.hub === null) {
+          return;
+        }
+
+        yield* change([
+          {
+            changes: { hub: { ...hub.hub, eventTypes: ["RecordDeleteEvent"] } },
+            id: hubId,
+            op: "update",
+            version: hub.version,
+          },
+        ]);
+        yield* workerPass();
+
+        const rows = yield* deliveriesWhere("subscription_id = $1::uuid", [
+          hubId,
+        ]);
+
+        assert.lengthOf(rows, 1);
+        assert.strictEqual(rows[0]?.status, "done");
+        assert.strictEqual(rows[0]?.last_error, "filtered");
+
+        const ignored = yield* http.request("POST", ASSET, {
+          ...admin,
+          body: { name: "excluded at production", status: "in_use" },
+        });
+
+        assert.strictEqual(ignored.status, 201, ignored.text);
+        assert.lengthOf(
+          yield* deliveriesWhere("subscription_id = $1::uuid", [hubId]),
+          1
+        );
+        assert.lengthOf(callback.calls, 0);
+      }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive)
+  );
+
+  test("resource event pages and point lookups reconstruct only the requested change", () =>
+    Effect.gen(function* boundedEvents() {
+      const http = yield* TestHttpClient;
+      const sql = yield* SqlClient.SqlClient;
+      const log = yield* StatementLog;
+      const { admin } = yield* v2Callers;
+
+      const created = yield* http.request("POST", ASSET, {
+        ...admin,
+        body: { name: "bounded", status: "in_use" },
+      });
+
+      const id = textOf(asObject(created.json).id);
+      yield* sql`INSERT INTO core.change (id, class_id, version, created_at, created_by, updated_at, updated_by, operation_id, record_id, record_class_id, record_version, kind, actor_id, cause, schema_revision, occurred_at, fields)
+      SELECT uuidv7(), class_id, version, created_at, created_by, updated_at, updated_by, operation_id, uuidv7(), record_class_id, record_version, kind, actor_id, cause, schema_revision, occurred_at, fields FROM core.change CROSS JOIN generate_series(1, 500) WHERE record_id = ${id}::uuid`;
+      yield* log.clear;
+
+      const page = yield* http.get(
+        `${TMF688_PREFIX}/topic/record:acmeAsset/event?limit=1`,
+        admin
+      );
+
+      assert.strictEqual(page.status, 200, page.text);
+      assert.lengthOf(asArray(page.json), 1);
+      const statements = yield* log.texts;
+      assert.lengthOf(
+        statements.filter((text) => text.includes('FROM core."change" AS "c"')),
+        1
+      );
+      assert.isTrue(
+        statements.some(
+          (text) =>
+            text.includes("CROSS JOIN LATERAL") && text.includes("LIMIT")
+        )
+      );
+
+      const own = yield* http.get(
+        `${TMF688_PREFIX}/topic/record:acmeAsset/event?limit=1000`,
+        admin
+      );
+
+      const eventId = textOf(
+        asObject(
+          asArray(own.json).find(
+            (event) =>
+              asObject(asObject(asObject(event).event).acmeAsset).id === id
+          )
+        ).eventId
+      );
+
+      yield* log.clear;
+
+      const found = yield* http.get(
+        `${TMF688_PREFIX}/topic/record:acmeAsset/event/${eventId}`,
+        admin
+      );
+
+      assert.strictEqual(found.status, 200, found.text);
+      assert.lengthOf(
+        (yield* log.texts).filter((text) =>
+          text.includes('FROM core."change" AS "c"')
+        ),
+        1
+      );
+      yield* log.clear;
+      assert.strictEqual(
+        (yield* http.get(
+          `${TMF688_PREFIX}/topic/record:acmeAsset/event/${randomUUID()}`,
+          admin
+        )).status,
+        404
+      );
+      assert.lengthOf(
+        (yield* log.texts).filter((text) =>
+          text.includes('FROM core."change" AS "c"')
+        ),
+        0
+      );
+    }).pipe(
+      Effect.provide(hubTestLayer.pipe(Layer.provideMerge(StatementLog.layer))),
+      Effect.scoped,
+      TestClock.withLive
+    ));
+
   it.effect(
     "TMF attribute queries are case sensitive while condition keeps the field's configured comparison",
     () =>
@@ -126,6 +285,12 @@ describe("hub-delivery", () => {
         );
 
         assert.strictEqual(delta.name, "events updated");
+        assert.strictEqual(delta.id, id);
+        assert.strictEqual(
+          delta.href,
+          asObject(callback.calls[1]?.body.source).href
+        );
+        assert.isString(delta.href);
         assert.notProperty(delta, "cost");
         assert.sameMembers(
           Object.keys(
@@ -141,6 +306,28 @@ describe("hub-delivery", () => {
         );
 
         assert.strictEqual(history.status, 200, history.text);
+
+        const previous = yield* http.get(
+          `${TMF688_PREFIX}/topic/record:acmeAsset/event?after=${textOf(callback.calls[2]?.body.eventId)}&limit=1`,
+          admin
+        );
+
+        assert.strictEqual(
+          asObject(asArray(previous.json)[0]).eventId,
+          callback.calls[1]?.body.eventId
+        );
+
+        const creates = yield* http.get(
+          `${TMF688_PREFIX}/topic/record:acmeAsset/event?eventType=RecordCreateEvent&limit=1`,
+          admin
+        );
+
+        assert.lengthOf(asArray(creates.json), 1);
+        assert.strictEqual(
+          asObject(asArray(creates.json)[0]).eventType,
+          "RecordCreateEvent"
+        );
+
         assert.sameDeepMembers(
           asArray(history.json)
             .filter(
@@ -160,6 +347,121 @@ describe("hub-delivery", () => {
 });
 
 describe("hub-callback-path", () => {
+  it.effect(
+    "address policy covers transition networks and registration uses the delivery policy",
+    () =>
+      Effect.gen(function* addressPolicy() {
+        const blocked = [
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Address policy vectors, never contacted.
+          "100.64.0.1",
+          "0.0.0.0",
+          "::1",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved address test vector, never contacted.
+          "fc00::1",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved address test vector, never contacted.
+          "ff02::1",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved address test vector, never contacted.
+          "2002:7f00:1::",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved address test vector, never contacted.
+          "2001::7f00:1",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved address test vector, never contacted.
+          "64:ff9b::7f00:1",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved address test vector, never contacted.
+          "3fff::1",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved address test vector, never contacted.
+          "::ffff:127.0.0.1",
+        ];
+
+        for (const address of blocked) {
+          assert.isFalse(publicAddress(address), address);
+        }
+
+        // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Neighbor outside 192.0.0.0/24 is a policy vector.
+        assert.isTrue(publicAddress("192.0.1.1"));
+
+        for (const address of [
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Metadata and link-local must remain blocked with the opt-in.
+          "169.254.169.254",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved address test vector, never contacted.
+          "fe80::1",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved address test vector, never contacted.
+          "fd00:ec2::254",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved address test vector, never contacted.
+          "::ffff:169.254.169.254",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Embedded metadata destinations must remain blocked with private callbacks enabled.
+          "64:ff9b::a9fe:a9fe",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- 6to4 cannot bypass the metadata block.
+          "2002:a9fe:a9fe::",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Teredo cannot bypass the address policy.
+          "2001::7f00:1",
+        ]) {
+          assert.isFalse(allowedAddress(address, true), address);
+        }
+
+        for (const url of [
+          "https://10.0.0.1/",
+          "http://localhost/",
+          "http://127.0.0.1/",
+        ]) {
+          const result = yield* callbackUrl(url).pipe(Effect.result);
+          assert.isTrue(result._tag === "Failure");
+        }
+      }).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromUnknown({
+              STD_HUB_ALLOW_PRIVATE_ADDRESSES: "false",
+            })
+          )
+        )
+      )
+  );
+
+  it.effect(
+    "a rebinding resolver cannot replace the checked socket destination",
+    () =>
+      Effect.gen(function* rebinding() {
+        let calls = 0;
+
+        const resolve = async () => {
+          calls += 1;
+
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Stub answers; no network connection is opened.
+          return await Promise.resolve([
+            // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Stub DNS answers, never contacted.
+            { address: calls === 1 ? "8.8.8.8" : "127.0.0.1", family: 4 },
+          ]);
+        };
+
+        const checked = yield* resolveCallbackAddress(
+          "callback.example",
+          false,
+          resolve
+        );
+
+        const rebound = yield* Effect.promise(resolve);
+        assert.isFalse(publicAddress(rebound[0]?.address ?? ""));
+        const beforeSocketLookup = calls;
+
+        const connected = yield* Effect.callback<string>((resume) => {
+          checked.lookup("callback.example", {}, (error, address) => {
+            if (error !== null || !Schema.is(Schema.String)(address)) {
+              resume(
+                Effect.die(error ?? new Error("Expected one pinned address"))
+              );
+
+              return;
+            }
+
+            resume(Effect.succeed(address));
+          });
+        });
+
+        assert.strictEqual(connected, checked.address);
+        assert.strictEqual(calls, beforeSocketLookup);
+      })
+  );
+
   it.effect("hostname callbacks pin the validated DNS address", () =>
     Effect.gen(function* hostnameCallback() {
       const http = yield* TestHttpClient;
@@ -226,14 +528,20 @@ describe("hub-callback-path", () => {
           "resource=acmeAsset&name=size-case"
         );
 
-        yield* change(
-          [redirect, oversize].map((id) => ({
+        yield* change([
+          {
             changes: { maxAttempts: 1 },
-            id,
-            op: "update" as const,
+            id: redirect,
+            op: "update",
             version: 1,
-          }))
-        );
+          },
+          {
+            changes: { maxAttempts: 1 },
+            id: oversize,
+            op: "update",
+            version: 1,
+          },
+        ]);
 
         for (const name of ["redirect-case", "size-case"]) {
           const response = yield* http.request("POST", ASSET, {
@@ -260,21 +568,6 @@ describe("hub-callback-path", () => {
         }
       }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive)
   );
-
-  it("callback address policy rejects private, link-local and mapped addresses", () => {
-    // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric addresses are policy test vectors, never network destinations
-    assert.isFalse(publicAddress("127.0.0.1"));
-    // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric addresses are policy test vectors, never network destinations
-    assert.isFalse(publicAddress("169.254.169.254"));
-    // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric addresses are policy test vectors, never network destinations
-    assert.isFalse(publicAddress("10.0.0.1"));
-    // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric addresses are policy test vectors, never network destinations
-    assert.isFalse(publicAddress("::ffff:127.0.0.1"));
-    // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric addresses are policy test vectors, never network destinations
-    assert.isFalse(publicAddress("fe80::1"));
-    // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric addresses are policy test vectors, never network destinations
-    assert.isTrue(publicAddress("8.8.8.8"));
-  });
 
   it.effect(
     "POST preserves callback paths and query strings and rejects unsafe URL forms",
@@ -331,6 +624,111 @@ describe("hub-callback-path", () => {
 });
 
 describe("hub-unregister", () => {
+  it.effect(
+    "active hub caps survive the registration window and unregister frees capacity",
+    () =>
+      Effect.gen(function* activeLimits() {
+        const http = yield* TestHttpClient;
+        const sql = yield* SqlClient.SqlClient;
+        const { admin } = yield* v2Callers;
+
+        const create = (callbackAddress: string) =>
+          http.request("POST", `${GENERIC_API_PREFIX}/hub`, {
+            ...admin,
+            body: {
+              "@type": "Hub",
+              callback: callbackAddress,
+              query: "resource=acmeAsset",
+            },
+          });
+
+        const ids: string[] = [];
+
+        for (let index = 0; index < 10; index += 1) {
+          const response = yield* create(`https://one.example/${index}`);
+          assert.strictEqual(response.status, 201, response.text);
+          ids.push(textOf(asObject(response.json).id));
+          yield* sql`UPDATE core.subscription SET created_at = now() - interval '2 minutes' WHERE hub IS NOT NULL`;
+        }
+
+        assert.strictEqual(
+          (yield* create("https://one.example/overflow")).status,
+          429
+        );
+
+        for (let index = 0; index < 10; index += 1) {
+          const response = yield* create(`https://host${index}.example/`);
+          assert.strictEqual(response.status, 201, response.text);
+          yield* sql`UPDATE core.subscription SET created_at = now() - interval '2 minutes' WHERE hub IS NOT NULL`;
+        }
+
+        assert.strictEqual(
+          (yield* create("https://another.example/")).status,
+          429
+        );
+        assert.strictEqual(
+          (yield* http.request(
+            "DELETE",
+            `${GENERIC_API_PREFIX}/hub/${ids[0]}`,
+            admin
+          )).status,
+          204
+        );
+        assert.strictEqual(
+          (yield* create("https://one.example/replacement")).status,
+          201
+        );
+      }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive)
+  );
+
+  it.effect(
+    "permission precedes query parsing and hidden tables match nonexistent tables",
+    () =>
+      Effect.gen(function* hiddenTargets() {
+        const http = yield* TestHttpClient;
+        const { bob } = yield* v2Callers;
+
+        const create = (query: string) =>
+          http.request("POST", `${GENERIC_API_PREFIX}/hub`, {
+            ...bob,
+            body: {
+              "@type": "Hub",
+              callback: "https://callback.example/",
+              query,
+            },
+          });
+
+        assert.strictEqual(
+          (yield* create("resource=acmeAsset&invalid=bad")).status,
+          403
+        );
+        const snapshot = yield* (yield* Catalog).refresh;
+
+        const employee = snapshot
+          .all("role")
+          .find((role) => role.name === "employee");
+
+        yield* change([
+          {
+            definition: {
+              id: randomUUID(),
+              kind: "grant",
+              owner: { layer: "local" },
+              permissionId: PERMISSION_IDS["events.subscribe"],
+              protected: false,
+              roleId: employee?.id ?? "",
+            },
+            op: "createGrant",
+          },
+        ]);
+        const hidden = yield* create("resource=coreSubscription");
+        const missing = yield* create("resource=notACollection");
+        assert.strictEqual(hidden.status, 400);
+        assert.strictEqual(missing.status, hidden.status);
+        assert.deepStrictEqual(missing.json, hidden.json);
+      }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive)
+  );
+
   it.effect(
     "the eleventh registration in a minute is rate limited even after deleting a hub",
     () =>

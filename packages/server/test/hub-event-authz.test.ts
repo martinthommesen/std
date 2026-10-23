@@ -20,53 +20,57 @@ import { asObject, textOf, v2Callers } from "./v2-support.ts";
 
 const ASSET = `${GENERIC_API_PREFIX}/acmeAsset`;
 
+// The alias remains Effect-aware and lets Sonar recognize the test file.
+const test = it.effect;
+
 describe("hub-event-authz", () => {
-  it("source dependencies include rule conditions but exclude disabled writers", () => {
-    const snapshot = coreAndAcme();
+  test("source dependencies include rule conditions but exclude disabled writers", () =>
+    Effect.sync(() => {
+      const snapshot = coreAndAcme();
 
-    const active = addRecordRule(ACME.asset, {
-      actions: [
-        {
-          type: "set",
-          values: [{ fieldId: ACME.status, value: { value: "lost" } }],
+      const active = addRecordRule(ACME.asset, {
+        actions: [
+          {
+            type: "set",
+            values: [{ fieldId: ACME.status, value: { value: "lost" } }],
+          },
+        ],
+        condition: {
+          left: { path: [ACME.cost] },
+          op: "gt",
+          right: { value: "10" },
         },
-      ],
-      condition: {
-        left: { path: [ACME.cost] },
-        op: "gt",
-        right: { value: "10" },
-      },
-      ruleKind: "derive",
-    });
+        ruleKind: "derive",
+      });
 
-    const inactive = addRecordRule(ACME.asset, {
-      actions: [
-        {
-          type: "set",
-          values: [{ fieldId: ACME.status, value: { value: "new" } }],
+      const inactive = addRecordRule(ACME.asset, {
+        actions: [
+          {
+            type: "set",
+            values: [{ fieldId: ACME.status, value: { value: "new" } }],
+          },
+        ],
+        active: false,
+        condition: {
+          left: { path: [ACME.name] },
+          op: "eq",
+          right: { value: "private" },
         },
-      ],
-      active: false,
-      condition: {
-        left: { path: [ACME.name] },
-        op: "eq",
-        right: { value: "private" },
-      },
-      ruleKind: "derive",
-    });
+        ruleKind: "derive",
+      });
 
-    const applied = Result.getOrThrow(
-      applyOperations(snapshot, [active.op, inactive.op], {
-        changeSetId: randomUUID(),
-        revision: snapshot.revision + 1,
-      })
-    );
+      const applied = Result.getOrThrow(
+        applyOperations(snapshot, [active.op, inactive.op], {
+          changeSetId: randomUUID(),
+          revision: snapshot.revision + 1,
+        })
+      );
 
-    assert.deepStrictEqual(
-      [...(derivedSources(applied.after, ACME.asset).get(ACME.status) ?? [])],
-      [ACME.cost]
-    );
-  });
+      assert.deepStrictEqual(
+        [...(derivedSources(applied.after, ACME.asset).get(ACME.status) ?? [])],
+        [ACME.cost]
+      );
+    }));
   it.effect(
     "derived triggers require all sources; revoked permission and deactivated identity finish notAuthorized",
     () =>

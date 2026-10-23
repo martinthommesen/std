@@ -94,11 +94,18 @@ const matches = (
   });
 };
 
-const pageBounds = (params: URLSearchParams) => {
+/**
+ * Validate the bounded TMF688 request window before database work.
+ * @param params - List query parameters.
+ * @returns The permitted window, or undefined.
+ */
+export const pageBounds = (params: URLSearchParams) => {
   const limit = Number(params.get("limit") ?? "100");
   const offset = Number(params.get("offset") ?? "0");
   const validLimit = Number.isInteger(limit) && limit >= 1 && limit <= 1000;
-  const validOffset = Number.isInteger(offset) && offset >= 0;
+
+  const validOffset =
+    Number.isInteger(offset) && offset >= 0 && offset + limit <= 1000;
 
   return validLimit && validOffset ? { limit, offset } : undefined;
 };
@@ -175,7 +182,8 @@ export const selectedResource = Effect.fn("Tmf688.selectedResource")(
 export const pageAnswer = Effect.fn("Tmf688.page")(function* operation3(
   resources: readonly JsonObject[],
   params: URLSearchParams,
-  attributes: readonly string[]
+  attributes: readonly string[],
+  complete = true
 ) {
   const bounds = pageBounds(params);
 
@@ -202,10 +210,17 @@ export const pageAnswer = Effect.fn("Tmf688.page")(function* operation3(
     .slice(bounds.offset, bounds.offset + bounds.limit)
     .map((resource) => selectFields(resource, fields));
 
-  return jsonAnswer(page, 200, {
+  const headers = {
     "cache-control": "no-store",
     "content-type": "application/json;charset=utf-8",
     "x-result-count": String(page.length),
-    "x-total-count": String(selected.length),
-  });
+  };
+
+  return jsonAnswer(
+    page,
+    200,
+    complete === false
+      ? headers
+      : { ...headers, "x-total-count": String(selected.length) }
+  );
 });

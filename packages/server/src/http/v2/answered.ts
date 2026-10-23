@@ -12,14 +12,20 @@ import { isTmfFailure, tmfErrorResponse } from "./tmf-error.ts";
  * Answers every API failure with its TMF `Error`.
  *
  * @param effect - A route's work.
+ * @param recover - Optional API-specific failure mapping.
  * @returns The response.
  */
 export const answered = <E, R>(
-  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>
+  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
+  recover?: (failure: E) => Effect.Effect<HttpServerResponse.HttpServerResponse>
 ): Effect.Effect<HttpServerResponse.HttpServerResponse, never, R> =>
   // oxlint-disable-next-line promise/valid-params, promise/prefer-await-to-then, github/no-then -- Effect.catch is not Promise.catch
-  Effect.catch(effect, (failure) =>
-    isTmfFailure(failure)
+  Effect.catch(effect, (failure) => {
+    if (recover !== undefined) {
+      return recover(failure);
+    }
+
+    return isTmfFailure(failure)
       ? Effect.succeed(tmfErrorResponse(failure))
-      : Effect.die(failure)
-  );
+      : Effect.die(failure);
+  });

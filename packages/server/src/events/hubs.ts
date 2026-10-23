@@ -3,6 +3,7 @@ import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
 import { UnknownField } from "@std/api/errors/unknown-field";
+import type { Expr } from "@std/conditions/ast";
 import { ConditionSchema, conditionFieldIds } from "@std/definitions/condition";
 import type { Condition } from "@std/definitions/condition";
 import type { SubscriptionDefinition } from "@std/definitions/definition";
@@ -14,7 +15,7 @@ import {
   PLATFORM_CLASS_IDS,
 } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
-import { Clock, Effect, Option, Schema } from "effect";
+import { Clock, Config, Effect, Option, Schema } from "effect";
 import type { Redacted } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -29,13 +30,21 @@ import { currentReadScope } from "../records/read-records.ts";
 import { applyChangeSet } from "../schema/change-set.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { callbackUrl } from "./callback.ts";
+import { TooManyRequests } from "./too-many-requests.ts";
 
-/** Registration exceeded its serialized per-identity allowance. */
-// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
-export class TooManyRequests extends Schema.TaggedError<
-  TooManyRequests,
-  { readonly brand: unique symbol }
->()("TooManyRequests", {}) {}
+const REGISTRATION_WINDOW = "1 minute";
+const REGISTRATIONS_PER_WINDOW = 10;
+const DEFAULT_MAX_ACTIVE_HUBS = 20;
+const DEFAULT_MAX_ACTIVE_HUBS_PER_HOST = 10;
+const HUB_MAX_ATTEMPTS = 10;
+
+const conditionOf = (value: Expr): Condition => {
+  if (!Schema.is(ConditionSchema)(value)) {
+    throw new Error("Parsed subscription condition is not persistable");
+  }
+
+  return value;
+};
 
 /** The API and resource a hub watches. */
 export interface HubTarget {
@@ -66,8 +75,19 @@ export const prepareRegistration = Effect.fn("Hubs.prepare")(
     query: string | null,
     origin: string
   ) {
-    yield* callbackUrl(callback);
     const scope = yield* currentReadScope();
+
+    if (
+      !hasPermission(
+        scope.snapshot,
+        yield* Actor,
+        PERMISSION_IDS["events.subscribe"]
+      )
+    ) {
+      return yield* new NotAllowed();
+    }
+
+    yield* callbackUrl(callback);
 
     if (!knowsTable(scope.snapshot, scope.caller, target.classId)) {
       return yield* new NotFound();
@@ -117,25 +137,21 @@ export const prepareRegistration = Effect.fn("Hubs.prepare")(
     const condition =
       conditions.length === 0
         ? null
-        : yield* Schema.decodeUnknownEffect(ConditionSchema)({
+        : conditionOf({
             args: conditions,
             op: "and",
-          }).pipe(Effect.orDie);
+          });
 
     const queryFieldIds =
       condition === null ? [] : [...conditionFieldIds(condition)];
 
     const attributeCondition = Option.isNone(parsed.tmf)
       ? null
-      : yield* Schema.decodeUnknownEffect(ConditionSchema)(
-          parsed.tmf.value
-        ).pipe(Effect.orDie);
+      : conditionOf(parsed.tmf.value);
 
     const standardCondition = Option.isNone(parsed.condition)
       ? null
-      : yield* Schema.decodeUnknownEffect(ConditionSchema)(
-          parsed.condition.value.expr
-        ).pipe(Effect.orDie);
+      : conditionOf(parsed.condition.value.expr);
 
     for (const fieldId of queryFieldIds) {
       for (const child of scope.snapshot.subtree(target.classId)) {
@@ -225,6 +241,16 @@ export const registerHub = Effect.fn("Hubs.register")(function* registerHub(
   registration: Registration,
   session?: Redacted.Redacted
 ) {
+  const maxActive = yield* Config.schema(
+    Schema.Int.check(Schema.isGreaterThan(0)),
+    "STD_HUB_MAX_ACTIVE_PER_IDENTITY"
+  ).pipe(Config.withDefault(DEFAULT_MAX_ACTIVE_HUBS));
+
+  const maxPerHost = yield* Config.schema(
+    Schema.Int.check(Schema.isGreaterThan(0)),
+    "STD_HUB_MAX_ACTIVE_PER_HOST"
+  ).pipe(Config.withDefault(DEFAULT_MAX_ACTIVE_HUBS_PER_HOST));
+
   const actor = yield* Actor;
   const id = uuidv7At(yield* Clock.currentTimeMillis);
 
@@ -264,29 +290,46 @@ export const registerHub = Effect.fn("Hubs.register")(function* registerHub(
         }
 
         for (const fieldId of registration.queryFieldIds) {
-          if (
-            fieldDecision(
-              snapshot,
-              current,
-              "read",
-              registration.target.classId,
-              fieldId
-            ).kind !== "always"
-          ) {
-            return yield* new UnknownField({
-              field: snapshot.field(fieldId)?.name ?? "query",
-            });
+          for (const child of snapshot.subtree(registration.target.classId)) {
+            if (
+              fieldDecision(snapshot, current, "read", child.id, fieldId)
+                .kind !== "always"
+            ) {
+              return yield* new UnknownField({
+                field: snapshot.field(fieldId)?.name ?? "query",
+              });
+            }
           }
         }
 
         const sql = yield* SqlClient.SqlClient;
 
         const [count] =
-          yield* sql`SELECT count(*)::int AS total FROM core.subscription WHERE identity_id = ${actor.userId}::uuid AND hub IS NOT NULL AND created_at > now() - interval '1 minute'`.pipe(
+          yield* sql`SELECT count(*)::int AS total FROM core.subscription WHERE identity_id = ${actor.userId}::uuid AND hub IS NOT NULL AND created_at > now() - ${REGISTRATION_WINDOW}::interval`.pipe(
             Effect.flatMap(decodeCount)
           );
 
-        if ((count?.total ?? 0) >= 10) {
+        const active = snapshot
+          .subscriptions()
+          .filter(
+            (entry) =>
+              entry.identityId === actor.userId &&
+              entry.state === "active" &&
+              entry.enabled &&
+              Boolean(entry.hub)
+          );
+
+        const hostCount = active.filter(
+          (entry) =>
+            new URL(entry.hub?.callback ?? "").hostname ===
+            new URL(registration.callback).hostname
+        ).length;
+
+        if (
+          (count?.total ?? 0) >= REGISTRATIONS_PER_WINDOW ||
+          active.length >= maxActive ||
+          hostCount >= maxPerHost
+        ) {
           return yield* new TooManyRequests();
         }
 
@@ -303,7 +346,7 @@ export const registerHub = Effect.fn("Hubs.register")(function* registerHub(
           id,
           identityId: actor.userId,
           kind: "subscription",
-          maxAttempts: 10,
+          maxAttempts: HUB_MAX_ATTEMPTS,
           name: `hub_${id.replaceAll("-", "")}`,
           operations: ["create", "update", "delete"],
           owner: { layer: "local" },
@@ -366,11 +409,13 @@ export const unregisterHub = Effect.fn("Hubs.unregister")(
  * Resolve the generic hub's explicit resource selector.
  * @param snapshot - Current table definitions.
  * @param query - The registration query.
+ * @param actor - The subscribing identity.
  * @returns The watched table, or undefined if absent.
  */
 export const genericTarget = (
   snapshot: ConfigSnapshot,
-  query: string | null
+  query: string | null,
+  actor: ActingUser
 ): HubTarget | undefined => {
   const resource = new URLSearchParams(query ?? "").get("resource");
 
@@ -380,6 +425,7 @@ export const genericTarget = (
       (entry) =>
         entry.state === "active" &&
         entry.storage === "standard" &&
+        knowsTable(snapshot, actor, entry.id) &&
         collectionNameOf(snapshot, entry.id) === resource
     );
 

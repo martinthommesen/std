@@ -78,9 +78,9 @@ const requestHandler =
   };
 
 /** Listen only on loopback. Callbacks may explicitly stall a response for crash tests.
- * @param respond - The respond for this operation.
+ * @param respond - Optional callback response handler.
  * @param hostname - The local interface name.
- * @returns The result of the operation.
+ * @returns The scoped listener and its received calls.
  */
 export const listener = (respond?: ListenerResponse, hostname?: string) =>
   Effect.acquireRelease(
