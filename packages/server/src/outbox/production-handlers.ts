@@ -11,6 +11,7 @@
  *
  * Workstream 3H adds the hub callbacks here.
  */
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { isJsonString } from "@std/values/json-value";
 import type { JsonObject } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
@@ -52,10 +53,20 @@ const runRule: DeliveryEffect = {
     }).pipe(Effect.asVoid),
 };
 
+const carriersBySnapshot = new WeakMap<ConfigSnapshot, ReadonlySet<string>>();
+
 /** Serves the carrier subscriptions of `afterCommit` record rules. */
 export const afterCommitRuleHandler: DeliveryHandler = {
-  effectFor: (subscription, snapshot) =>
-    ruleCarriers(snapshot).has(subscription.id) ? runRule : undefined,
+  effectFor: (subscription, snapshot) => {
+    let carriers = carriersBySnapshot.get(snapshot);
+
+    if (carriers === undefined) {
+      carriers = ruleCarriers(snapshot);
+      carriersBySnapshot.set(snapshot, carriers);
+    }
+
+    return carriers.has(subscription.id) ? runRule : undefined;
+  },
   name: "afterCommit record rules",
 };
 

@@ -229,16 +229,10 @@ const updateDead = Effect.fn("Outbox.updateDead")(function* updateDead(
       if (action === "retry") {
         const snapshot = yield* (yield* Catalog).current;
 
-        const subscriptions = new Map(
-          snapshot
-            .all("subscription")
-            .map((subscription) => [subscription.id, subscription])
-        );
-
         const state = subscriptionState(
           snapshot,
           yield* DeliveryHandlers,
-          subscriptions.get(row.subscription_id)
+          snapshot.getKind("subscription", row.subscription_id)
         );
 
         if (state !== "served") {

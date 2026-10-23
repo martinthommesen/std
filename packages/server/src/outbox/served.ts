@@ -24,6 +24,32 @@ const SubscriptionState = Schema.Literals([
   "noHandler",
 ]);
 
+const classifySubscription = (
+  snapshot: ConfigSnapshot,
+  handlers: DeliveryHandlersApi,
+  subscription: SubscriptionDefinition | undefined
+):
+  | ({ readonly state: "served" } & Served)
+  | { readonly state: Exclude<typeof SubscriptionState.Type, "served"> } => {
+  if (subscription === undefined) {
+    return { state: "deleted" };
+  }
+
+  if (subscription.state !== "active") {
+    return { state: subscription.state };
+  }
+
+  if (!subscription.enabled) {
+    return { state: "disabled" };
+  }
+
+  const effect = effectFor(handlers, subscription, snapshot);
+
+  return effect === undefined
+    ? { state: "noHandler" }
+    : { effect, state: "served", subscription };
+};
+
 /** The current reason a subscription can or cannot run.
  * @param snapshot - The request's configuration.
  * @param handlers - Configured worker handlers.
@@ -34,23 +60,8 @@ export const subscriptionState = (
   snapshot: ConfigSnapshot,
   handlers: DeliveryHandlersApi,
   subscription: SubscriptionDefinition | undefined
-): typeof SubscriptionState.Type => {
-  if (subscription === undefined) {
-    return "deleted";
-  }
-
-  if (subscription.state !== "active") {
-    return subscription.state;
-  }
-
-  if (!subscription.enabled) {
-    return "disabled";
-  }
-
-  return effectFor(handlers, subscription, snapshot) === undefined
-    ? "noHandler"
-    : "served";
-};
+): typeof SubscriptionState.Type =>
+  classifySubscription(snapshot, handlers, subscription).state;
 
 /** Active, enabled and claimed by a configured handler, exactly as the worker requires.
  * @param snapshot - The current configuration.
@@ -63,19 +74,16 @@ export const resolveServed = (
   handlers: DeliveryHandlersApi,
   subscriptionId: string
 ): Served | undefined => {
-  const subscription = snapshot
-    .subscriptions()
-    .find(({ id }) => id === subscriptionId);
+  const classification = classifySubscription(
+    snapshot,
+    handlers,
+    snapshot.getKind("subscription", subscriptionId)
+  );
 
-  if (
-    subscription === undefined ||
-    subscription.state !== "active" ||
-    !subscription.enabled
-  ) {
-    return undefined;
-  }
-
-  const effect = effectFor(handlers, subscription, snapshot);
-
-  return effect === undefined ? undefined : { effect, subscription };
+  return classification.state === "served"
+    ? {
+        effect: classification.effect,
+        subscription: classification.subscription,
+      }
+    : undefined;
 };

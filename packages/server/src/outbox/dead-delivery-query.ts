@@ -8,6 +8,7 @@ import {
   textParameter,
 } from "@std/conditions/sql-fragment";
 import type { SqlFragment } from "@std/conditions/sql-fragment";
+import { isLive } from "@std/definitions/definition";
 import type { FieldType } from "@std/values/field-type";
 import { Effect, Option } from "effect";
 import { constUndefined } from "effect/Function";
@@ -147,10 +148,9 @@ const deadRelation = Effect.fn("Outbox.deadRelation")(function* deadRelation(
   );
 
   for (const classId of classIds) {
-    if (
-      scope.snapshot.class(classId) === undefined ||
-      scope.snapshot.class(classId)?.state === "purged"
-    ) {
+    const cls = scope.snapshot.class(classId);
+
+    if (cls === undefined || !isLive(cls)) {
       continue;
     }
 
@@ -170,12 +170,6 @@ const deadRelation = Effect.fn("Outbox.deadRelation")(function* deadRelation(
 
   const handlers = yield* DeliveryHandlers;
 
-  const subscriptions = new Map(
-    scope.snapshot
-      .all("subscription")
-      .map((subscription) => [subscription.id, subscription])
-  );
-
   const subscriptionIds = new Set(
     classes.flatMap((row) =>
       row.subscription_id === null || row.subscription_id === undefined
@@ -185,7 +179,7 @@ const deadRelation = Effect.fn("Outbox.deadRelation")(function* deadRelation(
   );
 
   const current = [...subscriptionIds].flatMap((id) => {
-    const subscription = subscriptions.get(id);
+    const subscription = scope.snapshot.getKind("subscription", id);
 
     return subscription === undefined ? [] : [subscription];
   });

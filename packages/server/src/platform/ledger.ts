@@ -8,6 +8,7 @@ import type { SqlError } from "effect/sql/SqlError";
 
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
+import { STD_VERSION } from "../version.ts";
 import {
   isDataMigration,
   migrationChecksum,
@@ -139,6 +140,43 @@ export const LEDGER_COLUMNS = `SELECT to_regclass('core.platform_migration') IS 
   EXISTS (SELECT 1 FROM pg_attribute
           WHERE attrelid = to_regclass('core.platform_migration')
             AND attname = 'phase' AND NOT attisdropped) AS phased`;
+
+/**
+ * Records a migration in the ledger shape available at that step of upgrade.
+ * Data migrations start running; schema migrations use the applied default.
+ * @param sql - The client owning the migration's connection or transaction.
+ * @param migration - The migration to record.
+ * @returns Completes after its row is inserted.
+ */
+export const insertLedgerRow = Effect.fn("Platform.insertLedgerRow")(
+  function* insertLedgerRow(
+    sql: SqlClient.SqlClient,
+    migration: PlatformMigration
+  ) {
+    const [columns] = yield* sql
+      .unsafe(LEDGER_COLUMNS)
+      .pipe(Effect.flatMap(decodeLedgerColumns));
+
+    const phased = columns?.phased === true;
+    const data = migration.kind === "data";
+
+    const values = [
+      migration.id,
+      migrationChecksum(migration),
+      STD_VERSION,
+      ...(data ? ["running"] : []),
+      ...(phased ? [migration.phase] : []),
+    ];
+
+    const placeholders = values.map((_, index) => `$${index + 1}`).join(", ");
+
+    yield* sql.unsafe(
+      `INSERT INTO core.platform_migration (id, checksum, std_version${data ? ", state" : ""}${phased ? ", phase" : ""})
+       VALUES (${placeholders})`,
+      values
+    ).unprepared;
+  }
+);
 
 /**
  * Reads the ledger rows.

@@ -217,23 +217,27 @@ const imageEntries = Effect.fnUntraced(function* imageEntries(
   const entries: StoredEntry[] = [];
 
   if (entry.recordVersion > 1) {
-    // Retention can remove v-1 while v is pending: undo only changed fields.
-    const derived = new Map(Object.entries(current.value));
+    let image = previous.value;
 
-    for (const [fieldId, change] of Object.entries(entry.fields)) {
-      if (isJsonObject(change) && Object.hasOwn(change, "before")) {
-        derived.set(fieldId, change.before ?? null);
-      } else {
-        derived.delete(fieldId);
+    if (!isJsonObject(image)) {
+      // Retention can remove v-1 while v is pending: undo only changed fields.
+      const derived = new Map(Object.entries(current.value));
+
+      for (const [fieldId, change] of Object.entries(entry.fields)) {
+        if (isJsonObject(change) && Object.hasOwn(change, "before")) {
+          derived.set(fieldId, change.before ?? null);
+        } else {
+          derived.delete(fieldId);
+        }
       }
+
+      image = Object.fromEntries(derived);
     }
 
     entries.push({
       ...entry,
       fields: {},
-      image: isJsonObject(previous.value)
-        ? previous.value
-        : Object.fromEntries(derived),
+      image,
       kind: "update",
       recordVersion: entry.recordVersion - 1,
     });
@@ -299,20 +303,13 @@ const groupByTarget = <
   Row extends { readonly target_id: string; readonly target_version: number },
 >(
   rows: readonly Row[]
-): ReadonlyMap<string, readonly Row[]> => {
-  const grouped = new Map<string, Row[]>();
-
-  for (const row of rows) {
-    const key = entryTargetKey({
+): ReadonlyMap<string, readonly Row[]> =>
+  Map.groupBy(rows, (row) =>
+    entryTargetKey({
       recordId: row.target_id,
       version: row.target_version,
-    });
-
-    grouped.set(key, [...(grouped.get(key) ?? []), row]);
-  }
-
-  return grouped;
-};
+    })
+  );
 
 type TargetImageRow = Effect.Success<
   ReturnType<typeof targetImageRows>

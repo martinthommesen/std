@@ -35,20 +35,14 @@ import { hygienic } from "../sql/errors.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { Transactions } from "../sql/transactions.ts";
 import type { WorkerWakeup } from "../sql/wake-up.ts";
-import { STD_VERSION } from "../version.ts";
 import {
   compareLedger,
   installedSetVersions,
-  decodeLedgerColumns,
-  LEDGER_COLUMNS,
+  insertLedgerRow,
   readLedger,
   refusalOf,
 } from "./ledger.ts";
-import {
-  DataMigrationFailed,
-  isDataMigration,
-  migrationChecksum,
-} from "./migration.ts";
+import { DataMigrationFailed, isDataMigration } from "./migration.ts";
 import type { DataMigration, PlatformMigration } from "./migration.ts";
 import { PLATFORM_MIGRATIONS } from "./migrations.ts";
 
@@ -227,15 +221,7 @@ const runOne = Effect.fn("Platform.runDataMigration")(function* runOne(
       Effect.gen(function* startDataMigration() {
         const sql = yield* SqlClient.SqlClient;
 
-        const [columns] = yield* sql
-          .unsafe(LEDGER_COLUMNS)
-          .pipe(Effect.flatMap(decodeLedgerColumns));
-
-        yield* columns?.phased === true
-          ? sql`INSERT INTO core.platform_migration (id, checksum, std_version, state, phase)
-            VALUES (${migration.id}, ${migrationChecksum(migration)}, ${STD_VERSION}, 'running', ${migration.phase})`
-          : sql`INSERT INTO core.platform_migration (id, checksum, std_version, state)
-            VALUES (${migration.id}, ${migrationChecksum(migration)}, ${STD_VERSION}, 'running')`;
+        yield* insertLedgerRow(sql, migration);
       })
     );
   }

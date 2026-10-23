@@ -19,25 +19,25 @@ import { Effect, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { schemaKeyHolders } from "../schema/recovery.ts";
+import { quoteIdent } from "../schema/sql-text.ts";
 import { UPGRADE_BLOCKING_APPLICATION_PREFIXES } from "../sql/database-config.ts";
 import type { DatabaseConfig } from "../sql/database-config.ts";
 import { makeDedicatedConnection } from "../sql/dedicated.ts";
 import type { DedicatedConnection } from "../sql/dedicated.ts";
 import { hygienic } from "../sql/errors.ts";
 import type { DatabaseError } from "../sql/errors.ts";
-import { advisoryClassId, advisoryObjectId, SCHEMA_KEY } from "../sql/locks.ts";
+import { SCHEMA_KEY } from "../sql/locks.ts";
 import { decodeRows } from "../sql/rows.ts";
-import { STD_VERSION } from "../version.ts";
 import {
   compareLedger,
   installedSetVersions,
+  insertLedgerRow,
   readLedger,
   refusalOf,
-  LEDGER_COLUMNS,
-  decodeLedgerColumns,
 } from "./ledger.ts";
 import type { MigrationStateRefused } from "./ledger.ts";
-import { isSchemaMigration, migrationChecksum } from "./migration.ts";
+import { isSchemaMigration } from "./migration.ts";
 import type {
   ConcurrentIndexMigration,
   PlatformMigration,
@@ -233,28 +233,16 @@ export const checkUpgradePreconditions: (
 const schemaBusy = (
   connection: DedicatedConnection
 ): Effect.Effect<UpgradeRefused, DatabaseError> =>
-  connection
-    .execute(
-      `SELECT pid FROM pg_locks
-       WHERE locktype = 'advisory' AND granted
-         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-         AND classid = $1::oid AND objid = $2::oid AND objsubid = 1`,
-      [
-        String(advisoryClassId(SCHEMA_KEY)),
-        String(advisoryObjectId(SCHEMA_KEY)),
-      ]
+  schemaKeyHolders(connection.execute).pipe(
+    Effect.map(
+      (sessions) =>
+        new UpgradeRefused({
+          encoding: null,
+          reason: SCHEMA_BUSY_REFUSAL,
+          sessions,
+        })
     )
-    .pipe(
-      Effect.flatMap(decodePids),
-      Effect.map(
-        (rows) =>
-          new UpgradeRefused({
-            encoding: null,
-            reason: SCHEMA_BUSY_REFUSAL,
-            sessions: rows.map((row) => row.pid),
-          })
-      )
-    );
+  );
 
 const applyTx = (
   connection: DedicatedConnection,
@@ -268,24 +256,13 @@ const applyTx = (
         yield* sql.unsafe(statement).unprepared;
       }
 
-      const [columns] = yield* sql
-        .unsafe(LEDGER_COLUMNS)
-        .pipe(Effect.flatMap(decodeLedgerColumns));
-
-      yield* columns?.phased === true
-        ? sql`INSERT INTO core.platform_migration (id, checksum, std_version, phase)
-          VALUES (${migration.id}, ${migrationChecksum(migration)}, ${STD_VERSION}, ${migration.phase})`
-        : sql`INSERT INTO core.platform_migration (id, checksum, std_version)
-          VALUES (${migration.id}, ${migrationChecksum(migration)}, ${STD_VERSION})`;
+      yield* insertLedgerRow(sql, migration);
     }),
     {
       lockTimeout: MIGRATION_LOCK_TIMEOUT,
       statementTimeout: MIGRATION_STATEMENT_TIMEOUT,
     }
   );
-
-const quoteIdentifier = (identifier: string): string =>
-  `"${identifier.replaceAll('"', '""')}"`;
 
 const applyConcurrentIndex = (
   connection: DedicatedConnection,
@@ -311,7 +288,7 @@ const applyConcurrentIndex = (
       if (probe !== undefined) {
         outcome = "rebuilt";
         yield* connection.execute(
-          `DROP INDEX CONCURRENTLY IF EXISTS ${quoteIdentifier(migration.schema)}.${quoteIdentifier(migration.index)}`
+          `DROP INDEX CONCURRENTLY IF EXISTS ${quoteIdent(migration.schema)}.${quoteIdent(migration.index)}`
         );
       }
 
@@ -321,23 +298,7 @@ const applyConcurrentIndex = (
       yield* connection.execute(migration.statement);
     }
 
-    const [columns] = yield* connection
-      .execute(LEDGER_COLUMNS)
-      .pipe(Effect.flatMap(decodeLedgerColumns));
-
-    const phased = columns?.phased === true;
-
-    yield* connection.execute(
-      phased
-        ? "INSERT INTO core.platform_migration (id, checksum, std_version, phase) VALUES ($1, $2, $3, $4)"
-        : "INSERT INTO core.platform_migration (id, checksum, std_version) VALUES ($1, $2, $3)",
-      [
-        migration.id,
-        migrationChecksum(migration),
-        STD_VERSION,
-        ...(phased ? [migration.phase] : []),
-      ]
-    );
+    yield* hygienic(insertLedgerRow(connection.client, migration));
 
     return outcome;
   });
