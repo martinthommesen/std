@@ -1078,6 +1078,24 @@ select.control-input {
   }
 }
 
+/* Narrower, the table scrolls sideways in its own container, which a
+   sticky header row would stick to, not to the window: it stays put. */
+@media (width < 64rem) {
+  .records thead th {
+    position: static;
+  }
+
+  .saved-filters {
+    flex-wrap: nowrap;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+
+.records td:first-child {
+  white-space: nowrap;
+}
+
 .records {
   width: 100%;
   border-collapse: separate;
