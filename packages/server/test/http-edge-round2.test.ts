@@ -319,8 +319,6 @@ describe("http-edge-round2", () => {
 
           // One user per record slot: each user's share is one record.
           const owners = yield* edgeUserTokens(
-            http,
-            token,
             Math.floor(BODY_IN_FLIGHT_MAX_BYTES / BODY_MAX_BYTES)
           );
 

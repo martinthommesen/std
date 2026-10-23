@@ -1,19 +1,24 @@
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+import { assert } from "@effect/vitest";
 import { API_PREFIX } from "@std/api/api";
+import { PERMISSION_IDS } from "@std/definitions/well-known";
 import { parseJson } from "@std/values/json";
 import type { JsonObject } from "@std/values/json-value";
 import { ConfigProvider, Effect, Layer, Schema } from "effect";
 
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import { Catalog } from "../src/catalog/catalog.ts";
 import { ProductionDeliveryHandlers } from "../src/outbox/production-handlers.ts";
 import { WorkerSettings } from "../src/outbox/worker.ts";
 import { OutboxSaveHooks } from "../src/records/outbox-producer.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { asObject, textOf } from "./api-support.ts";
+import type { BuiltOperation } from "./schema-support.ts";
 
 /** Build HTTP and worker services with explicit startup configuration.
  * @param config - Startup environment overrides.
@@ -144,3 +149,32 @@ export const register = Effect.fn("HubTest.register")(function* register(
 
   return textOf(asObject(response.json).id);
 });
+
+/** Build the employee grant; callers commit it with any other scenario definitions. */
+export const subscribeGrant = Effect.fn("HubTest.subscribeGrant")(
+  function* subscribeGrant() {
+    const employee = (yield* (yield* Catalog).refresh).roleByName("employee");
+    assert.isDefined(employee);
+
+    if (employee === undefined) {
+      return yield* Effect.die(new Error("Missing employee role"));
+    }
+
+    const id = randomUUID();
+
+    return {
+      id,
+      op: {
+        definition: {
+          id,
+          kind: "grant",
+          owner: { layer: "local" },
+          permissionId: PERMISSION_IDS["events.subscribe"],
+          protected: false,
+          roleId: employee.id,
+        },
+        op: "createGrant",
+      },
+    } satisfies BuiltOperation;
+  }
+);

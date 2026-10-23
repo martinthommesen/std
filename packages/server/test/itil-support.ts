@@ -1,4 +1,5 @@
 /** Shared helpdesk v3 fixture and clients built from the live API definition. */
+import { assert } from "@effect/vitest";
 import { StdApi } from "@std/api/api";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import { stringifyJson } from "@std/values/json";
@@ -22,10 +23,12 @@ import { ensureUser } from "../src/auth/bootstrap-admin.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { runUpgrade } from "../src/config/upgrade.ts";
 import { RecordRuleSaveHooks } from "../src/hooks/record-rule-hooks.ts";
+import { updateRecord } from "../src/records/save-pipeline.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { asObject, textOf, numberOf } from "./api-support.ts";
 import { addRecordRule } from "./schema-support.ts";
+import { bodyOf, TICKETS, tmf621As } from "./tmf621-support.ts";
 
 const account = (login: string, fixture: HelpdeskFixture["Service"]) => {
   if (login === "manager") {
@@ -139,8 +142,7 @@ export const fieldId = Effect.fn("Itil.fieldId")(function* fieldId(
   return field.id;
 });
 
-/** Use the shared HttpApi's generated methods; its path is the only source of truth. */
-export const clientFor = Effect.fn("Itil.client")(function* clientFor(
+const makeClient = Effect.fn("Itil.makeClient")(function* makeClient(
   login?: string
 ) {
   const http = yield* TestHttpClient;
@@ -173,6 +175,36 @@ export const clientFor = Effect.fn("Itil.client")(function* clientFor(
       })
     ),
   });
+});
+
+// Generated clients share the fixture HTTP client's lifetime, as its sessions do.
+const fixtureClients = new WeakMap<
+  TestHttpClientApi,
+  Map<string, ReturnType<typeof makeClient>>
+>();
+
+/** Use one generated API client per fixture HTTP client and login. */
+export const clientFor = Effect.fn("Itil.client")(function* clientFor(
+  login?: string
+) {
+  const http = yield* TestHttpClient;
+  const key = login ?? "admin";
+
+  const clients =
+    fixtureClients.get(http) ??
+    new Map<string, ReturnType<typeof makeClient>>();
+
+  fixtureClients.set(http, clients);
+  const existing = clients.get(key);
+
+  if (existing !== undefined) {
+    return yield* existing;
+  }
+
+  const client = yield* Effect.cached(makeClient(key));
+  clients.set(key, client);
+
+  return yield* client;
 });
 
 /** Make a ticket with a useful default description through the generic API. */
@@ -296,3 +328,118 @@ export const localIncidentWrite = (
     ruleKind: null,
     runAsId,
   });
+
+/** All source/target pairs through the generic API, including refused writes. */
+export const genericTransitions = Effect.fn("Itil.genericTransitions")(
+  function* genericTransitions(
+    table: "helpdeskIncident" | "helpdeskProblem",
+    transitions: Readonly<Record<string, readonly string[]>>
+  ) {
+    const client = yield* clientFor();
+
+    for (const [source, allowed] of Object.entries(transitions)) {
+      for (const target of Object.keys(transitions)) {
+        const record = yield* createTicket(table, { status: source });
+
+        const response = yield* patchResponse(
+          record,
+          { status: target },
+          table
+        );
+
+        if (source === target || allowed.includes(target)) {
+          assert.strictEqual(
+            response.status,
+            200,
+            `${source} -> ${target}: ${response.text}`
+          );
+          assert.strictEqual(asObject(response.json).status, target);
+        } else {
+          assert.strictEqual(
+            response.status,
+            422,
+            `${source} -> ${target}: ${response.text}`
+          );
+          assert.strictEqual(asObject(response.json).code, "InvalidTransition");
+
+          const unchanged = yield* client.records.get({
+            params: { id: textOf(record.id), table },
+            query: {},
+          });
+
+          assert.deepStrictEqual(
+            [unchanged.status, unchanged.revision],
+            [source, record.revision]
+          );
+        }
+      }
+    }
+  }
+);
+
+/** TMF621 status writes use each class's independently specified state mapping. */
+export const tmfTransitions = Effect.fn("Itil.tmfTransitions")(
+  function* tmfTransitions(
+    table: "helpdeskIncident" | "helpdeskProblem",
+    transitions: Readonly<Record<string, readonly string[]>>,
+    statusesOf: (source: string) => readonly (readonly [string, string])[]
+  ) {
+    const admin = yield* tmf621As("admin");
+
+    for (const [source, allowed] of Object.entries(transitions)) {
+      for (const [status, target] of statusesOf(source)) {
+        const record = yield* createTicket(table, { status: source });
+        const path = `${TICKETS}/${textOf(record.id)}`;
+        const accepted = source === target || allowed.includes(target);
+        const before = accepted ? undefined : bodyOf(yield* admin.get(path));
+        const response = yield* admin.patch(path, { status });
+        assert.strictEqual(
+          response.status,
+          accepted ? 200 : 400,
+          `${source} -> ${status}: ${response.text}`
+        );
+
+        if (accepted) {
+          assert.strictEqual(bodyOf(response).status, status);
+        } else {
+          assert.strictEqual(asObject(response.json).code, "InvalidTransition");
+          assert.deepStrictEqual(bodyOf(yield* admin.get(path)), before);
+        }
+      }
+    }
+  }
+);
+
+/** Settled saves bypass every guard installed on the shipped class. */
+export const settledTransitions = Effect.fn("Itil.settledTransitions")(
+  function* settledTransitions(
+    table: "helpdeskIncident" | "helpdeskProblem",
+    className: "helpdesk.incident" | "helpdesk.problem",
+    guardCount: number
+  ) {
+    const record = yield* createTicket(table, { status: "closed" });
+    const snapshot = yield* (yield* Catalog).refresh;
+    const definition = snapshot.classByName(className);
+
+    if (definition === undefined) {
+      throw new Error(`Missing ${className} class`);
+    }
+
+    assert.strictEqual(
+      snapshot
+        .recordRulesOf(definition.id)
+        .filter((rule) => rule.ruleKind === "guard").length,
+      guardCount
+    );
+
+    const saved = yield* updateRecord({
+      body: { status: "new" },
+      endpointClassId: definition.id,
+      expectedVersion: null,
+      id: textOf(record.id),
+      mode: "settled",
+    }).pipe(Effect.provide(recordServices));
+
+    assert.strictEqual(asObject(saved.record?.values).status, "new");
+  }
+);

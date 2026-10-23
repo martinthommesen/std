@@ -2,12 +2,10 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { assert, describe, it } from "@effect/vitest";
-import { API_PREFIX } from "@std/api/api";
 import { Deferred, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 
-import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { eventIdOf } from "../src/events/event-id.ts";
 import { DeliveryFailed } from "../src/outbox/delivery-failed.ts";
@@ -21,8 +19,10 @@ import { hubTestLayer, listener, register } from "./hub-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
 import { ACME } from "./schema-support.ts";
 import { actingAs, expireLease } from "./worker-support.ts";
-
-const ASSET = `${API_PREFIX}/acmeAsset`;
+import {
+  create as createAsset,
+  patch as patchAsset,
+} from "./writes-support.ts";
 
 const CHILD = fileURLToPath(
   new URL("fixtures/hub-worker-child.ts", import.meta.url)
@@ -43,7 +43,6 @@ describe("hub-soak", () => {
     "eight workers recover a process killed mid-delivery, retry 20 percent failures, preserve order and eventId, and never deliver rollback",
     () =>
       Effect.gen(function* scenario1() {
-        const http = yield* TestHttpClient;
         const sql = yield* SqlClient.SqlClient;
         const database = yield* TestDatabase;
         const { admin } = yield* apiCallers;
@@ -82,9 +81,9 @@ describe("hub-soak", () => {
           `${callback.origin}/events`
         );
 
-        const first = yield* http.request("POST", ASSET, {
-          ...admin,
-          body: { name: "crash-first", status: "in_use" },
+        const first = yield* createAsset(admin.token ?? "", "acme.asset", {
+          name: "crash-first",
+          status: "in_use",
         });
 
         const firstId = textOf(asObject(first.json).id);
@@ -112,9 +111,9 @@ describe("hub-soak", () => {
         const recordIds = [firstId];
 
         for (const index of [1, 2, 3, 4, 5, 6, 7]) {
-          const created = yield* http.request("POST", ASSET, {
-            ...admin,
-            body: { name: `soak-${index}`, status: "in_use" },
+          const created = yield* createAsset(admin.token ?? "", "acme.asset", {
+            name: `soak-${index}`,
+            status: "in_use",
           });
 
           assert.strictEqual(created.status, 201, created.text);
@@ -123,14 +122,13 @@ describe("hub-soak", () => {
 
         for (const id of recordIds) {
           for (const version of [1, 2]) {
-            const response = yield* http.request("PATCH", `${ASSET}/${id}`, {
-              ...admin,
-              body: { name: `soak-${id}-${version}` },
-              headers: {
-                "content-type": "application/merge-patch+json",
-                "if-match": `"${version}"`,
-              },
-            });
+            const response = yield* patchAsset(
+              admin.token ?? "",
+              "acme.asset",
+              id,
+              version,
+              { name: `soak-${id}-${version}` }
+            );
 
             assert.strictEqual(response.status, 200, response.text);
           }

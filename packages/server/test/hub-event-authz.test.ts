@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { assert, describe, it } from "@effect/vitest";
 import { API_PREFIX } from "@std/api/api";
 import { applyOperations } from "@std/definitions/apply";
-import { PERMISSION_IDS } from "@std/definitions/well-known";
 import { Effect, Result } from "effect";
 import { TestClock } from "effect/testing";
 
@@ -14,11 +13,18 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { derivedSources } from "../src/events/render.ts";
 import { workerPass } from "../src/outbox/worker.ts";
 import { asObject, textOf, apiCallers } from "./api-support.ts";
-import { hubTestLayer, listener, register } from "./hub-support.ts";
+import {
+  subscribeGrant,
+  hubTestLayer,
+  listener,
+  register,
+} from "./hub-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
 import { ACME, change, addRecordRule } from "./schema-support.ts";
-
-const ASSET = `${API_PREFIX}/acmeAsset`;
+import {
+  create as createAsset,
+  patch as patchAsset,
+} from "./writes-support.ts";
 
 // The alias remains Effect-aware and lets Sonar recognize the test file.
 const test = it.effect;
@@ -75,28 +81,11 @@ describe("hub-event-authz", () => {
     "derived triggers require all sources; revoked permission and deactivated identity finish notAuthorized",
     () =>
       Effect.gen(function* scenario1() {
-        const http = yield* TestHttpClient;
         const fixture = yield* AcmeFixture;
         const { admin, bob } = yield* apiCallers;
-        const snapshot = yield* (yield* Catalog).refresh;
-
-        const employee = snapshot
-          .all("role")
-          .find((role) => role.name === "employee");
-
-        const grantId = randomUUID();
+        const { id: grantId, op: grantOp } = yield* subscribeGrant();
         yield* change([
-          {
-            definition: {
-              id: grantId,
-              kind: "grant",
-              owner: { layer: "local" },
-              permissionId: PERMISSION_IDS["events.subscribe"],
-              protected: false,
-              roleId: employee?.id ?? "",
-            },
-            op: "createGrant",
-          },
+          grantOp,
           {
             definition: {
               actions: [
@@ -132,14 +121,11 @@ describe("hub-event-authz", () => {
         const callback = yield* listener();
         const hub = yield* register(bob.token ?? "", callback.origin);
 
-        const made = yield* http.request("POST", ASSET, {
-          ...admin,
-          body: {
-            cost: "8",
-            name: "derived",
-            owner: { id: fixture.bob.id },
-            status: "in_use",
-          },
+        const made = yield* createAsset(admin.token ?? "", "acme.asset", {
+          cost: "8",
+          name: "derived",
+          owner: { id: fixture.bob.id },
+          status: "in_use",
         });
 
         assert.strictEqual(made.status, 201, made.text);
@@ -151,14 +137,13 @@ describe("hub-event-authz", () => {
           "status"
         );
 
-        const updated = yield* http.request("PATCH", `${ASSET}/${id}`, {
-          ...admin,
-          body: { cost: "12" },
-          headers: {
-            "content-type": "application/merge-patch+json",
-            "if-match": '"1"',
-          },
-        });
+        const updated = yield* patchAsset(
+          admin.token ?? "",
+          "acme.asset",
+          id,
+          1,
+          { cost: "12" }
+        );
 
         assert.strictEqual(updated.status, 200, updated.text);
         yield* workerPass();
@@ -167,13 +152,8 @@ describe("hub-event-authz", () => {
           1,
           "a hidden source cannot disclose its derived trigger"
         );
-        yield* http.request("PATCH", `${ASSET}/${id}`, {
-          ...admin,
-          body: { name: "pending revocation" },
-          headers: {
-            "content-type": "application/merge-patch+json",
-            "if-match": '"2"',
-          },
+        yield* patchAsset(admin.token ?? "", "acme.asset", id, 2, {
+          name: "pending revocation",
         });
 
         const grant = (yield* (yield* Catalog).refresh).getKind(
@@ -209,36 +189,16 @@ describe("hub-event-authz", () => {
         const http = yield* TestHttpClient;
         const fixture = yield* AcmeFixture;
         const { admin, bob } = yield* apiCallers;
-        const snapshot = yield* (yield* Catalog).refresh;
-
-        const employee = snapshot
-          .all("role")
-          .find((role) => role.name === "employee");
-
-        yield* change([
-          {
-            definition: {
-              id: randomUUID(),
-              kind: "grant",
-              owner: { layer: "local" },
-              permissionId: PERMISSION_IDS["events.subscribe"],
-              protected: false,
-              roleId: employee?.id ?? "",
-            },
-            op: "createGrant",
-          },
-        ]);
+        const { op: grantOp } = yield* subscribeGrant();
+        yield* change([grantOp]);
         const callback = yield* listener();
         const hub = yield* register(bob.token ?? "", callback.origin);
 
-        const made = yield* http.request("POST", ASSET, {
-          ...admin,
-          body: {
-            name: "conditional",
-            owner: { id: fixture.bob.id },
-            purchasedOn: "2025-01-01",
-            status: "lost",
-          },
+        const made = yield* createAsset(admin.token ?? "", "acme.asset", {
+          name: "conditional",
+          owner: { id: fixture.bob.id },
+          purchasedOn: "2025-01-01",
+          status: "lost",
         });
 
         const id = textOf(asObject(made.json).id);
@@ -248,15 +208,7 @@ describe("hub-event-authz", () => {
         const patch = (
           revision: number,
           body: { status?: string; purchasedOn?: string; name?: string }
-        ) =>
-          http.request("PATCH", `${ASSET}/${id}`, {
-            ...admin,
-            body,
-            headers: {
-              "content-type": "application/merge-patch+json",
-              "if-match": `"${revision}"`,
-            },
-          });
+        ) => patchAsset(admin.token ?? "", "acme.asset", id, revision, body);
 
         assert.strictEqual(
           (yield* patch(1, { purchasedOn: "2025-02-01", status: "in_use" }))

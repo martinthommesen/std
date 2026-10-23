@@ -23,13 +23,13 @@ import { SqlClient } from "effect/sql";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import { Catalog } from "../src/catalog/catalog.ts";
 import { definitionAt } from "../src/catalog/definition-revisions.ts";
 import { definitionRevisionsStatement } from "../src/records/history-definitions.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
+import { definitionVersion } from "./schema-paths-support.ts";
 import { ACME, addField, change, currentRevision } from "./schema-support.ts";
 import type { BuiltOperation } from "./schema-support.ts";
 
@@ -146,11 +146,6 @@ const choice = (
   return { id: definition.id, op: { definition, op: "createChoice" } };
 };
 
-const versionOf = (id: string) =>
-  Effect.gen(function* readVersion() {
-    return (yield* (yield* Catalog).refresh).get(id)?.version ?? 0;
-  });
-
 const historyOf = Effect.fn("HistoryDefinitions.historyOf")(function* historyOf(
   token: string,
   id: string
@@ -225,7 +220,7 @@ describe("history-definitions", () => {
               id: grade.id,
               name: "quality",
               op: "rename",
-              version: yield* versionOf(grade.id),
+              version: yield* definitionVersion(grade.id),
             },
           ]);
           yield* change([
@@ -233,13 +228,13 @@ describe("history-definitions", () => {
               changes: { label: "Quality" },
               id: grade.id,
               op: "update",
-              version: yield* versionOf(grade.id),
+              version: yield* definitionVersion(grade.id),
             },
             {
               changes: { label: "Great" },
               id: good.id,
               op: "update",
-              version: yield* versionOf(good.id),
+              version: yield* definitionVersion(good.id),
             },
           ]);
 
@@ -309,15 +304,22 @@ describe("history-definitions", () => {
 
           // A purged field's changes (admins only) keep its definitions.
           yield* change([
-            { id: memo.id, op: "retire", version: yield* versionOf(memo.id) },
+            {
+              id: memo.id,
+              op: "retire",
+              version: yield* definitionVersion(memo.id),
+            },
           ]);
           yield* applyChangeSet({
             operations: [
               {
-                confirm: { id: memo.id, version: yield* versionOf(memo.id) },
+                confirm: {
+                  id: memo.id,
+                  version: yield* definitionVersion(memo.id),
+                },
                 id: memo.id,
                 op: "purge",
-                version: yield* versionOf(memo.id),
+                version: yield* definitionVersion(memo.id),
               },
             ],
             requester: PURGER,
@@ -376,13 +378,13 @@ describe("history-definitions", () => {
                 changes: { label: `Tier ${next}` },
                 id: tier.id,
                 op: "update",
-                version: yield* versionOf(tier.id),
+                version: yield* definitionVersion(tier.id),
               },
               {
                 changes: { label: `Gold ${next}` },
                 id: gold.id,
                 op: "update",
-                version: yield* versionOf(gold.id),
+                version: yield* definitionVersion(gold.id),
               },
             ]);
           }

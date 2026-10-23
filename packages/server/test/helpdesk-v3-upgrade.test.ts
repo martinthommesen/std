@@ -15,6 +15,7 @@ import {
   USER_ROLE_CLASS_ID,
   BUILT_IN_ROLE_IDS,
 } from "@std/definitions/well-known";
+import { TMF621_STATUSES } from "@std/tmf/tmf621-status";
 import { isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Plaintext } from "@std/values/write-only";
@@ -42,6 +43,7 @@ import { runDataMigrations } from "../src/platform/data-migrations.ts";
 import { DataMigrationFailed } from "../src/platform/migration.ts";
 import { PLATFORM_MIGRATIONS } from "../src/platform/migrations.ts";
 import { migration0018 } from "../src/platform/migrations/0018-helpdesk-v3.ts";
+import { MAX_LIMIT } from "../src/records/read-query.ts";
 import {
   createRecord,
   updateRecord,
@@ -136,20 +138,6 @@ const definitionsByCategory = (
     ])
   );
 
-const TMF621_STATUS_VALUES: readonly string[] = [
-  "acknowledged",
-  "rejected",
-  "pending",
-  "held",
-  "inProgress",
-  "cancelled",
-  "closed",
-  "resolved",
-];
-
-/** The most one TMF621 page returns (`MAX_LIMIT`, Contracts 11.1). */
-const TMF621_PAGE = 1000;
-
 const MANDATORY_OUTPUT = [
   "@type",
   "href",
@@ -179,15 +167,15 @@ const everyIncidentReadableThroughTmf621 = Effect.fn(
 
   while (!exhausted) {
     const page = yield* admin.get(
-      `${TICKETS}?ticketType=incident&limit=${TMF621_PAGE}&offset=${offset}`
+      `${TICKETS}?ticketType=incident&limit=${MAX_LIMIT}&offset=${offset}`
     );
 
     assert.strictEqual(page.status, 200, page.text);
     const items = itemsOf(page);
 
     seen.push(...items);
-    offset += TMF621_PAGE;
-    exhausted = items.length < TMF621_PAGE;
+    offset += MAX_LIMIT;
+    exhausted = items.length < MAX_LIMIT;
   }
 
   assert.isAtLeast(seen.length, 1000);
@@ -206,7 +194,7 @@ const everyIncidentReadableThroughTmf621 = Effect.fn(
       );
     }
 
-    assert.include(TMF621_STATUS_VALUES, textOf(item.status));
+    assert.include(TMF621_STATUSES, textOf(item.status));
   }
 });
 
@@ -283,7 +271,8 @@ describe("helpdesk-v3-upgrade", () => {
 
         assert.deepStrictEqual(newRows, oldRows);
         const newHistory = yield* history;
-        assert.isTrue(oldHistory.every((entry) => newHistory.includes(entry)));
+        const historyEntries = new Set(newHistory);
+        assert.isTrue(oldHistory.every((entry) => historyEntries.has(entry)));
         assert.lengthOf(newHistory, oldHistory.length + 1001);
         assert.deepStrictEqual(
           yield* values(

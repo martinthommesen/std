@@ -18,6 +18,9 @@ import { savedFiltersInApiNames } from "../src/records/saved-filter-names.ts";
 import { asArray, asObject, textOf } from "./api-support.ts";
 import {
   clientFor,
+  genericTransitions,
+  tmfTransitions,
+  settledTransitions,
   createTicket,
   fieldId,
   itilLayer,
@@ -45,8 +48,6 @@ const SEVERITIES = ["Critical", "Major", "Minor"] as const;
 
 /** TMF621 priorities of priority 1 to 5 (Contracts 11.2). */
 const PRIORITIES = ["Critical", "High", "Medium", "Low", "Planning"] as const;
-
-const INCIDENT_STATES = TMF621_INCIDENT_STATES;
 
 const TRANSITIONS = {
   canceled: [],
@@ -177,50 +178,10 @@ describe("itil-incident", () => {
   it.effect(
     "every incident transition is accepted or refused with no write exactly as Contracts 14 specifies",
     () =>
-      Effect.gen(function* incidentTransitions() {
-        const client = yield* clientFor();
-
-        for (const [source, allowed] of Object.entries<readonly string[]>(
-          TRANSITIONS
-        )) {
-          for (const target of Object.keys(TRANSITIONS)) {
-            const record = yield* createTicket("helpdeskIncident", {
-              status: source,
-            });
-
-            const response = yield* patchResponse(record, { status: target });
-
-            if (source === target || allowed.includes(target)) {
-              assert.strictEqual(
-                response.status,
-                200,
-                `${source} -> ${target}: ${response.text}`
-              );
-              assert.strictEqual(asObject(response.json).status, target);
-            } else {
-              assert.strictEqual(
-                response.status,
-                422,
-                `${source} -> ${target}: ${response.text}`
-              );
-              assert.strictEqual(
-                asObject(response.json).code,
-                "InvalidTransition"
-              );
-
-              const unchanged = yield* client.records.get({
-                params: { id: textOf(record.id), table: "helpdeskIncident" },
-                query: {},
-              });
-
-              assert.deepStrictEqual(
-                [unchanged.status, unchanged.revision],
-                [source, record.revision]
-              );
-            }
-          }
-        }
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      genericTransitions("helpdeskIncident", TRANSITIONS).pipe(
+        Effect.provide(itilLayer),
+        TestClock.withLive
+      )
   );
 
   it.effect(
@@ -797,35 +758,10 @@ describe("itil-incident", () => {
   );
 
   it.effect("settled saves bypass incident transition guards", () =>
-    Effect.gen(function* settledTransitions() {
-      const record = yield* createTicket("helpdeskIncident", {
-        status: "closed",
-      });
-
-      const snapshot = yield* (yield* Catalog).refresh;
-      const table = snapshot.classByName("helpdesk.incident");
-
-      if (table === undefined) {
-        throw new Error("Missing incident class");
-      }
-
-      assert.strictEqual(
-        snapshot
-          .recordRulesOf(table.id)
-          .filter((rule) => rule.ruleKind === "guard").length,
-        6
-      );
-
-      const saved = yield* updateRecord({
-        body: { status: "new" },
-        endpointClassId: table.id,
-        expectedVersion: null,
-        id: textOf(record.id),
-        mode: "settled",
-      }).pipe(Effect.provide(recordServices));
-
-      assert.strictEqual(asObject(saved.record?.values).status, "new");
-    }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+    settledTransitions("helpdeskIncident", "helpdesk.incident", 6).pipe(
+      Effect.provide(itilLayer),
+      TestClock.withLive
+    )
   );
   it.effect("a malformed visible filter fails rather than disappearing", () =>
     Effect.gen(function* malformedFilter() {
@@ -975,43 +911,11 @@ describe("itil-incident", () => {
   it.effect(
     "every TMF621 status write is an allowed incident transition or is refused with no write",
     () =>
-      Effect.gen(function* tmfIncidentTransitions() {
-        const admin = yield* tmf621As("admin");
-
-        for (const [source, allowed] of Object.entries<readonly string[]>(
-          TRANSITIONS
-        )) {
-          for (const [status, target] of INCIDENT_STATES) {
-            const record = yield* createTicket("helpdeskIncident", {
-              status: source,
-            });
-
-            const path = `${TICKETS}/${textOf(record.id)}`;
-            const before = yield* admin.get(path);
-            const response = yield* admin.patch(path, { status });
-            const accepted = source === target || allowed.includes(target);
-
-            assert.strictEqual(
-              response.status,
-              accepted ? 200 : 400,
-              `${source} -> ${status}: ${response.text}`
-            );
-
-            if (accepted) {
-              assert.strictEqual(bodyOf(response).status, status);
-            } else {
-              assert.strictEqual(
-                asObject(response.json).code,
-                "InvalidTransition"
-              );
-              assert.deepStrictEqual(
-                bodyOf(yield* admin.get(path)),
-                bodyOf(before)
-              );
-            }
-          }
-        }
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      tmfTransitions(
+        "helpdeskIncident",
+        TRANSITIONS,
+        () => TMF621_INCIDENT_STATES
+      ).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
   it.effect(

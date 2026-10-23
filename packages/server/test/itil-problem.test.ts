@@ -1,6 +1,7 @@
-/** Problem lifecycle and its incident continuation rule (Contracts 14.3). */
 import { assert, describe, it } from "@effect/vitest";
 import { HELPDESK_CASCADE_USER_ID } from "@std/definitions/well-known";
+/** Problem lifecycle and its incident continuation rule (Contracts 14.3). */
+import { TMF621_STATUSES } from "@std/tmf/tmf621-status";
 import { Effect } from "effect";
 import { TestClock } from "effect/testing";
 
@@ -8,10 +9,11 @@ import {
   HELPDESK,
   HelpdeskFixture,
 } from "../../testing/src/helpdesk-fixture.ts";
-import { Catalog } from "../src/catalog/catalog.ts";
-import { updateRecord } from "../src/records/save-pipeline.ts";
 import { asObject, textOf } from "./api-support.ts";
 import {
+  genericTransitions,
+  tmfTransitions,
+  settledTransitions,
   createTicket,
   fieldId,
   localIncidentWrite,
@@ -20,22 +22,9 @@ import {
   patchResponse,
   patchTicket,
   reference,
-  recordServices,
 } from "./itil-support.ts";
 import { change, values } from "./schema-support.ts";
 import { bodyOf, TICKETS, ticketBody, tmf621As } from "./tmf621-support.ts";
-
-/** TMF621's status values (OAS v5.0.1 `TroubleTicketStatusType`). */
-const TMF621_STATUSES = [
-  "acknowledged",
-  "inProgress",
-  "pending",
-  "held",
-  "resolved",
-  "closed",
-  "cancelled",
-  "rejected",
-] as const;
 
 /** The groups of problem states a TMF621 status keeps (Contracts 11.2). */
 const GROUPS: ReadonlyMap<string, readonly string[]> = new Map([
@@ -96,54 +85,10 @@ describe("itil-problem", () => {
   it.effect(
     "every problem transition including TMF621 allowances is accepted or refused without a write",
     () =>
-      Effect.gen(function* problemTransitions() {
-        const client = yield* clientFor();
-
-        for (const [source, allowed] of Object.entries<readonly string[]>(
-          TRANSITIONS
-        )) {
-          for (const target of Object.keys(TRANSITIONS)) {
-            const record = yield* createTicket("helpdeskProblem", {
-              status: source,
-            });
-
-            const response = yield* patchResponse(
-              record,
-              { status: target },
-              "helpdeskProblem"
-            );
-
-            if (source === target || allowed.includes(target)) {
-              assert.strictEqual(
-                response.status,
-                200,
-                `${source} -> ${target}: ${response.text}`
-              );
-              assert.strictEqual(asObject(response.json).status, target);
-            } else {
-              assert.strictEqual(
-                response.status,
-                422,
-                `${source} -> ${target}: ${response.text}`
-              );
-              assert.strictEqual(
-                asObject(response.json).code,
-                "InvalidTransition"
-              );
-
-              const unchanged = yield* client.records.get({
-                params: { id: textOf(record.id), table: "helpdeskProblem" },
-                query: {},
-              });
-
-              assert.deepStrictEqual(
-                [unchanged.status, unchanged.revision],
-                [source, record.revision]
-              );
-            }
-          }
-        }
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      genericTransitions("helpdeskProblem", TRANSITIONS).pipe(
+        Effect.provide(itilLayer),
+        TestClock.withLive
+      )
   );
 
   it.effect(
@@ -395,79 +340,21 @@ describe("itil-problem", () => {
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
   it.effect("settled saves bypass problem transition guards", () =>
-    Effect.gen(function* settledTransitions() {
-      const record = yield* createTicket("helpdeskProblem", {
-        status: "closed",
-      });
-
-      const snapshot = yield* (yield* Catalog).refresh;
-      const table = snapshot.classByName("helpdesk.problem");
-
-      if (table === undefined) {
-        throw new Error("Missing problem class");
-      }
-
-      assert.strictEqual(
-        snapshot
-          .recordRulesOf(table.id)
-          .filter((rule) => rule.ruleKind === "guard").length,
-        8
-      );
-
-      const saved = yield* updateRecord({
-        body: { status: "new" },
-        endpointClassId: table.id,
-        expectedVersion: null,
-        id: textOf(record.id),
-        mode: "settled",
-      }).pipe(Effect.provide(recordServices));
-
-      assert.strictEqual(asObject(saved.record?.values).status, "new");
-    }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+    settledTransitions("helpdeskProblem", "helpdesk.problem", 8).pipe(
+      Effect.provide(itilLayer),
+      TestClock.withLive
+    )
   );
 
   it.effect(
     "every TMF621 status write is an allowed problem transition or is refused with no write",
     () =>
-      Effect.gen(function* tmfProblemTransitions() {
-        const admin = yield* tmf621As("admin");
-
-        for (const [source, allowed] of Object.entries<readonly string[]>(
-          TRANSITIONS
-        )) {
-          for (const status of TMF621_STATUSES) {
-            const target = problemStateOf(status, source);
-
-            const record = yield* createTicket("helpdeskProblem", {
-              status: source,
-            });
-
-            const path = `${TICKETS}/${textOf(record.id)}`;
-            const before = yield* admin.get(path);
-            const response = yield* admin.patch(path, { status });
-            const accepted = source === target || allowed.includes(target);
-
-            assert.strictEqual(
-              response.status,
-              accepted ? 200 : 400,
-              `${source} -> ${status}: ${response.text}`
-            );
-
-            if (accepted) {
-              assert.strictEqual(bodyOf(response).status, status);
-            } else {
-              assert.strictEqual(
-                asObject(response.json).code,
-                "InvalidTransition"
-              );
-              assert.deepStrictEqual(
-                bodyOf(yield* admin.get(path)),
-                bodyOf(before)
-              );
-            }
-          }
-        }
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      tmfTransitions("helpdeskProblem", TRANSITIONS, (source) =>
+        TMF621_STATUSES.map((status): readonly [string, string] => [
+          status,
+          problemStateOf(status, source),
+        ])
+      ).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
   it.effect(

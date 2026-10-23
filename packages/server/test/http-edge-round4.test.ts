@@ -75,8 +75,6 @@ const tmfBodyLimits = Effect.fn("Test.tmfBodyLimits")(function* tmfBodyLimits(
   // Each user's share holds one maximum record, so filling the process
   // budget takes one user per record slot.
   const owners = yield* edgeUserTokens(
-    http,
-    admin,
     BODY_IN_FLIGHT_MAX_BYTES / BODY_MAX_BYTES
   );
 
