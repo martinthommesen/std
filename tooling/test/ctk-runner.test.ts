@@ -17,6 +17,7 @@ import { judgeKitRun, normalizeCaseTitle } from "../lib/ctk-report.ts";
 import type { KitExpectation, KitRunEvidence } from "../lib/ctk-report.ts";
 import { withKitSession } from "../lib/ctk-session.ts";
 import type { KitSession, KitSignal, SessionDeps } from "../lib/ctk-session.ts";
+import { runCommand } from "../lib/run.ts";
 import { readZipEntry, zipEntryNames } from "../lib/zip.ts";
 
 // Contracts 11.6, `ctk-runner`: the CTK runner's verdict on fabricated
@@ -274,6 +275,17 @@ const interruptedRun = async (
   return seen;
 };
 
+// Whether a process with the PID exists (signal 0 only checks).
+const isAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 describe("ctk-runner", () => {
   it("passes a clean, fresh report from the pinned image with every expected case", () => {
     const verdict = judgeKitRun(evidence(), EXPECTED);
@@ -490,5 +502,30 @@ describe("ctk-runner", () => {
       work: existsSync(seen?.work ?? ""),
     }).toStrictEqual({ aborted: [true, true], handlers: 0, work: false });
     stub.done();
+  });
+
+  it("kills a command that ignores SIGTERM after the grace period and returns only once it has ended", async () => {
+    const controller = new AbortController();
+
+    // The child prints its PID, ignores SIGTERM and would run forever.
+    const running = runCommand(
+      process.execPath,
+      [
+        "-e",
+        "console.log(process.pid); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+      ],
+      { cwd: tmpdir(), killGraceMs: 200, signal: controller.signal }
+    );
+
+    await setTimeout(300);
+    controller.abort();
+
+    const result = await running;
+    const pid = Number(result.output.trim());
+
+    expect({ alive: isAlive(pid), signal: result.code }).toStrictEqual({
+      alive: false,
+      signal: null,
+    });
   });
 });

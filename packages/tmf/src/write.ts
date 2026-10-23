@@ -1,3 +1,4 @@
+import { INTEGER_MAX } from "@std/values/integer";
 /**
  * Planning a TMF write (Contracts 10.5, 11.1): a `POST` body (the API's
  * `_FVO`) or a merge-patch body (`_MVO`, RFC 7396) becomes the field values
@@ -489,58 +490,111 @@ const withPosition = (
   values: new Map([...plan.values, [orderField, position]]),
 });
 
-/**
- * Positions for new items appended after kept ones whose order stays: one
- * past the highest kept position, or undefined when a kept part has none
- * (an empty position sorts apart, so the order must be rewritten).
- *
- * @param items - The planned items.
- * @param visible - The visible parts.
- * @param orderField - The order field.
- * @returns The first new position, or undefined.
- */
-const appendBase = (
-  items: readonly PlannedItem[],
+/** The values of the order field on the parts the caller can see. */
+interface Positions {
+  /** A part's position as the caller reads it on that part, if readable. */
+  readonly of: (id: string) => JsonValue | undefined;
+  /** Whether the caller reads the part's position (not withheld). */
+  readonly readable: (id: string) => boolean;
+}
+
+const positionsOf = (
   visible: readonly SourceRecord[],
   orderField: SourceKey
-): number | undefined => {
+): Positions => {
   const byId = new Map(visible.map((part) => [part.id, part]));
-  // With no kept part, new items start at 0.
-  let highest = -1;
-  let anyKept = false;
 
-  for (const { plan } of items) {
-    if (plan.existingId !== undefined) {
-      const position = byId.get(plan.existingId)?.values.get(orderField)?.value;
+  return {
+    of: (id) => byId.get(id)?.values.get(orderField)?.value,
+    readable: (id) => byId.get(id)?.values.has(orderField) === true,
+  };
+};
 
-      if (position === undefined || !isJsonNumber(position)) {
-        return undefined;
-      }
+const renumbered = (
+  plans: readonly ItemPlan[],
+  orderField: SourceKey
+): ItemPlan[] =>
+  plans.map((plan, position) => withPosition(plan, orderField, position));
 
-      highest = anyKept ? Math.max(highest, position) : position;
-      anyKept = true;
-    }
+/**
+ * The positions of new items appended after the kept ones, whose order
+ * stays (decision 0033). Reads list parts by position, `NULLS LAST`, then
+ * creation, then ID:
+ *
+ * - after a last kept part with a position: one past it, if the caller
+ *   may write the order field on every new item and the positions fit
+ *   the field's integer range; when they do not fit, every item is
+ *   renumbered (0 to n-1) if the caller may read and write the order
+ *   field on every item, else the new items get no position;
+ * - after a last kept part without a position (empty, or withheld from
+ *   the caller), or when the caller may not write the order field on the
+ *   new items: no position, which reads list after every positioned part
+ *   and, among the parts without one, in creation order: after the kept
+ *   ones, created earlier, and in the body's order, since the write
+ *   creates them in that order;
+ * - with no kept part: 0 to n-1.
+ *
+ * @param items - The planned items, kept ones first.
+ * @param positions - The kept parts' positions.
+ * @param orderField - The order field.
+ * @param storable - Whether the caller may read and write the order field
+ *   on every item.
+ * @returns The items, with the positions to write.
+ */
+const appended = (
+  items: readonly PlannedItem[],
+  positions: Positions,
+  orderField: SourceKey,
+  storable: boolean
+): ItemPlan[] => {
+  const plans = items.map(({ plan }) => plan);
+  const fresh = items.filter(({ plan }) => plan.existingId === undefined);
+
+  const writable = fresh.every(
+    ({ access }) => access.canRead(orderField) && access.canName(orderField)
+  );
+
+  const lastKept = plans.findLast((plan) => plan.existingId !== undefined);
+  const last = lastKept?.existingId;
+  const lastPosition = last === undefined ? -1 : positions.of(last);
+
+  if (!writable || lastPosition === undefined || !isJsonNumber(lastPosition)) {
+    return plans;
   }
 
-  return highest + 1;
+  if (lastPosition + fresh.length > INTEGER_MAX) {
+    return storable ? renumbered(plans, orderField) : plans;
+  }
+
+  let next = lastPosition + 1;
+
+  return plans.map((plan) => {
+    if (plan.existingId !== undefined) {
+      return plan;
+    }
+
+    next += 1;
+
+    return withPosition(plan, orderField, next - 1);
+  });
 };
 
 /**
  * The array's order (decision 0033).
  *
- * - With an order field the caller may read and write on every item, a
- *   body that keeps the kept parts' current order (as reads list them:
- *   position, then creation) and puts new items after them writes no
- *   position but the new items' (one past the highest kept), so sending
- *   back what was read changes nothing; any other order writes every
- *   item's position, 0 to n-1.
- * - Otherwise the order cannot be stored or the caller could not see it:
- *   a body that keeps the order is written without positions, and any
- *   other order is refused, judged on the parts the caller can see only.
+ * - A body that keeps the kept parts in the order reads list them and puts
+ *   new items after them writes no kept position (so an array sent back
+ *   as read changes nothing, whatever positions other writers left, empty
+ *   ones included) and positions only the new items (`appended`).
+ * - Any other order is a reorder. It is stored, as positions 0 to n-1 on
+ *   every item, only with an order field the caller may write on every
+ *   item and actually reads on every kept part (present in the caller's
+ *   read of it, not withheld by a mask); otherwise it is refused, naming
+ *   only the array and judged on the parts the caller can see.
  *
  * @param attribute - The array attribute.
  * @param items - The planned items, in the body's order.
- * @param visible - The visible parts, in their current order.
+ * @param visible - The visible parts, in their read order.
  * @param issues - Collects issues.
  * @returns The items, with the positions to write.
  */
@@ -554,40 +608,33 @@ const ordered = (
   const plans = items.map(({ plan }) => plan);
   const { newAtEnd, sameOrder } = orderFitOf(items, visible);
 
+  const positions =
+    orderField === undefined ? undefined : positionsOf(visible, orderField);
+
   const storable =
     orderField !== undefined &&
+    positions !== undefined &&
     items.every(
-      ({ access }) => access.canRead(orderField) && access.canName(orderField)
+      ({ access, plan }) =>
+        access.canName(orderField) &&
+        (plan.existingId === undefined
+          ? access.canRead(orderField)
+          : positions.readable(plan.existingId))
     );
 
-  if (!storable) {
-    if (!(sameOrder && newAtEnd)) {
-      issues.push(reordered(attribute));
-    }
+  if (sameOrder && newAtEnd) {
+    return orderField === undefined || positions === undefined
+      ? plans
+      : appended(items, positions, orderField, storable);
+  }
+
+  if (orderField === undefined || !storable) {
+    issues.push(reordered(attribute));
 
     return plans;
   }
 
-  const base =
-    sameOrder && newAtEnd ? appendBase(items, visible, orderField) : undefined;
-
-  if (base === undefined) {
-    return plans.map((plan, position) =>
-      withPosition(plan, orderField, position)
-    );
-  }
-
-  let next = base;
-
-  return plans.map((plan) => {
-    if (plan.existingId !== undefined) {
-      return plan;
-    }
-
-    next += 1;
-
-    return withPosition(plan, orderField, next - 1);
-  });
+  return renumbered(plans, orderField);
 };
 
 /**

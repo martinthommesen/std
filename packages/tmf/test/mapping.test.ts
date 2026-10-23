@@ -121,6 +121,14 @@ const note = (id: string, text: string): SourceRecord => ({
   version: 1,
 });
 
+const withPosition = (
+  part: SourceRecord,
+  position: SourceValue["value"]
+): SourceRecord => ({
+  ...part,
+  values: new Map([...part.values, [F.status, value(position)]]),
+});
+
 const RECORD: SourceRecord = {
   classId: TICKET,
   id: "t1",
@@ -141,6 +149,17 @@ const RECORD: SourceRecord = {
     [SYSTEM_SOURCES.createdAt, value("2026-10-23T10:00:00.000Z")],
   ]),
   version: 3,
+};
+
+/** The record, its notes positioned 0 and 1 on `F.status`. */
+const POSITIONED: SourceRecord = {
+  ...RECORD,
+  parts: new Map([
+    [
+      "note",
+      [withPosition(note("n1", "one"), 0), withPosition(note("n2", "two"), 1)],
+    ],
+  ]),
 };
 
 const render = (
@@ -384,7 +403,7 @@ describe("tmf-mapping", () => {
         access: ALL_ACCESS,
         attributes: [notes],
         body: { note: items.map((item) => ({ ...item })) },
-        current: { record: RECORD, rendered: {}, renderedParts: new Map() },
+        current: { record: POSITIONED, rendered: {}, renderedParts: new Map() },
         partAccess: (_item, existing) => {
           seen.push(existing?.id);
 
@@ -510,11 +529,19 @@ describe("tmf-mapping", () => {
       0, 1,
     ]);
 
-    // Readable but not writable, or writable but not readable: no reorder.
-    for (const access of [
-      { ...ALL_ACCESS, canName: (key: string) => key !== F.status },
-      { ...ALL_ACCESS, canRead: (key: string) => key !== F.status },
-    ]) {
+    // Readable but not writable, or a kept part's position withheld from
+    // the caller (a conditional mask on that record): no reorder.
+    const withheld: SourceRecord = {
+      ...record,
+      parts: new Map([
+        ["note", [positioned("a", -5), positioned("b", -3), note("c", "c")]],
+      ]),
+    };
+
+    for (const [access, current] of [
+      [{ ...ALL_ACCESS, canName: (key: string) => key !== F.status }, record],
+      [ALL_ACCESS, withheld],
+    ] as const) {
       const refused = planWrite({
         access: ALL_ACCESS,
         attributes: [notes],
@@ -524,12 +551,64 @@ describe("tmf-mapping", () => {
             { id: "a", text: "a" },
           ],
         },
-        current: { record, rendered: {}, renderedParts: new Map() },
+        current: { record: current, rendered: {}, renderedParts: new Map() },
         partAccess: () => access,
       });
 
       expect(Result.isFailure(refused)).toBeTruthy();
     }
+  });
+
+  it("keeps empty positions as read, appends without a position after one, and renumbers when positions run out", () => {
+    const notes = partsAttribute("note", {
+      attributes: [fieldAttribute("text", F.noteText)],
+      classId: NOTE,
+      orderField: F.status,
+      ownerField: F.noteOwner,
+      type: "Note",
+    });
+
+    const positionsAfter = (
+      parts: readonly SourceRecord[],
+      body: readonly object[]
+    ) => {
+      const planned = planWrite({
+        access: ALL_ACCESS,
+        attributes: [notes],
+        body: { note: body.map((item) => ({ ...item })) },
+        current: {
+          record: { ...RECORD, parts: new Map([["note", parts]]) },
+          rendered: {},
+          renderedParts: new Map(),
+        },
+        partAccess: () => ALL_ACCESS,
+      });
+
+      return Result.isSuccess(planned)
+        ? planned.success.parts[0]?.items.map((item) =>
+            item.values.get(F.status)
+          )
+        : ["refused"];
+    };
+
+    // As reads list them: positioned parts, then empty ones (NULLS LAST).
+    const withEmpty = [
+      withPosition(note("a", "a"), 0),
+      withPosition(note("b", "b"), null),
+    ];
+
+    expect(positionsAfter(withEmpty, [{ id: "a" }, { id: "b" }])).toStrictEqual(
+      [undefined, undefined]
+    );
+    expect(
+      positionsAfter(withEmpty, [{ id: "a" }, { id: "b" }, { text: "c" }])
+    ).toStrictEqual([undefined, undefined, undefined]);
+
+    const atTheBound = [withPosition(note("a", "a"), 2_147_483_647)];
+
+    expect(
+      positionsAfter(atTheBound, [{ id: "a" }, { text: "b" }, { text: "c" }])
+    ).toStrictEqual([0, 1, 2]);
   });
 
   it("refuses a mapping whose item attribute writes the order field, or maps a name twice", () => {

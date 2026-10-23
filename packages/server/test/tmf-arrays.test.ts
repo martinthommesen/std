@@ -554,5 +554,151 @@ describe("tmf-arrays", () => {
           ]);
         })
     );
+
+    dbTest.effect(
+      "a reorder over a part whose position a conditional mask withholds is refused, naming no part",
+      () =>
+        Effect.gen(function* maskedPosition() {
+          const http = yield* TestHttpClient;
+          const { alice } = yield* v2Callers;
+
+          const ticket = yield* newTicket(alice, {
+            note: [
+              { "@type": "Note", text: "a" },
+              { "@type": "Note", text: "masked position" },
+            ],
+          });
+
+          const id = textOf(ticket.id);
+          const path = `${FIXTURE_TICKETS}/${id}`;
+          const read = yield* http.get(path, alice);
+
+          const [a = {}, masked = {}] = asArray(asObject(read.json).note).map(
+            asObject
+          );
+
+          const refused = yield* http.request(
+            "PATCH",
+            path,
+            patchOptions(alice, "application/merge-patch+json", {
+              note: [masked, a],
+            })
+          );
+
+          assert.strictEqual(refused.status, 400, refused.text);
+          assert.strictEqual(asObject(refused.json).code, "ValidationFailed");
+          assert.notInclude(refused.text, textOf(masked.id));
+
+          const after = yield* http.get(path, alice);
+
+          assert.strictEqual(
+            after.headers.get("etag"),
+            read.headers.get("etag")
+          );
+          assert.deepStrictEqual(noteTexts(asObject(after.json)), [
+            "a",
+            "masked position",
+          ]);
+        })
+    );
+
+    dbTest.effect(
+      "parts without a position keep it empty when the array is sent back, new items follow them, and the integer bound renumbers",
+      () =>
+        Effect.gen(function* emptyAndBound() {
+          const http = yield* TestHttpClient;
+          const { alice } = yield* v2Callers;
+          const ticket = yield* newTicket(alice, { note: [{ text: "a" }] });
+          const id = textOf(ticket.id);
+          const path = `${FIXTURE_TICKETS}/${id}`;
+
+          // A note created through the generic API has no position.
+          const generic = yield* http.request("POST", "/api/v2/tmffxNote", {
+            ...alice,
+            body: { text: "b", ticket: { id } },
+          });
+
+          assert.strictEqual(generic.status, 201, generic.text);
+
+          const read = yield* http.get(path, alice);
+
+          assert.deepStrictEqual(noteTexts(asObject(read.json)), ["a", "b"]);
+
+          const again = yield* http.request(
+            "PATCH",
+            path,
+            patchOptions(alice, "application/merge-patch+json", {
+              note: asArray(asObject(read.json).note),
+            })
+          );
+
+          assert.strictEqual(again.status, 200, again.text);
+          assert.strictEqual(
+            again.headers.get("etag"),
+            read.headers.get("etag")
+          );
+
+          // Appended after a part without a position: none, listed last.
+          const appended = yield* http.request(
+            "PATCH",
+            path,
+            patchOptions(alice, "application/merge-patch+json", {
+              note: [
+                ...asArray(asObject(read.json).note),
+                { text: "c" },
+                { text: "d" },
+              ],
+            })
+          );
+
+          assert.deepStrictEqual(noteTexts(asObject(appended.json)), [
+            "a",
+            "b",
+            "c",
+            "d",
+          ]);
+
+          // At the integer bound the order is renumbered, never out of range.
+          const bound = yield* newTicket(alice, { note: [{ text: "x" }] });
+          const boundPath = `${FIXTURE_TICKETS}/${textOf(bound.id)}`;
+          const [x = {}] = asArray(bound.note).map(asObject);
+
+          const stored = yield* http.get(
+            `/api/v2/tmffxNote/${textOf(x.id)}`,
+            alice
+          );
+
+          const top = yield* http.request(
+            "PATCH",
+            `/api/v2/tmffxNote/${textOf(x.id)}`,
+            {
+              ...alice,
+              headers: {
+                "content-type": "application/merge-patch+json",
+                "if-match": stored.headers.get("etag") ?? "",
+              },
+              rawBody: JSON.stringify({ position: 2_147_483_647 }),
+            }
+          );
+
+          assert.strictEqual(top.status, 200, top.text);
+
+          const current = asObject((yield* http.get(boundPath, alice)).json);
+
+          const overflow = yield* http.request(
+            "PATCH",
+            boundPath,
+            patchOptions(alice, "application/merge-patch+json", {
+              note: [...asArray(current.note), { text: "y" }],
+            })
+          );
+
+          assert.strictEqual(overflow.status, 200, overflow.text);
+          assert.deepStrictEqual(noteTexts(asObject(overflow.json)), [
+            "x",
+            "y",
+          ]);
+        })
+    );
   });
 });

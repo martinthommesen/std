@@ -511,6 +511,18 @@ export const setUpTmfFixture = Effect.gen(function* setUpTmfFixture() {
       effect: "deny",
       fields: [FF.noteAuthor.id],
     }),
+    // The manager does not read the position of a note whose text is
+    // "masked position": a conditional mask on that record only.
+    accessRule(FX.note.id, [manager], {
+      actions: ["read"],
+      condition: {
+        left: { path: [FF.noteText.id] },
+        op: "eq",
+        right: { value: "masked position" },
+      },
+      effect: "deny",
+      fields: [FF.notePosition.id],
+    }),
     // Employees may write a note's position but not read it: they cannot
     // see the order it stores, so they may not reorder (decision 0033).
     accessRule(FX.note.id, [employee], {

@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 
+/**
+ * How long an aborted command has to end after `SIGTERM` before it gets
+ * `SIGKILL`.
+ */
+export const KILL_GRACE_MS = 5000;
+
 /** The outcome of a finished command. */
 export interface CommandResult {
   /** The exit code; `null` when a signal ended the process. */
@@ -15,8 +21,13 @@ export interface RunOptions {
   /** Also stream the output to this process's stdout and stderr. */
   readonly echo?: boolean;
   readonly env?: NodeJS.ProcessEnv;
-  /** Kills the command when aborted; the result then has a null code. */
+  /**
+   * Aborts the command: `SIGTERM`, then `SIGKILL` after the grace period;
+   * `runCommand` returns only once the process has ended.
+   */
   readonly signal?: AbortSignal;
+  /** The grace period before `SIGKILL` (`KILL_GRACE_MS` by default). */
+  readonly killGraceMs?: number;
 }
 
 /**
@@ -59,9 +70,22 @@ export const runCommand = async (
   try {
     await once(child, "close");
   } catch (error) {
-    // Aborted: the child was killed; report it as ended by a signal.
     if (options.signal?.aborted !== true) {
       throw error;
+    }
+
+    // Aborted: Node sent SIGTERM. A process that ignores it gets SIGKILL
+    // after the grace period, and the command ends only when it has.
+    const kill = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, options.killGraceMs ?? KILL_GRACE_MS);
+
+    try {
+      if (child.exitCode === null && child.signalCode === null) {
+        await once(child, "close");
+      }
+    } finally {
+      clearTimeout(kill);
     }
   }
 
