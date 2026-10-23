@@ -400,7 +400,13 @@ const definitionsSection = (): string => {
   ].join("\n");
 };
 
-const planBlock = (plan: StatementPlan): string =>
+/**
+ * Renders one statement's SQL, parameters and plan as Markdown.
+ *
+ * @param plan - The statement and its measured plan.
+ * @returns The fenced SQL and plan text.
+ */
+export const planBlock = (plan: StatementPlan): string =>
   [
     "```sql",
     plan.text,

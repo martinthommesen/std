@@ -16,7 +16,12 @@ import { makeRng } from "./random.ts";
 import type { Compiled } from "./sql-text.ts";
 import { medianIndex, percentile, round3 } from "./stats.ts";
 import type { ModelContext, StorageModel } from "./storage-model.ts";
-import type { ReadDef, ReadInstance, Samples } from "./workload.ts";
+import type {
+  CompiledRequest,
+  ReadDef,
+  ReadInstance,
+  Samples,
+} from "./workload.ts";
 import { compileInstance } from "./workload.ts";
 
 /**
@@ -31,6 +36,8 @@ export interface ReadConfig {
   readonly warmup: number;
   readonly runs: number;
   readonly seed: number;
+  /** Matches the caller's SQL connection-pool capacity for unmeasured setup. */
+  readonly setupConcurrency: number;
 }
 
 /** One statement of the median run with its plan. */
@@ -88,26 +95,35 @@ export const instancesOf = (
 /**
  * Runs the statements of one request in one transaction.
  *
- * @param statements - The request's statements.
- * @returns Each statement's undecoded rows.
+ * @param request - The settings, page and optional count statements.
+ * @returns The page and count rows.
  */
 export const runRequest: (
-  statements: readonly Compiled[]
-) => Effect.Effect<readonly (readonly unknown[])[], SqlError, PgClient> =
-  Effect.fnUntraced(function* runInTransaction(
-    statements: readonly Compiled[]
-  ) {
-    const sql = yield* PgClient;
+  request: CompiledRequest
+) => Effect.Effect<
+  { readonly page: readonly unknown[]; readonly count: readonly unknown[] },
+  SqlError,
+  PgClient
+> = Effect.fnUntraced(function* runInTransaction(request: CompiledRequest) {
+  const sql = yield* PgClient;
 
-    return yield* sql.withTransaction(
-      Effect.all(statements.map((statement) => execute(statement)))
-    );
-  });
+  return yield* sql.withTransaction(
+    Effect.gen(function* executeRequestStatements() {
+      for (const setting of request.settings) {
+        yield* execute(setting);
+      }
+
+      const page = yield* execute(request.page);
+
+      const count =
+        request.count === undefined ? [] : yield* execute(request.count);
+
+      return { count, page };
+    })
+  );
+});
 
 const PlanRow = Schema.Struct({ "QUERY PLAN": Schema.String });
-
-const isSetting = (statement: Compiled): boolean =>
-  statement.text.startsWith("SET ");
 
 const literal = (value: string | null): string =>
   value === null ? "NULL" : `'${value.replaceAll("'", "''")}'`;
@@ -136,10 +152,6 @@ const executeText = Effect.fnUntraced(function* executeText(
   session: PreparedSession,
   statement: Compiled
 ) {
-  if (isSetting(statement)) {
-    return statement.text;
-  }
-
   let name = session.names.get(statement.text);
 
   if (name === undefined) {
@@ -156,29 +168,28 @@ const executeText = Effect.fnUntraced(function* executeText(
   return `EXECUTE ${name}${args}`;
 });
 
-// Runs one request in a transaction on the session's connection; returns the first non-SET statement's rows.
+// Runs one request in a transaction on the session's connection; returns the page rows.
 const runPrepared = Effect.fnUntraced(function* runPrepared(
   session: PreparedSession,
-  statements: readonly Compiled[]
+  request: CompiledRequest
 ) {
-  const texts: string[] = [];
+  const pageText = yield* executeText(session, request.page);
 
-  for (const statement of statements) {
-    texts.push(yield* executeText(session, statement));
-  }
+  const countText =
+    request.count === undefined
+      ? undefined
+      : yield* executeText(session, request.count);
 
   yield* run(session, "BEGIN");
 
-  let page: readonly unknown[] = [];
-  let found = false;
+  for (const setting of request.settings) {
+    yield* run(session, setting.text);
+  }
 
-  for (const [index, text] of texts.entries()) {
-    const rows = yield* run(session, text);
+  const page = yield* run(session, pageText);
 
-    if (!found && !isSetting(statements[index] ?? { params: [], text: "" })) {
-      page = rows;
-      found = true;
-    }
+  if (countText !== undefined) {
+    yield* run(session, countText);
   }
 
   yield* run(session, "COMMIT");
@@ -189,29 +200,34 @@ const runPrepared = Effect.fnUntraced(function* runPrepared(
 // EXPLAIN (ANALYZE, BUFFERS) EXECUTE of the same prepared statements, in one transaction on the same connection.
 const plansOf = Effect.fnUntraced(function* explainRequest(
   session: PreparedSession,
-  statements: readonly Compiled[]
+  request: CompiledRequest
 ) {
   const plans: StatementPlan[] = [];
 
   yield* run(session, "BEGIN");
 
+  for (const setting of request.settings) {
+    yield* run(session, setting.text);
+  }
+
+  const statements =
+    request.count === undefined
+      ? [request.page]
+      : [request.page, request.count];
+
   for (const statement of statements) {
     const text = yield* executeText(session, statement);
 
-    if (isSetting(statement)) {
-      yield* run(session, text);
-    } else {
-      const lines = yield* decodeRows(
-        PlanRow,
-        yield* run(session, `EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${text}`)
-      );
+    const lines = yield* decodeRows(
+      PlanRow,
+      yield* run(session, `EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${text}`)
+    );
 
-      plans.push({
-        params: statement.params,
-        plan: lines.map((line) => line["QUERY PLAN"]).join("\n"),
-        text: statement.text,
-      });
-    }
+    plans.push({
+      params: statement.params,
+      plan: lines.map((line) => line["QUERY PLAN"]).join("\n"),
+      text: statement.text,
+    });
   }
 
   yield* run(session, "COMMIT");
@@ -238,14 +254,12 @@ const openSession = Effect.fnUntraced(function* openSession(prefix: string) {
   return session;
 });
 
-/** How a request is compiled, and which instances it draws. */
+/** How a request variant is compiled. */
 export interface ReadVariant {
   /** Compiles one instance; defaults to the plain form. */
   readonly compile?: (
     instance: ReadInstance
-  ) => Effect.Effect<readonly Compiled[], SqlError | BenchError, PgClient>;
-  /** Draw the instances of this read instead, so variants share parameters. */
-  readonly seedName?: string;
+  ) => Effect.Effect<CompiledRequest, SqlError | BenchError, PgClient>;
 }
 
 let sessionCounter = 0;
@@ -259,7 +273,7 @@ let sessionCounter = 0;
  * @param target - The model, its context and the samples.
  * @param def - The read.
  * @param config - Warm-up runs, measured runs and seed.
- * @param variant - How to compile the request and which read's parameters to draw (defaults to the plain form).
+ * @param variant - How to compile the request (defaults to the plain form).
  * @returns p50, p95 and the median run's plans.
  */
 export const measureRead = Effect.fn("bench.measureRead")(
@@ -283,13 +297,16 @@ export const measureRead = Effect.fn("bench.measureRead")(
       : Math.min(config.runs, supplementaryRuns);
 
     const instances = instancesOf(
-      { ...def, name: variant.seedName ?? def.name },
+      def,
       target.samples,
       config.seed,
       warmup + runs
     );
 
-    const requests = yield* Effect.all(instances.map(compile));
+    // Setup probes use only the pool capacity already budgeted by the caller.
+    const requests = yield* Effect.all(instances.map(compile), {
+      concurrency: config.setupConcurrency,
+    });
 
     sessionCounter += 1;
 
@@ -313,7 +330,12 @@ export const measureRead = Effect.fn("bench.measureRead")(
         }
 
         const median = medianIndex(timings);
-        const plans = yield* plansOf(session, requests[warmup + median] ?? []);
+        const medianRequest = requests[warmup + median];
+
+        const plans =
+          medianRequest === undefined
+            ? []
+            : yield* plansOf(session, medianRequest);
 
         return {
           caller: def.caller,

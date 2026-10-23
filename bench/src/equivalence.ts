@@ -13,9 +13,13 @@ import { BenchError } from "./errors.ts";
 import { CountRow, decodeRows, IdRow } from "./execute.ts";
 import type { PlannedModel } from "./generate.ts";
 import { instancesOf, runRequest } from "./measure.ts";
-import type { Compiled } from "./sql-text.ts";
 import type { ModelContext, StorageModel } from "./storage-model.ts";
-import type { ReadDef, ReadInstance, Samples } from "./workload.ts";
+import type {
+  CompiledRequest,
+  ReadDef,
+  ReadInstance,
+  Samples,
+} from "./workload.ts";
 import { compileInstance, reads } from "./workload.ts";
 
 const instancesPerRead = 5;
@@ -39,7 +43,7 @@ const outputOf: (
     instance
   );
 
-  const [page = [], counted = []] = yield* runRequest(statements);
+  const { page, count: counted } = yield* runRequest(statements);
   const ids = yield* decodeRows(IdRow, page);
 
   const counts =
@@ -126,12 +130,11 @@ export const checkEquivalence: (
   });
 
 const idsOf: (
-  statements: readonly Compiled[]
+  request: CompiledRequest
 ) => Effect.Effect<string, SqlError | BenchError, PgClient> = Effect.fn(
   "bench.idsOf"
-)(function* readIds(statements: readonly Compiled[]) {
-  const results = yield* runRequest(statements);
-  const page = results.at(-1) ?? [];
+)(function* readIds(request: CompiledRequest) {
+  const { page } = yield* runRequest(request);
   const rows = yield* decodeRows(IdRow, page);
 
   return rows.map((row) => row.id).join(",");
@@ -179,12 +182,13 @@ export const checkBranchedEquivalence: (
 
         const actual =
           instance.kind === "list"
-            ? yield* idsOf([
-                compileBranchedList(
+            ? yield* idsOf({
+                page: compileBranchedList(
                   { caller: instance.caller, ctx, model },
                   instance.query
                 ),
-              ])
+                settings: [],
+              })
             : expected;
 
         if (expected !== actual) {

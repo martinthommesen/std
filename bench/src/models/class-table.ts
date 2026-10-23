@@ -16,6 +16,7 @@ import type { ClassDef, ClassName, FieldDef } from "../hierarchy.ts";
 import {
   classDef,
   classes,
+  fieldDef,
   isAncestorOrSelf,
   lineage,
   subtree,
@@ -31,6 +32,7 @@ import type {
   WriteState,
   WriteStep,
 } from "../storage-model.ts";
+import { systemColumns } from "../storage-model.ts";
 import { castOf } from "../values.ts";
 import {
   auditFks,
@@ -54,16 +56,6 @@ import {
 } from "./common.ts";
 
 const root = "item";
-
-const rootSystem = [
-  "id",
-  "class_id",
-  "version",
-  "created_at",
-  "created_by",
-  "updated_at",
-  "updated_by",
-];
 
 const levelSystem = ["id", "class_id"];
 
@@ -99,7 +91,7 @@ const levelLoad = (
   cls: ClassDef,
   [low, high]: readonly [number, number]
 ): string => {
-  const system = cls.parent === null ? rootSystem : levelSystem;
+  const system = cls.parent === null ? systemColumns : levelSystem;
   const columns = [...system, ...cls.fields.map((def) => q(def.name))];
 
   const values = [
@@ -273,7 +265,7 @@ const insertRoot = (
     const actorParam = params.bind(actor, "uuid");
 
     const text =
-      `INSERT INTO ${tableOf(ctx, root)} (${rootSystem.join(", ")}, ${fields.columns}) ` +
+      `INSERT INTO ${tableOf(ctx, root)} (${systemColumns.join(", ")}, ${fields.columns}) ` +
       `VALUES (uuidv7(), ${classParam}, 1, now(), ${actorParam}, now(), ${actorParam}, ${fields.values}) ` +
       "RETURNING id::text AS id";
 
@@ -328,13 +320,7 @@ const updateLevel = (
   build: (state) => {
     const params = makeParams();
 
-    const def = classDef(field.cls).fields.find(
-      (candidate) => candidate.name === field.name
-    );
-
-    if (def === undefined) {
-      throw new Error(`unknown field ${field.cls}.${field.name}`);
-    }
+    const def = fieldDef(field.cls, field.name);
 
     const id = params.bind(stateValue(state, "id"), "uuid");
     const assigned = params.bind(value, castOf(def));

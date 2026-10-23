@@ -9,6 +9,7 @@ import type { ClassDef, ClassName, FieldDef } from "../hierarchy.ts";
 import {
   classDef,
   classes,
+  fieldDef,
   hierarchyColumn,
   lineage,
   subtree,
@@ -24,6 +25,7 @@ import type {
   WriteState,
   WriteStep,
 } from "../storage-model.ts";
+import { systemColumns } from "../storage-model.ts";
 import { castOf } from "../values.ts";
 import {
   auditFks,
@@ -47,16 +49,6 @@ import {
 import type { TicketItemStorage } from "./common.ts";
 
 const root = "item";
-
-const rootSystem = [
-  "id",
-  "class_id",
-  "version",
-  "created_at",
-  "created_by",
-  "updated_at",
-  "updated_by",
-];
 
 interface Column {
   readonly cls: ClassDef;
@@ -181,10 +173,13 @@ const columnLoad = (column: Column): string => {
 const loadJobs =
   (partitioned: boolean): StorageModel["loadJobs"] =>
   (ctx, chunks) => {
-    const names = [...rootSystem, ...columns.map((column) => q(column.name))];
+    const names = [
+      ...systemColumns,
+      ...columns.map((column) => q(column.name)),
+    ];
 
     const values = [
-      ...rootSystem.map((column) => `s.${column}`),
+      ...systemColumns.map((column) => `s.${column}`),
       ...columns.map(columnLoad),
     ];
 
@@ -309,7 +304,7 @@ const insertStep = (
     const fieldValues = bound.map((entry) => entry.value).join(", ");
 
     const text =
-      `INSERT INTO ${itemTable(ctx)} (${rootSystem.join(", ")}, ${fieldColumns}) ` +
+      `INSERT INTO ${itemTable(ctx)} (${systemColumns.join(", ")}, ${fieldColumns}) ` +
       `VALUES (uuidv7(), ${classParam}, 1, now(), ${actorParam}, now(), ${actorParam}, ${fieldValues}) RETURNING id::text AS id`;
 
     return { params: params.values(), text };
@@ -349,13 +344,7 @@ interface UpdateTarget {
 
 const updateStep = (ctx: ModelContext, target: UpdateTarget): WriteStep => ({
   build: (state) => {
-    const def = classDef(target.field.cls).fields.find(
-      (candidate) => candidate.name === target.field.name
-    );
-
-    if (def === undefined) {
-      throw new Error(`unknown field ${target.field.cls}.${target.field.name}`);
-    }
+    const def = fieldDef(target.field.cls, target.field.name);
 
     const params = makeParams();
     const id = params.bind(stateValue(state, "id"), "uuid");

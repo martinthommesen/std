@@ -6,11 +6,11 @@
  * foreign key from `ticket.item`, and no ID uniqueness across tables. A delete
  * emulates the `NO ACTION` refusal with `NOT EXISTS` (not race-free).
  */
-import type { ClassDef, ClassName, FieldDef } from "../hierarchy.ts";
+import type { ClassDef, ClassName, EndpointField } from "../hierarchy.ts";
 import {
-  classDef,
   classes,
   endpointFields,
+  fieldDef,
   hierarchyColumn,
   lineage,
   subtree,
@@ -53,25 +53,10 @@ const ownSystemDdl = [
   "updated_by uuid NOT NULL",
 ];
 
-const ownSystem = [
-  "id",
-  "version",
-  "created_at",
-  "created_by",
-  "updated_at",
-  "updated_by",
-];
-
-interface LineageField {
-  readonly level: ClassName;
-  readonly def: FieldDef;
-}
+const ownSystem = systemColumns.filter((column) => column !== "class_id");
 
 const tableOf = (ctx: ModelContext, cls: ClassName): string =>
   table(ctx.schema, cls);
-
-const lineageFields = (cls: ClassName): readonly LineageField[] =>
-  endpointFields(cls).map((entry) => ({ def: entry.field, level: entry.cls }));
 
 const classById = (id: string): ClassDef => {
   const found = classes.find((cls) => cls.id === id);
@@ -86,8 +71,8 @@ const classById = (id: string): ClassDef => {
 const createTable = (ctx: ModelContext, cls: ClassDef): string => {
   const definitions = [
     ...ownSystemDdl,
-    ...lineageFields(cls.name).map((entry) =>
-      fieldDdl(entry.def, entry.def.name, false)
+    ...endpointFields(cls.name).map((entry) =>
+      fieldDdl(entry.field, entry.field.name, false)
     ),
   ];
 
@@ -105,12 +90,12 @@ const classLoad = (
   cls: ClassDef,
   [low, high]: readonly [number, number]
 ): string => {
-  const fields = lineageFields(cls.name);
-  const names = [...ownSystem, ...fields.map((entry) => q(entry.def.name))];
+  const fields = endpointFields(cls.name);
+  const names = [...ownSystem, ...fields.map((entry) => q(entry.field.name))];
 
   const values = [
     ...ownSystem.map((column) => `s.${column}`),
-    ...fields.map((entry) => loadValue(entry.def, "s")),
+    ...fields.map((entry) => loadValue(entry.field, "s")),
   ];
 
   return (
@@ -177,7 +162,7 @@ const indexes = (ctx: ModelContext): readonly string[] => [
 
 const projection = (
   member: ClassDef,
-  needed: readonly LineageField[]
+  needed: readonly EndpointField[]
 ): readonly string[] => {
   const chain = new Set(lineage(member.name).map((level) => level.name));
 
@@ -186,11 +171,11 @@ const projection = (
       name === "class_id" ? `${uuidLiteral(member.id)} AS class_id` : name
     ),
     ...needed.map((entry) => {
-      const output = q(hierarchyColumn(entry.level, entry.def.name));
+      const output = q(hierarchyColumn(entry.cls, entry.field.name));
 
-      return chain.has(entry.level)
-        ? `${q(entry.def.name)} AS ${output}`
-        : `NULL::${entry.def.sqlType} AS ${output}`;
+      return chain.has(entry.cls)
+        ? `${q(entry.field.name)} AS ${output}`
+        : `NULL::${entry.field.sqlType} AS ${output}`;
     }),
   ];
 };
@@ -201,7 +186,7 @@ const relation = (
   alias: string
 ): Relation => {
   const members = subtree(endpoint);
-  const needed: LineageField[] = [];
+  const needed: EndpointField[] = [];
   const [only] = members;
   const single = members.length === 1 ? only : undefined;
 
@@ -211,18 +196,12 @@ const relation = (
       : `${alias}.${name}`;
 
   const column = (cls: ClassName, field: string): string => {
-    const def = classDef(cls).fields.find(
-      (candidate) => candidate.name === field
-    );
-
-    if (def === undefined) {
-      throw new Error(`unknown field ${cls}.${field}`);
-    }
+    const def = fieldDef(cls, field);
 
     if (
-      !needed.some((entry) => entry.level === cls && entry.def.name === field)
+      !needed.some((entry) => entry.cls === cls && entry.field.name === field)
     ) {
-      needed.push({ def, level: cls });
+      needed.push({ cls, field: def });
     }
 
     return single === undefined
@@ -250,11 +229,11 @@ const insertStep = (
   build: () => {
     const params = makeParams();
 
-    const bound = lineageFields(cls).map((entry) => ({
-      column: q(entry.def.name),
+    const bound = endpointFields(cls).map((entry) => ({
+      column: q(entry.field.name),
       value: params.bind(
-        values.get(`${entry.level}.${entry.def.name}`) ?? null,
-        castOf(entry.def)
+        values.get(`${entry.cls}.${entry.field.name}`) ?? null,
+        castOf(entry.field)
       ),
     }));
 
@@ -334,13 +313,7 @@ interface UpdateTarget {
 
 const updateStep = (ctx: ModelContext, target: UpdateTarget): WriteStep => ({
   build: (state) => {
-    const def = classDef(target.field.cls).fields.find(
-      (candidate) => candidate.name === target.field.name
-    );
-
-    if (def === undefined) {
-      throw new Error(`unknown field ${target.field.cls}.${target.field.name}`);
-    }
+    const def = fieldDef(target.field.cls, target.field.name);
 
     const params = makeParams();
     const id = params.bind(stateValue(state, "id"), "uuid");
