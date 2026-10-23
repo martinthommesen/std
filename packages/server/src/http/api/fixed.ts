@@ -414,12 +414,13 @@ export const FixedRoutes = Layer.unwrap(
       });
 
     const createSession = (request: HttpServerRequest) => {
-      const source = signInSource(
-        Option.getOrUndefined(request.remoteAddress) ?? "unavailable"
-      );
+      const address =
+        Option.getOrUndefined(request.remoteAddress) ?? "unavailable";
+
+      const source = signInSource(address);
 
       return admission.run(
-        source,
+        address,
         Effect.gen(function* createSessionRoute() {
           const stated = yield* parseRequestRevision(request);
           const origin = yield* originOf(request);

@@ -336,18 +336,21 @@ const idOf = (value: JsonValue | undefined): string | undefined => {
 };
 
 /**
- * Creates distinct active users holding the admin role and signs each in, so
- * tests can fill the process body budget within every user's one-record share.
+ * Creates distinct active users and signs each in, so tests can fill the
+ * process body budget within every user's one-record share.
  * @param http - Real application test client.
  * @param admin - Session token of an administrator.
  * @param count - Number of users.
+ * @param options - `roleless` users get no role: they can authenticate and
+ * upload, but may write nothing (the body is read before authorization).
  * @returns One session token per new user.
  */
 export const edgeUserTokens = Effect.fn("Test.edgeUserTokens")(
   function* edgeUserTokens(
     http: TestHttpClientApi,
     admin: string,
-    count: number
+    count: number,
+    options: { readonly prefix?: string; readonly roleless?: boolean } = {}
   ) {
     const roles = yield* http.get("/api/v1/coreRole?name=admin", {
       token: admin,
@@ -360,7 +363,10 @@ export const edgeUserTokens = Effect.fn("Test.edgeUserTokens")(
     }
 
     return yield* forEach(
-      Array.from({ length: count }, (_, index) => `edge-user-${index}`),
+      Array.from(
+        { length: count },
+        (_, index) => `${options.prefix ?? "edge-user"}-${index}`
+      ),
       (login) =>
         Effect.gen(function* edgeUser() {
           // Disposable test credentials.
@@ -374,14 +380,17 @@ export const edgeUserTokens = Effect.fn("Test.edgeUserTokens")(
           const user = idOf(created.json);
 
           const assigned =
-            user === undefined
+            user === undefined || options.roleless === true
               ? undefined
               : yield* http.request("POST", "/api/v1/coreUserRole", {
                   body: { role, user },
                   token: admin,
                 });
 
-          if (assigned?.status !== 201) {
+          if (
+            user === undefined ||
+            (options.roleless !== true && assigned?.status !== 201)
+          ) {
             return yield* Effect.die(
               new Error(
                 `creating ${login}: ${created.text} ${assigned?.text ?? ""}`

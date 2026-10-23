@@ -134,16 +134,22 @@ export const jsonBodyOf = Effect.fn("Api.jsonBody")(function* jsonBodyOf(
 });
 
 /**
- * Authenticates a protected upload, releases SQL, then caches its bounded body.
+ * The only way to read a protected body: authenticates the session in a
+ * preliminary request transaction (running `admit` there too, for checks that
+ * must precede the body, such as a stated revision), charges the body to the
+ * acting user's share, releases SQL, then reads and caches the bounded body.
+ * The body reader refuses a protected read that skipped this (body-limits.ts).
  * Execution must authenticate again after this arbitrary network delay.
  * @param transactions - Request transactions.
  * @param request - Incoming request.
+ * @param admit - Checks to run as the actor before the body is read.
  * @returns The bounded body text for this request and its retries.
  */
 export const readAuthenticatedBody = Effect.fn("Api.readAuthenticatedBody")(
-  function* readAuthenticatedBody(
+  function* readAuthenticatedBody<E = never, R = never>(
     transactions: TransactionsApi,
-    request: HttpServerRequest
+    request: HttpServerRequest,
+    admit: Effect.Effect<void, E, R> = Effect.void
   ) {
     return yield* withSession(
       request,
@@ -151,7 +157,7 @@ export const readAuthenticatedBody = Effect.fn("Api.readAuthenticatedBody")(
         const actor = yield* inRequestTransaction(
           transactions,
           request,
-          asActor(Actor)
+          asActor(Effect.andThen(admit, Actor))
         );
 
         ownBody(request, actor.userId);

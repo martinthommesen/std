@@ -176,7 +176,7 @@ const definitionRequest = (
       stated: yield* parseRequestRevision(request),
     };
 
-    yield* inRequestTransaction(transactions, request, asActor(Effect.void));
+    yield* readAuthenticatedBody(transactions, request);
 
     return yield* definitionWriteIn(
       transactions,

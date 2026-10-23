@@ -513,7 +513,7 @@ export const tmfExchangeProblem = (
     operationOf(loaded.document, exchange.method, relative) ??
     hubRetrieveOperation(loaded.document, exchange.method, relative);
 
-  // E30 is proposed: the transport refuses excessive bodies with TMF630's
+  // E30 (accepted, 2026-10-23): the transport refuses excessive bodies with TMF630's
   // mandatory 413, even when the pinned API omits that status. Its Error
   // remains validated, just as the accepted E29 hub-throttling deviation.
   const hubThrottle =

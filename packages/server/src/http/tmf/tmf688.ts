@@ -52,10 +52,14 @@ import { Transactions } from "../../sql/transactions.ts";
 import { answered } from "../api/answered.ts";
 import { withoutBody } from "../api/methods.ts";
 import { jsonAnswer } from "../api/records.ts";
-import { jsonBodyOf, mediaTypeOf, withSession } from "../api/request.ts";
+import {
+  jsonBodyOf,
+  mediaTypeOf,
+  readAuthenticatedBody,
+  withSession,
+} from "../api/request.ts";
 import { originOf } from "../api/resource.ts";
 import { isTmfFailure, tmfErrorResponse } from "../api/tmf-error.ts";
-import { textBodyOf } from "../body-limits.ts";
 import { hubRateLimitResponse } from "../hubs.ts";
 import { expectedVersionOf } from "../record-writes.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
@@ -133,7 +137,7 @@ const errorResponse = (
     failure._tag === "BodyCapacityExceeded" ||
     (failure instanceof InvalidRequest && failure.limit === 0)
   ) {
-    // E30/E31 remain proposed: preserve TMF630 body-size/capacity receipts.
+    // E30/E31 (accepted, 2026-10-23): keep TMF630 body-size/capacity statuses.
     return Effect.succeed(tmfErrorResponse(failure));
   }
 
@@ -731,10 +735,10 @@ const handleRequest = Effect.fn("Tmf688.request")(function* handleRequest(
   const origin = yield* originOf(request);
   const transactions = yield* Transactions;
   const stated = yield* parseRequestRevision(request);
-  yield* inRequestTransaction(
+  yield* readAuthenticatedBody(
     transactions,
     request,
-    asActor(checkUnscopedRevision(stated))
+    checkUnscopedRevision(stated)
   );
 
   if (
@@ -745,10 +749,6 @@ const handleRequest = Effect.fn("Tmf688.request")(function* handleRequest(
       message: "The request body must use application/json.",
       parameter: "Content-Type",
     });
-  }
-
-  if (request.method !== "POST") {
-    yield* textBodyOf(request);
   }
 
   const body = request.method === "POST" ? yield* jsonBodyOf(request) : null;

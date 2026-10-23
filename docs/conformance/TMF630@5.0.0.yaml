@@ -910,7 +910,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/http-edge-limits.test.ts#returns 413 for excessive Content-Length and unfinished chunked bodies
-    note: "C6.5; streaming limits, including TMF routes under proposed exclusion E30"
+    note: "C6.5; streaming limits, including TMF routes under exclusion E30 (accepted by Martin, 2026-10-23)"
   - id: TMF630@5.0.0/P1/3.3.3/status-414-uri-too-long
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
     level: recommended

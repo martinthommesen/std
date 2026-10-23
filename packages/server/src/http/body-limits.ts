@@ -109,41 +109,65 @@ const sessionBodyCapacity = Semaphore.makeUnsafe(
   SESSION_BODY_IN_FLIGHT_MAX_BYTES
 );
 
+/** A route's body budget; only sign-in reads a body without a user. */
+interface BodyRoute {
+  readonly limit: number;
+  readonly signIn: boolean;
+}
+
+const userBody = (limit: number): BodyRoute => ({ limit, signIn: false });
+
+const NO_BODY = userBody(0);
+const RECORD_BODY = userBody(BODY_MAX_BYTES);
+
 const bodyLimits = (config: Partial<FindMyWay.RouterConfig>) => {
-  const routes = FindMyWay.make<number>(config);
-  routes.on("POST", "/api/v1/session", SESSION_BODY_MAX_BYTES);
-  routes.on("POST", "/api/v1/applyChangeSet", DEFINITION_BODY_MAX_BYTES);
-  routes.on("POST", "/api/v1/hub", HUB_BODY_MAX_BYTES);
-  routes.on("POST", "/tmf-api/:api/:version/hub", HUB_BODY_MAX_BYTES);
-  routes.on("POST", "/tmf-api/event/v4/topic/:topicId/hub", HUB_BODY_MAX_BYTES);
-  routes.on("POST", "/api/v1/retryDeadDelivery", TASK_BODY_MAX_BYTES);
-  routes.on("POST", "/api/v1/discardDeadDelivery", TASK_BODY_MAX_BYTES);
+  const routes = FindMyWay.make<BodyRoute>(config);
+  routes.on("POST", "/api/v1/session", {
+    limit: SESSION_BODY_MAX_BYTES,
+    signIn: true,
+  });
+  routes.on(
+    "POST",
+    "/api/v1/applyChangeSet",
+    userBody(DEFINITION_BODY_MAX_BYTES)
+  );
+  routes.on("POST", "/api/v1/hub", userBody(HUB_BODY_MAX_BYTES));
+  routes.on("POST", "/tmf-api/:api/:version/hub", userBody(HUB_BODY_MAX_BYTES));
+  routes.on(
+    "POST",
+    "/tmf-api/event/v4/topic/:topicId/hub",
+    userBody(HUB_BODY_MAX_BYTES)
+  );
+  routes.on("POST", "/api/v1/retryDeadDelivery", userBody(TASK_BODY_MAX_BYTES));
+  routes.on(
+    "POST",
+    "/api/v1/discardDeadDelivery",
+    userBody(TASK_BODY_MAX_BYTES)
+  );
 
   for (const table of DEFINITION_KIND_OF_TABLE.keys()) {
     const [namespace = "", name = ""] = table.split(".");
     routes.on(
       ["POST", "PATCH"],
       `/api/v1/${apiTableNameOf(namespace, name)}`,
-      DEFINITION_BODY_MAX_BYTES
+      userBody(DEFINITION_BODY_MAX_BYTES)
     );
     routes.on(
       "PATCH",
       `/api/v1/${apiTableNameOf(namespace, name)}/:id`,
-      DEFINITION_BODY_MAX_BYTES
+      userBody(DEFINITION_BODY_MAX_BYTES)
     );
   }
 
   const lookup = routes.find.bind(routes);
 
-  return (request: HttpServerRequest) => {
+  return (request: HttpServerRequest): BodyRoute => {
     // DELETE and read/method routes have no body in their schemas (Contracts 10.5).
     if (request.method !== "POST" && request.method !== "PATCH") {
-      return 0;
+      return NO_BODY;
     }
 
-    return (
-      lookup(request.method, request.originalUrl)?.handler ?? BODY_MAX_BYTES
-    );
+    return lookup(request.method, request.originalUrl)?.handler ?? RECORD_BODY;
   };
 };
 
@@ -151,6 +175,7 @@ type BodyReadError = BodyTooLarge | InvalidRequest | BodyCapacityExceeded;
 
 interface BodyPolicy {
   readonly limit: number;
+  readonly signIn: boolean;
   readonly received: () => number;
   readonly reserve: (received: number) => BodyCapacityExceeded | undefined;
 }
@@ -285,6 +310,17 @@ const readBodyBytes = Effect.fn("Http.readBodyBytes")(function* readBodyBytes(
   }
 
   const { limit } = policy;
+
+  // Every positive budget except sign-in belongs to a user's share; a route
+  // that skipped readAuthenticatedBody would read uncharged (decision 0038).
+  if (limit > 0 && !policy.signIn && !bodyOwners.has(request.source)) {
+    return yield* Effect.die(
+      new Error(
+        `A protected body (body_max_bytes=${limit}) must be read through readAuthenticatedBody, which charges body_user_in_flight_max_bytes=${BODY_USER_IN_FLIGHT_MAX_BYTES} to its user.`
+      )
+    );
+  }
+
   const refusal = policy.reserve(0);
 
   if (refusal !== undefined) {
@@ -412,12 +448,12 @@ export const BodyLimitsLayer = HttpRouter.middleware(
       );
     }
 
-    const limitOf = bodyLimits(yield* HttpRouter.RouterConfig);
+    const routeOf = bodyLimits(yield* HttpRouter.RouterConfig);
 
     return (app) =>
       Effect.gen(function* bodyLimitsRequest() {
         const request = yield* HttpServerRequest;
-        const limit = limitOf(request);
+        const { limit, signIn } = routeOf(request);
         const length = Number(request.headers["content-length"] ?? 0);
 
         if (length > limit) {
@@ -428,14 +464,13 @@ export const BodyLimitsLayer = HttpRouter.middleware(
 
         // Declared bytes consume no memory. Charge each received chunk before
         // retaining it, identically for framed, chunked and web requests.
-        const session = limit === SESSION_BODY_MAX_BYTES;
-        const capacity = session ? sessionBodyCapacity : bodyCapacity;
+        const capacity = signIn ? sessionBodyCapacity : bodyCapacity;
 
-        const capacityLimit = session
+        const capacityLimit = signIn
           ? SESSION_BODY_IN_FLIGHT_MAX_BYTES
           : BODY_IN_FLIGHT_MAX_BYTES;
 
-        const capacityName = session
+        const capacityName = signIn
           ? "session_body_in_flight_max_bytes"
           : "body_in_flight_max_bytes";
 
@@ -498,6 +533,7 @@ export const BodyLimitsLayer = HttpRouter.middleware(
           limit,
           received: () => reserved,
           reserve,
+          signIn,
         });
 
         return yield* app.pipe(

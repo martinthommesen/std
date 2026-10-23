@@ -70,15 +70,10 @@ export const signInKey = (login: string): string =>
     .update(textKey(login.normalize("NFC").trim(), false))
     .digest("hex");
 
-/**
- * Socket-source key; IPv6 privacy addresses in one subnet share a budget.
- * RFC 6177 §§2,5 treats /64 as one subnet and recommends multiple subnets
- * per end site: https://www.rfc-editor.org/rfc/rfc6177.html (2026-10-23).
- * IPv4-mapped sockets share their IPv4 key, never a second budget.
- * @param address - Socket address, never a forwarding header.
- * @returns Canonical IPv4 or IPv6 /64 source.
- */
-export const signInSource = (address: string): string => {
+// A socket address's IPv4 text (also for IPv4-mapped IPv6), or the IPv6
+// prefix of its first `prefixWords` 16-bit words. Socket addresses come from
+// Node, never forwarding headers.
+const socketPrefix = (address: string, prefixWords: number): string => {
   if (isIP(address) !== 6) {
     return address;
   }
@@ -110,10 +105,32 @@ export const signInSource = (address: string): string => {
   }
 
   return `${words
-    .slice(0, 4)
+    .slice(0, prefixWords)
     .map((word) => word.toString(16))
-    .join(":")}::/64`;
+    .join(":")}::/${prefixWords * 16}`;
 };
+
+/**
+ * Per-minute counter key; IPv6 privacy addresses in one subnet share a budget.
+ * RFC 6177 §§2,5 treats /64 as one subnet and recommends multiple subnets
+ * per end site: https://www.rfc-editor.org/rfc/rfc6177.html (2026-10-23).
+ * IPv4-mapped sockets share their IPv4 key, never a second budget.
+ * @param address - Socket address, never a forwarding header.
+ * @returns Canonical IPv4 or IPv6 /64 source.
+ */
+export const signInSource = (address: string): string =>
+  socketPrefix(address, 4);
+
+/**
+ * One-in-flight gate key: an IPv6 end site's whole assignment shares one gate,
+ * so its many /64s cannot each hold a sign-in body. RFC 6177 §§1-2 replaces
+ * RFC 3177's universal /48 with "more than a /64", suggesting /56 for homes;
+ * /48 stays the common business assignment, so /48 covers both. IPv4 stays
+ * per address. Decision 0038, round 5 (2026-10-23).
+ * @param address - Socket address, never a forwarding header.
+ * @returns Canonical IPv4 or IPv6 /48 source.
+ */
+const signInGate = (address: string): string => socketPrefix(address, 3);
 
 /**
  * Reserve source capacity and lock the login's persistent counter in the
@@ -209,8 +226,9 @@ export const resetSignIn = Effect.fn("SignIn.reset")(function* resetSignIn(
 export class SignInAdmission extends Context.Service<
   SignInAdmission,
   {
+    /** One sign-in in flight per IPv4 address or IPv6 /48 (socket address). */
     readonly run: <A, E, R>(
-      source: string,
+      address: string,
       effect: Effect.Effect<A, E, R>
     ) => Effect.Effect<A, E | SignInThrottled, R>;
     readonly transaction: <A, E, R>(
@@ -285,8 +303,10 @@ export class SignInAdmission extends Context.Service<
       // global queue during SQL lock waits. Check before body reads or SQL.
       const sources = new Set<string>();
 
-      const run = <A, E, R>(source: string, effect: Effect.Effect<A, E, R>) =>
+      const run = <A, E, R>(address: string, effect: Effect.Effect<A, E, R>) =>
         Effect.suspend((): Effect.Effect<A, E | SignInThrottled, R> => {
+          const source = signInGate(address);
+
           if (sources.has(source)) {
             return refused();
           }

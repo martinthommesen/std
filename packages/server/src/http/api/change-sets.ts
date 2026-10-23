@@ -34,7 +34,7 @@ import {
 import { answered } from "./answered.ts";
 import { getAndHead } from "./methods.ts";
 import { jsonAnswer } from "./records.ts";
-import { jsonBodyOf, withSession } from "./request.ts";
+import { jsonBodyOf, readAuthenticatedBody, withSession } from "./request.ts";
 import { originOf, API_PREFIX } from "./resource.ts";
 
 /** The task resource's collection path. */
@@ -73,11 +73,7 @@ export const ChangeSetRoutes = Layer.unwrap(
         // A malformed header is refused before anything else (6.4).
         const stated = yield* parseRequestRevision(request);
         const origin = yield* originOf(request);
-        yield* inRequestTransaction(
-          transactions,
-          request,
-          asActor(Effect.void)
-        );
+        yield* readAuthenticatedBody(transactions, request);
         const { operations } = yield* changeSetOf(yield* jsonBodyOf(request));
 
         const { latest, result } = yield* applyChangeSetRequest(

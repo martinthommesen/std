@@ -14,6 +14,7 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { tmfErrorResponse } from "../src/http/api/tmf-error.ts";
 import {
   BodyLimitsLayer,
+  ownBody,
   textBodyOf,
   BODY_MIN_BYTES_PER_SECOND,
   BODY_IN_FLIGHT_MAX_BYTES,
@@ -132,9 +133,10 @@ const progressUpload = Effect.gen(function* progressUpload() {
         "POST",
         "/api/v1/acmeMonitor",
         Effect.gen(function* read() {
-          const result = yield* textBodyOf(yield* HttpServerRequest).pipe(
-            Effect.result
-          );
+          const request = yield* HttpServerRequest;
+          // The progress rule applies to any owned protected read.
+          ownBody(request, "progress-test-user");
+          const result = yield* textBodyOf(request).pipe(Effect.result);
 
           return Result.isFailure(result)
             ? tmfErrorResponse(result.failure)

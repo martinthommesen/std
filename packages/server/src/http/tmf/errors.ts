@@ -116,7 +116,7 @@ export const tmfRouteErrorResponse = (
 ): HttpServerResponse.HttpServerResponse => {
   const { body, status } = tmfErrorOf(failure);
 
-  // E30/E31 remain proposed: TMF630 requires 413 for size and 503 for overload.
+  // E30/E31 (accepted, 2026-10-23): TMF630 requires 413 for size and 503 for overload.
   const edgeStatus =
     failure._tag === "BodyTooLarge" || failure._tag === "BodyCapacityExceeded";
 
