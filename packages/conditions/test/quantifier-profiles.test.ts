@@ -14,6 +14,7 @@ import {
   resolvePartCondition,
 } from "../src/aggregate.ts";
 import type { Expr } from "../src/ast.ts";
+import { evaluateInBrowser } from "../src/browser.ts";
 import { checkCondition } from "../src/check.ts";
 import { staticClassView } from "../src/class-view.ts";
 import type { FieldInfo } from "../src/class-view.ts";
@@ -170,6 +171,13 @@ describe("quantifier-profiles", () => {
     }, ConditionDefectError);
     assert.throws(() => {
       evaluateCondition(smuggled, { record: { [PART_NUM.id]: 1 } });
+    }, ConditionDefectError);
+    // Nor the browser's evaluator, which would read the owner's field from
+    // the part's image.
+    assert.throws(() => {
+      evaluateInBrowser(smuggled, {
+        record: { [NUM.id]: 1, [PART_NUM.id]: 1 },
+      });
     }, ConditionDefectError);
   });
 });

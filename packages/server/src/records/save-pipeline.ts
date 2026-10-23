@@ -94,7 +94,7 @@ import {
   individualOf,
   needsIndividual,
 } from "./party-rules.ts";
-import { mapConstraints } from "./save-constraints.ts";
+import { mapConstraints, withShownFields } from "./save-constraints.ts";
 import type { ConstraintFailure } from "./save-constraints.ts";
 import { SaveHooks } from "./save-hooks.ts";
 import type { HookEnvironment, SaveFailure, SaveMode } from "./save-hooks.ts";
@@ -405,7 +405,8 @@ const checkReferences = Effect.fn("Records.checkReferences")(
     snapshot: ConfigSnapshot,
     fields: ReadonlyMap<DefinitionId, EffectiveField>,
     values: ReadonlyMap<DefinitionId, DecodedInput>,
-    written: ReadonlySet<DefinitionId>
+    written: ReadonlySet<DefinitionId>,
+    shown: ReadonlySet<string> | undefined
   ) {
     const access = yield* WriteAccess;
 
@@ -427,7 +428,10 @@ const checkReferences = Effect.fn("Records.checkReferences")(
         });
 
         if (!visible.has(value)) {
-          return yield* new InvalidReference({ field: field.field.name });
+          return yield* withShownFields(
+            new InvalidReference({ field: field.field.name }),
+            shown
+          );
         }
       }
     }
@@ -435,6 +439,50 @@ const checkReferences = Effect.fn("Records.checkReferences")(
     return yield* Effect.void;
   }
 );
+
+/**
+ * The names a system-effect save's errors may carry (4.9, 3.8): the
+ * fields the acting user can read on the proposed record, decided before
+ * anything is written, so a constraint failure, after which the
+ * transaction can run no further statement, is filtered by the same
+ * decision. Undefined for a caller's own save, whose errors keep their
+ * rules (the fields its body named, or readable ones).
+ *
+ * @param snapshot - The configuration.
+ * @param input - The save.
+ * @param proposal - The record's class, its stored record and the
+ *   proposed values.
+ * @returns The field names, or undefined.
+ */
+const shownFieldsOf = Effect.fn("Records.shownFields")(function* shownFieldsOf(
+  snapshot: ConfigSnapshot,
+  input: SaveInput,
+  proposal: {
+    readonly classId: DefinitionId;
+    readonly existing: StoredRecord | null;
+    readonly values: ReadonlyMap<DefinitionId, DecodedInput>;
+  }
+) {
+  const access = yield* WriteAccess;
+
+  const readable =
+    input.system === "aggregate"
+      ? yield* access.readableOnProposal({ ...proposal, snapshot })
+      : undefined;
+
+  const shown: ReadonlySet<string> | undefined =
+    readable === undefined
+      ? undefined
+      : new Set(
+          [...readable].flatMap((fieldId) => {
+            const field = snapshot.field(fieldId);
+
+            return field === undefined ? [] : [field.name];
+          })
+        );
+
+  return shown;
+});
 
 // Binds the values to write, hashing password plaintext.
 const columnWrites = Effect.fn("Records.columnWrites")(function* columnWrites(
@@ -865,7 +913,14 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       supplied: callerSupplied(input, resolved),
       written,
     });
-    yield* checkReferences(snapshot, fields, proposal.values, supplied);
+
+    const shown = yield* shownFieldsOf(snapshot, input, {
+      classId,
+      existing: null,
+      values: proposal.values,
+    });
+
+    yield* checkReferences(snapshot, fields, proposal.values, supplied, shown);
 
     // Auto-numbered fields get their number last, in this transaction; a
     // user gets its individual then too (`party-rules.ts`).
@@ -893,7 +948,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       classId,
       (yield* Actor).userId,
       writes
-    ).pipe(mapConstraints(snapshot, "write"));
+    ).pipe(mapConstraints(snapshot, "write", shown));
 
     const after = yield* reload(snapshot, classId, id);
 
@@ -1221,7 +1276,14 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       supplied: callerSupplied(input, evaluated),
       written,
     });
-    yield* checkReferences(snapshot, fields, proposal.values, written);
+
+    const shown = yield* shownFieldsOf(snapshot, input, {
+      classId,
+      existing: record,
+      values: proposal.values,
+    });
+
+    yield* checkReferences(snapshot, fields, proposal.values, written, shown);
 
     const changes = new Map([
       ...changedValues(fields, proposal.values, record),
@@ -1237,7 +1299,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       record.version,
       (yield* Actor).userId,
       writes
-    ).pipe(mapConstraints(snapshot, "write"));
+    ).pipe(mapConstraints(snapshot, "write", shown));
 
     const after = yield* reload(snapshot, classId, record.id);
 

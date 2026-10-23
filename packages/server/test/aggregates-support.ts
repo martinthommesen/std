@@ -31,6 +31,7 @@ import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { actorOf, setUpAcme, USERS } from "./records-support.ts";
 import {
   addField,
+  addIndex,
   addRecordRule,
   change,
   createClass,
@@ -95,8 +96,19 @@ export const F = {
   noteTicket: addField(C.note.id, "ticket", owner(C.ticket.id)),
   requestName: addField(C.request.id, "name", text()),
   requestStatus: addField(C.request.id, "status", text()),
+  ticketCode: addField(C.ticket.id, "code", text()),
   ticketFlag: addField(C.ticket.id, "flag", text()),
+  ticketLevel: addField(C.ticket.id, "level", INTEGER),
+  ticketLink: addField(C.ticket.id, "link", {
+    kind: "reference",
+    targetClassId: C.request.id,
+  }),
   ticketName: addField(C.ticket.id, "name", text(), { required: true }),
+  ticketPeer: addField(C.ticket.id, "peer", {
+    kind: "reference",
+    targetClassId: C.ticket.id,
+  }),
+  ticketResult: addField(C.ticket.id, "result", INTEGER),
   ticketStatus: addField(C.ticket.id, "status", text()),
 } as const;
 
@@ -643,6 +655,9 @@ const approvedNow = (prefix: string): Condition =>
     { left: at(F.requestName), op: "startsWith", right: prefix }
   );
 
+/** A request ID no record has. */
+export const ABSENT_REQUEST = "00000000-0000-4000-8000-0000000000aa";
+
 const noteBody = (body: string): Condition =>
   anyPart(C.note.id, eq(F.noteBody, body));
 
@@ -683,6 +698,61 @@ export const TICKET_RULES = {
     }),
     [set([F.ticketFlag, literal("linked")])]
   ),
+} as const;
+
+/**
+ * Review round 2's ticket rules: system writes that name a missing
+ * reference target (`badLink`) or a value another ticket's unique code
+ * already has (`dupCode`); and the probe, which sets level 10 once, which
+ * the derive rules below take to 20 and read back through the ticket's
+ * peer.
+ */
+export const PROBE_RULES = {
+  badLink: aggregateRule(C.ticket.id, "bad_link", 60, noteBody("bad-link"), [
+    set([F.ticketLink, literal(ABSENT_REQUEST)]),
+  ]),
+  dupCode: aggregateRule(C.ticket.id, "dup_code", 61, noteBody("dup-code"), [
+    set([F.ticketCode, literal("DUP")]),
+  ]),
+  probe: aggregateRule(
+    C.ticket.id,
+    "probe",
+    62,
+    noteBody("probe"),
+    [set([F.ticketLevel, literal(10)])],
+    true
+  ),
+} as const;
+
+/** The unique index on the ticket's code. */
+export const TICKET_CODE_INDEX = addIndex(C.ticket.id, [F.ticketCode.id], true);
+
+/**
+ * The derive rules of the probe (review round 2): `a` takes a level of 10
+ * to 20; `b`, after it, sets the result when the ticket's peer (the
+ * ticket itself) has level 20, which only the image `a` writes shows.
+ */
+export const PROBE_DERIVE = {
+  a: addRecordRule(C.ticket.id, {
+    actions: [set([F.ticketLevel, literal(20)])],
+    condition: eq(F.ticketLevel, 10),
+    name: "probe_a",
+    operations: ["create", "update"],
+    order: 1,
+    ruleKind: "derive",
+  }),
+  b: addRecordRule(C.ticket.id, {
+    actions: [set([F.ticketResult, literal(1)])],
+    condition: {
+      left: { path: [F.ticketPeer.id, F.ticketLevel.id] },
+      op: "eq",
+      right: { value: 20 },
+    },
+    name: "probe_b",
+    operations: ["create", "update"],
+    order: 2,
+    ruleKind: "derive",
+  }),
 } as const;
 
 /**
@@ -768,6 +838,7 @@ export const setUpAggregates = Effect.gen(function* setUpAggregates() {
   yield* change([
     ...Object.values(C).map((entry) => entry.op),
     ...Object.values(F).map((entry) => entry.op),
+    TICKET_CODE_INDEX.op,
   ]);
   yield* change([
     ...Object.values(CHANGE_RULES).map((rule) => rule.op),
@@ -777,6 +848,8 @@ export const setUpAggregates = Effect.gen(function* setUpAggregates() {
     LOOP_RULE.op,
     ...Object.values(CASCADE_RULES).map((rule) => rule.op),
     ...Object.values(TICKET_RULES).map((rule) => rule.op),
+    ...Object.values(PROBE_RULES).map((rule) => rule.op),
+    ...Object.values(PROBE_DERIVE).map((rule) => rule.op),
     {
       definition: {
         classId: C.ticket.id,

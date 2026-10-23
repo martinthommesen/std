@@ -560,11 +560,14 @@ const derive = Effect.fn("Aggregates.derive")(function* derive(
     classId: image.classId,
     context: settling.context,
     image: image.image,
-    live: new Map(
-      [...settling.set.images.values()].flatMap((other) =>
-        other.id === null ? [] : [[other.id, other.image] as const]
-      )
-    ),
+    live: {
+      images: new Map(
+        [...settling.set.images.values()].flatMap((other) =>
+          other.id === null ? [] : [[other.id, other.image] as const]
+        )
+      ),
+      recordId: image.id,
+    },
     operation: image.stored === null ? "create" : "update",
     previous: image.stored === null ? null : imageOf(image.stored),
     snapshot: settling.snapshot,

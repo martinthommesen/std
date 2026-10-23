@@ -8,6 +8,7 @@
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import { AggregateNotSettled } from "@std/api/errors/aggregate-not-settled";
+import { InvalidReference } from "@std/api/errors/invalid-reference";
 import { RuleRefused } from "@std/api/errors/rule-refused";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { SYSTEM_USER_ID } from "@std/definitions/well-known";
@@ -276,6 +277,16 @@ const fieldErrorsOf = (error: { readonly _tag: string }) =>
   error instanceof ValidationFailed
     ? error.errors.map((found) => `${found.field}:${found._tag}`)
     : [error._tag];
+
+/**
+ * A refusal as `tag:field` for `InvalidReference`, else its tag.
+ * @param error - A save's error.
+ * @returns The description.
+ */
+const describeError = (error: { readonly _tag: string }): string =>
+  error instanceof InvalidReference
+    ? `InvalidReference:${error.field}`
+    : error._tag;
 
 describe("aggregate-finalize", () => {
   it("an aggregate save's cause reads as a system cause with its parts and rules", () => {
@@ -1074,6 +1085,75 @@ describe("aggregate-finalize", () => {
             assert.deepStrictEqual(fieldErrorsOf(refused), [...expected], who);
             assert.strictEqual(yield* versionOf(TABLE.ticket, ticket.id), 1);
           }
+
+          // A missing reference target a rule assigns, and a unique value
+          // already taken: a reader learns the field, a blind caller gets
+          // ValidationFailed naming none (Contracts 3.8).
+          const holder = yield* create(C.ticket.id, { name: "t-holder" });
+
+          yield* create(C.note.id, { body: "dup-code", ticket: holder.id });
+          assert.strictEqual(
+            yield* columnOf(TABLE.ticket, "code", holder.id),
+            "DUP"
+          );
+
+          for (const [who, seen, expected] of [
+            [
+              "a reader",
+              access,
+              ["InvalidReference:link", "code:InvalidValue"],
+            ],
+            [
+              "a blind caller",
+              blindToTickets(access),
+              ["ValidationFailed", ""],
+            ],
+          ] as const) {
+            const linked = yield* create(C.ticket.id, {
+              name: `t-link-${who}`,
+            });
+
+            const coded = yield* create(C.ticket.id, { name: `t-code-${who}` });
+
+            const badLink = yield* create(C.note.id, {
+              body: "bad-link",
+              ticket: linked.id,
+            }).pipe(Effect.provideService(WriteAccess, seen), Effect.flip);
+
+            const dupCode = yield* create(C.note.id, {
+              body: "dup-code",
+              ticket: coded.id,
+            }).pipe(Effect.provideService(WriteAccess, seen), Effect.flip);
+
+            assert.deepStrictEqual(
+              [describeError(badLink), fieldErrorsOf(dupCode).join(",")],
+              [...expected],
+              who
+            );
+          }
+        })
+    );
+
+    dbTest.effect(
+      "a derive rule following a reference back to its own record reads the image earlier derive rules wrote",
+      () =>
+        Effect.gen(function* probe() {
+          const ticket = yield* create(C.ticket.id, { name: "t-probe" });
+
+          yield* update(C.ticket.id, TABLE.ticket, ticket.id, {
+            peer: ticket.id,
+          });
+          yield* create(C.note.id, { body: "probe", ticket: ticket.id });
+
+          // probe sets 10; derive a takes it to 20; derive b reads 20
+          // through the peer, the ticket itself.
+          assert.deepStrictEqual(
+            [
+              yield* columnOf(TABLE.ticket, "level", ticket.id),
+              yield* columnOf(TABLE.ticket, "result", ticket.id),
+            ],
+            ["20", "1"]
+          );
         })
     );
 
