@@ -704,13 +704,18 @@ describe("tmf630-conformance", () => {
         assert.strictEqual(current.status, 200);
         assert.strictEqual(asObject(current.json).name, "Bob");
 
+        // A cookie sign-in is the web app's: it carries STD-Client: web
+        // (decision 0018).
         const cookie = yield* http.request("POST", "/api/v1/session", {
           body: {
             login: "bob",
             password: "bob-password",
             tokenDelivery: "cookie",
           },
+          headers: { "std-client": "web" },
         });
+
+        assert.strictEqual(cookie.status, 201, cookie.text);
 
         assert.notProperty(asObject(cookie.json), "token");
         assert.match(cookie.headers.get("set-cookie") ?? "", /Path=\/api;/u);
