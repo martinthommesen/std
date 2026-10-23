@@ -141,7 +141,7 @@ The tokens above are the light theme as `apps/web/src/styles.css` ships it (`:ro
 
 An Operate surface: agents and administrators spend their day in it, opening, changing and creating records. The look is a calm, dense, professional service-desk tool, as Martin's brief pins it: a neutral, cool grey palette with one accent (blue), compact controls, a clear hierarchy, and nothing decorative. The world contributes type, palette, density and one signature move only; navigation, controls and layout are the standard ones of the category: a dark header, a left navigation, dense tables with sortable headers, and two-column forms.
 
-**Signature move: the record bar.** The form's actions live in one floating bar at the bottom of the window, which also carries the record's save state ("Unsaved changes", "Saving…", "Saved.", "Not saved: the reason is at the top of the form."), so the outcome of a save is always where the user just clicked. Save is also Ctrl+S or Cmd+S.
+**Signature move: the record bar.** The form's actions live in one floating bar at the bottom of the window, which also carries the record's save state ("Unsaved changes", "Saving…", "Saved.", "Not saved: the reason is at the top of the form."), so the outcome of a save is always where the user just clicked. Save is also Ctrl+S or Cmd+S. Below 48 rem the bar stops floating and closes the form instead (see Layout).
 
 ## Colors
 
@@ -182,11 +182,11 @@ A fixed rem scale, steps of about 1.15 to 1.2: 12 px (small labels, badges), 13 
 
 - **Shell:** a 48 px header (product name, user menu), a 15 rem left navigation, `main` up to 90 rem wide. The navigation comes after `main` in the document (the page's `h1` is first) and is placed left by the grid; a skip link leads to `main`.
 - **Navigation:** Home, then each app namespace's tables under its name, then a collapsible Administration group whose open state the browser remembers: its pages first (Dead letters, for whoever may read `core.subscription`), then the `core` tables.
-- **Narrow screens (below 48 rem):** the navigation becomes a drawer behind the header's menu button, over a scrim; it takes focus when it opens and gives it back to the button when Escape, the scrim or the button closes it; forms go to one column; the list's table scrolls sideways in its own container and its header row stops sticking.
-- **Touch screens (`pointer: coarse`):** controls, navigation rows and sort buttons grow to 44 px.
-- **Focus clearance:** `scroll-padding` keeps a focused control clear of the sticky header and the floating action bar.
+- **Narrow screens (below 48 rem):** the navigation becomes a modal drawer (Foldkit UI Dialog) behind the header's menu button: the page behind it is inert, Tab and Shift+Tab stay inside it, it opens on its first link, and Escape, the backdrop, its close button or a link close it and give focus back to the menu button. Forms go to one column, and the action bar sits at the form's end instead of floating: wrapped at 320 px or at 200 % zoom it was 173 px tall over the fields (review of a4068ab1). The list's table scrolls sideways in its own container and its header row stops sticking.
+- **Touch screens (`pointer: coarse`):** controls, navigation rows and sort buttons grow to 44 px. Navigation rows take their height from `--nav-row-height`, which the touch rule sets, so no later rule can undo it.
+- **Focus clearance (WCAG 2.2, 2.4.11):** `scroll-padding` keeps a focused control clear of the sticky header and of the floating action bar at the bar's real height (`--action-bar-block-size`, kept by the form while the bar is shown). Browsers scroll only to a control outside the window, so the form also scrolls a focused control that is in the window but under the header or the bar into the clear part.
 - **Lists:** one panel: the toolbar (Filter, saved filters, count, page size, pager), the filter builder below it when opened, then the table with a header row that sticks under the app header on wide screens.
-- **Forms:** up to 64 rem wide; each layout section is a panel with its fields in two columns, long values (long text, JSON, conditions, write-only fields) across both; the action bar floats at the bottom; related lists and history follow as disclosures.
+- **Forms:** up to 64 rem wide; each layout section is a panel with its fields in two columns, long values (long text, JSON, conditions, write-only fields) across both; the action bar floats at the bottom; related lists and history follow as disclosures. A form opened from a list keeps that list's filter, sort and page size in its address, so "Back to the list", a delete and a create return to the same list.
 - **Spacing:** a 4 px grid (`--space-*`); more space between sections than inside them.
 
 ## Elevation & Depth
@@ -217,7 +217,7 @@ Foldkit UI Input, Select, Textarea, Checkbox, Combobox, Date Picker. 32 px high,
 
 ### Navigation
 
-Foldkit UI Nav (`aria-current`, `data-current`); the current item takes the accent's tint. The Administration group and the mobile drawer are Foldkit UI Disclosures.
+Foldkit UI Nav (`aria-current`, `data-current`); the current item takes the accent's tint. The Administration group is a Foldkit UI Disclosure; the narrow screens' drawer is a Foldkit UI Dialog whose header continues the app header's band, with the close button where the menu button was. The navigation is rendered in one place at a time (beside the page, or in the open drawer), so its IDs stay unique. When the browser cannot read, decode or store whether Administration is open, the navigation says so in a status line and the group starts closed.
 
 ### Tables
 
