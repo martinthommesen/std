@@ -13,8 +13,10 @@ import {
   SYSTEM_SOURCES,
 } from "../src/mapping.ts";
 import type {
+  RecordContext,
   RenderContext,
   SourceRecord,
+  SourceValues,
   SourceValue,
   TmfResourceMapping,
 } from "../src/mapping.ts";
@@ -194,6 +196,11 @@ const withNullId = (item: {
 const types = (change: Parameters<typeof eventTypesOf>[1]) =>
   eventTypesOf(RESOURCE, change).map((rule) => rule.type);
 
+const contextValue = (_values: SourceValues, context: RecordContext) => ({
+  history: context.history?.map((step) => step.version) ?? null,
+  lineage: context.lineage,
+});
+
 describe("tmf-mapping", () => {
   it("renders readable attributes, leaves empty and hidden ones out, and derives only from readable sources", () => {
     expect(render(RECORD)).toStrictEqual({
@@ -227,6 +234,95 @@ describe("tmf-mapping", () => {
       id: "t1",
       severity: "Major",
     });
+  });
+
+  it("renders values and owner items with their record's context, resolving lineage once per record", () => {
+    const attributes = [
+      derivedAttribute({ name: "context", render: contextValue, sources: [] }),
+      derivedAttribute({
+        name: "lineage",
+        render: (_values, context) => context.lineage,
+        sources: [],
+      }),
+    ];
+
+    const notes = partsAttribute(
+      "note",
+      {
+        attributes,
+        classId: NOTE,
+        ownerField: F.noteOwner,
+        type: "Note",
+      },
+      {
+        ownerItems: [
+          {
+            matches: () => false,
+            name: "owner",
+            render: contextValue,
+            sources: [],
+            write: () => Result.succeed(new Map()),
+            writes: [],
+          },
+        ],
+      }
+    );
+
+    const lineages: string[] = [];
+
+    const rendered = renderResource(
+      { attributes: [...attributes, notes] },
+      {
+        ...RECORD,
+        history: [
+          {
+            changes: new Map(),
+            kind: "create",
+            occurredAt: "2026-10-23T10:00:00.000Z",
+            version: 1,
+          },
+        ],
+        parts: new Map([
+          ["note", [{ ...note("n1", "one"), history: [] }, note("n2", "two")]],
+        ]),
+      },
+      {
+        ...CONTEXT,
+        extensions: [],
+        fields: null,
+        href: "https://std.test/t1",
+        lineageOf: (classId) => {
+          lineages.push(classId);
+
+          return [classId];
+        },
+        typeAttributes: { "@type": "TroubleTicket" },
+      }
+    );
+
+    expect(rendered).toStrictEqual({
+      "@type": "TroubleTicket",
+      context: { history: [1], lineage: [TICKET] },
+      href: "https://std.test/t1",
+      id: "t1",
+      lineage: [TICKET],
+      note: [
+        { history: [1], lineage: [TICKET] },
+        {
+          "@type": "Note",
+          context: { history: [], lineage: [NOTE] },
+          id: "n1",
+          lineage: [NOTE],
+        },
+        {
+          "@type": "Note",
+          context: { history: null, lineage: [NOTE] },
+          id: "n2",
+          lineage: [NOTE],
+        },
+      ],
+    });
+    expect(lineages).toStrictEqual([TICKET, NOTE, NOTE]);
   });
 
   it("types a shipped class by its mapping and a local child class by its own name and its nearest mapped ancestor", () => {

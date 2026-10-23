@@ -369,36 +369,32 @@ const clearAbsent = (
   const issues: WriteIssue[] = [];
 
   for (const attribute of input.attributes.values()) {
-    const writable =
-      attribute.kind === "value" &&
-      !attribute.readOnly &&
-      attribute.write !== undefined;
+    const writableValue = attribute.kind === "value" && !attribute.readOnly;
 
-    const clearable =
-      writable &&
-      !(attribute.name in input.body) &&
-      knownToCaller(attribute, input.access);
+    if (
+      !writableValue ||
+      attribute.write === undefined ||
+      attribute.name in input.body ||
+      !knownToCaller(attribute, input.access)
+    ) {
+      continue;
+    }
 
-    const cleared =
-      clearable && attribute.kind === "value"
-        ? attribute.write?.(null, input.current?.values, input.target)
-        : undefined;
+    const cleared = attribute.write(null, input.current?.values, input.target);
 
-    if (cleared !== undefined && attribute.kind === "value") {
-      const issue = Result.isSuccess(cleared)
-        ? collector.add(attribute, cleared.success, false)
-        : {
-            attribute: attribute.name,
-            kind: "invalidValue" as const,
-            message: `${attribute.name} cannot be cleared; send its value.`,
-          };
+    const issue = Result.isSuccess(cleared)
+      ? collector.add(attribute, cleared.success, false)
+      : {
+          attribute: attribute.name,
+          kind: "invalidValue" as const,
+          message: `${attribute.name} cannot be cleared; send its value.`,
+        };
 
-      if (issue !== null) {
-        issues.push({
-          ...issue,
-          attribute: `${input.prefix}${attribute.name}`,
-        });
-      }
+    if (issue !== null) {
+      issues.push({
+        ...issue,
+        attribute: `${input.prefix}${attribute.name}`,
+      });
     }
   }
 
@@ -471,6 +467,7 @@ const notAnArray = (attribute: PartsAttribute): WriteIssue => ({
 /** One item of an array, against the parts the caller can see. */
 interface ItemInput {
   readonly attribute: PartsAttribute;
+  readonly attributes: ReadonlyMap<string, Attribute>;
   readonly entry: JsonObject;
   readonly existing: SourceRecord | undefined;
   readonly access: ClassAccess;
@@ -488,9 +485,7 @@ const planItem = (input: ItemInput): ItemPlan => {
 
   const values = planMembers({
     access: input.access,
-    attributes: new Map(
-      attribute.item.attributes.map((each) => [each.name, each])
-    ),
+    attributes: input.attributes,
     body: Object.fromEntries(
       Object.entries(entry).filter(([key]) => !ITEM_IDENTITY.has(key))
     ),
@@ -674,23 +669,6 @@ const withPosition = (
   values: new Map([...plan.values, [orderField, position]]),
 });
 
-/** The values of the order field on the parts the caller can see. */
-interface Positions {
-  /** A part's position as the caller reads it on that part, if readable. */
-  readonly of: (id: string) => JsonValue | undefined;
-}
-
-const positionsOf = (
-  visible: readonly SourceRecord[],
-  orderField: SourceKey
-): Positions => {
-  const byId = new Map(visible.map((part) => [part.id, part]));
-
-  return {
-    of: (id) => byId.get(id)?.values.get(orderField)?.value,
-  };
-};
-
 const renumbered = (
   plans: readonly ItemPlan[],
   orderField: SourceKey
@@ -716,7 +694,7 @@ const renumbered = (
  * - with no kept part: 0 to n-1.
  *
  * @param items - The planned items, kept ones first.
- * @param positions - The kept parts' positions.
+ * @param visible - The visible parts, in their read order.
  * @param orderField - The order field.
  * @param storable - Whether the caller may read and write the order field
  *   on every item.
@@ -724,7 +702,7 @@ const renumbered = (
  */
 const appended = (
   items: readonly PlannedItem[],
-  positions: Positions,
+  visible: readonly SourceRecord[],
   orderField: SourceKey,
   storable: boolean
 ): ItemPlan[] => {
@@ -737,7 +715,12 @@ const appended = (
 
   const lastKept = plans.findLast((plan) => plan.existingId !== undefined);
   const last = lastKept?.existingId;
-  const lastPosition = last === undefined ? -1 : positions.of(last);
+
+  const lastPosition =
+    last === undefined
+      ? -1
+      : visible.findLast((part) => part.id === last)?.values.get(orderField)
+          ?.value;
 
   if (!writable || lastPosition === undefined || !isJsonNumber(lastPosition)) {
     return plans;
@@ -793,9 +776,6 @@ const ordered = (
   const plans = items.map(({ plan }) => plan);
   const { newAtEnd, sameOrder } = orderFitOf(items, visible);
 
-  const positions =
-    orderField === undefined ? undefined : positionsOf(visible, orderField);
-
   // Write permission on every item (create for new ones, update for kept
   // ones) and the field in the caller's schema. Whether the caller reads
   // each stored position depends on the state being written (a mask the
@@ -808,9 +788,9 @@ const ordered = (
     );
 
   if (sameOrder && newAtEnd) {
-    return orderField === undefined || positions === undefined
+    return orderField === undefined
       ? plans
-      : appended(items, positions, orderField, storable);
+      : appended(items, visible, orderField, storable);
   }
 
   if (orderField === undefined || !storable) {
@@ -850,6 +830,11 @@ const planItems = (
   }
 
   const planned: PlannedItem[] = [];
+
+  const attributes = new Map(
+    attribute.item.attributes.map((each) => [each.name, each])
+  );
+
   const kept = new Set<string>();
   const owned = ownerItemsOf(attribute, input, issues, collector);
 
@@ -875,6 +860,7 @@ const planItems = (
         plan: planItem({
           access,
           attribute,
+          attributes,
           entry,
           existing,
           issues,

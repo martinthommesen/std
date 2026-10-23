@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
+import { SetFileSchema } from "@std/definitions/set-file";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Predicate, Result } from "effect";
+import { Result, Schema } from "effect";
 import { parse } from "yaml";
 
 import { eventTypesOf } from "../src/events.ts";
@@ -76,41 +77,17 @@ const ALL_ACCESS: ClassAccess = {
  * @returns `table` and `table.field` to stable ID.
  */
 const definitionIds = (): ReadonlyMap<string, string> => {
-  const file: unknown = parse(
-    readFileSync(path.join(SET_DIRECTORY, "tables.yaml"), "utf-8")
+  const file = Schema.decodeUnknownSync(SetFileSchema)(
+    parse(readFileSync(path.join(SET_DIRECTORY, "tables.yaml"), "utf-8"))
   );
 
   const ids = new Map<string, string>();
 
-  const tables: readonly unknown[] =
-    Predicate.hasProperty(file, "tables") && Array.isArray(file.tables)
-      ? file.tables
-      : [];
+  for (const table of file.tables ?? []) {
+    ids.set(table.name, table.id);
 
-  for (const table of tables) {
-    if (
-      Predicate.hasProperty(table, "name") &&
-      Predicate.hasProperty(table, "id") &&
-      Predicate.isString(table.name) &&
-      Predicate.isString(table.id)
-    ) {
-      ids.set(table.name, table.id);
-
-      const fields: readonly unknown[] =
-        Predicate.hasProperty(table, "fields") && Array.isArray(table.fields)
-          ? table.fields
-          : [];
-
-      for (const field of fields) {
-        if (
-          Predicate.hasProperty(field, "name") &&
-          Predicate.hasProperty(field, "id") &&
-          Predicate.isString(field.name) &&
-          Predicate.isString(field.id)
-        ) {
-          ids.set(`${table.name}.${field.name}`, field.id);
-        }
-      }
+    for (const field of table.fields ?? []) {
+      ids.set(`${table.name}.${field.name}`, field.id);
     }
   }
 

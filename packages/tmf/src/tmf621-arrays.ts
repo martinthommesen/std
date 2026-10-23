@@ -123,8 +123,8 @@ const itemsOf = (
 ): Result.Result<readonly JsonObject[], AttributeIssue> => {
   const items = value ?? [];
 
-  return isJsonArray(items) && items.every((item) => isJsonObject(item))
-    ? Result.succeed(items.filter((item) => isJsonObject(item)))
+  return isJsonArray(items) && items.every(isJsonObject)
+    ? Result.succeed(items)
     : Result.fail({
         kind: "invalidValue",
         message: `${name} is an array of objects.`,
