@@ -1107,8 +1107,8 @@ describe("the concrete class's metadata arriving after the record's reread (revi
           table: TICKET,
         }),
         LoadClassMetadata({
+          resourceType: incidentTable.resourceType,
           revision: REVISION_6,
-          table: incidentTable.resourceType,
         })
       ),
       // The record first: the form still describes the fields by the ticket.

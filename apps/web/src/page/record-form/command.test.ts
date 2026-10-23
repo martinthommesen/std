@@ -460,6 +460,39 @@ describe("form Commands against the server", () => {
     ]);
   });
 
+  it("a create whose second read fails is still a success, with what the create answered", async () => {
+    const api = fakeStdApi({
+      [`POST ${COLLECTION}`]: {
+        body: {
+          "@type": "HelpTicket",
+          href: `http://std.test${RECORD_PATH}`,
+          id: TICKET_ID,
+          revision: 1,
+        },
+        status: 201,
+      },
+    });
+
+    const result = await Effect.runPromise(
+      CreateRecord({
+        fields: TICKET_WIRE,
+        generation: 1,
+        revision: REVISION_5,
+        secrets: {},
+        selected: TICKET_SELECTION,
+        table: TICKET,
+        values: { short_description: "Mine" },
+      }).effect.pipe(Effect.provide(api.layer))
+    );
+
+    expect(result._tag).toBe("SucceededSaveRecord");
+    expect(
+      result._tag === "SucceededSaveRecord" && "class" in result.saved
+        ? result.saved.values.short_description
+        : "not a record"
+    ).toBeNull();
+  });
+
   it("a delete sends If-Match; Referenced is its own refusal", async () => {
     const api = fakeStdApi({
       [RECORD_PATH]: tmfError("Referenced", 409),

@@ -94,14 +94,16 @@ export const LoadFormMetadata = Command.define("LoadFormMetadata", {
 });
 
 /**
- * Loads the metadata of the record's concrete class (`table`: the
- * record's `@type`), whose rules an update is validated with (decision
- * 0017).
+ * Loads the metadata of the record's concrete class (its `@type`), whose
+ * rules an update is validated with (decision 0017).
  */
 export const LoadClassMetadata = Command.define("LoadClassMetadata", {
-  args: { revision: SchemaRevision, table: Schema.String },
-  execute: ({ revision, table }) =>
-    fetchTableMetadata(collectionOfType(table), Option.some(revision)).pipe(
+  args: { resourceType: Schema.String, revision: SchemaRevision },
+  execute: ({ resourceType, revision }) =>
+    fetchTableMetadata(
+      collectionOfType(resourceType),
+      Option.some(revision)
+    ).pipe(
       Effect.map((loaded) =>
         Message.SucceededLoadClassMetadata({ revision, table: loaded.table })
       ),
@@ -112,13 +114,17 @@ export const LoadClassMetadata = Command.define("LoadClassMetadata", {
         Effect.succeed(
           Message.FailedLoadClassMetadata({
             error: "UnknownTable",
+            resourceType,
             revision,
-            table,
           })
         )
       ),
       Effect.orElseSucceed(() =>
-        Message.FailedLoadClassMetadata({ error: UNAVAILABLE, revision, table })
+        Message.FailedLoadClassMetadata({
+          error: UNAVAILABLE,
+          resourceType,
+          revision,
+        })
       )
     ),
   messages: [
@@ -479,6 +485,8 @@ const savedRecordOf = Effect.fnUntraced(function* savedRecordOf(
   const client = yield* StdApi;
   const version = resource.revision ?? 0;
 
+  // NOTE: the write succeeded whatever this read answers: any other
+  // failure keeps the write's own answer.
   return yield* client.records
     .get({
       params: { id: resource.id, table: collectionOf(table) },
@@ -493,7 +501,8 @@ const savedRecordOf = Effect.fnUntraced(function* savedRecordOf(
       ),
       Effect.catchIf(isTmfError("NotFound"), () =>
         Effect.succeed({ id: resource.id, version })
-      )
+      ),
+      Effect.orElseSucceed(() => recordOfResource(resource, selected))
     );
 });
 

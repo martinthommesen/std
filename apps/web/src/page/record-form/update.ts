@@ -1887,8 +1887,8 @@ const requestClassMetadata: Step = (model) =>
         ? {
             commands: [
               LoadClassMetadata({
+                resourceType: record.class,
                 revision: meta.revision,
-                table: record.class,
               }),
             ],
             model: modifyFields(model, {
@@ -2015,16 +2015,16 @@ const reconcileEdits = (model: Model): Model => {
  * revision follows it, and the older answer must not replace it.
  *
  * @param model - The page.
- * @param table - The class the answer is about.
+ * @param resourceType - The class the answer is about (its `@type`).
  * @param revision - The revision the request was made at.
  * @returns True for the awaited answer.
  */
 const isClassAnswerFor = (
   model: Model,
-  table: string,
+  resourceType: string,
   revision: SchemaRevision
 ): boolean =>
-  Option.exists(recordOf(model), (record) => record.class === table) &&
+  Option.exists(recordOf(model), (record) => record.class === resourceType) &&
   Option.exists(metaOf(model), (meta) => meta.revision === revision);
 
 /**
@@ -2841,8 +2841,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadActorNames: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedLoadClassMetadata: ({ error, revision, table }) => ({
-      model: isClassAnswerFor(model, table, revision)
+    FailedLoadClassMetadata: ({ error, resourceType, revision }) => ({
+      model: isClassAnswerFor(model, resourceType, revision)
         ? modifyFields(model, {
             classMetadata: () => ClassMetadata.Failure({ error }),
           })

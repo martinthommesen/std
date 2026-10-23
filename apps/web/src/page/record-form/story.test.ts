@@ -225,8 +225,8 @@ describe("opening a form", () => {
       ),
       Command.expectHas(
         LoadClassMetadata({
+          resourceType: incidentTable.resourceType,
           revision: REVISION_5,
-          table: incidentTable.resourceType,
         })
       ),
       Command.resolveAll(

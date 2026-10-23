@@ -69,8 +69,8 @@ export const Message = defineMessageUnion({
   FailedLoadActorNames: {},
   FailedLoadClassMetadata: {
     error: MetaError,
+    resourceType: Schema.String,
     revision: SchemaRevision,
-    table: Schema.String,
   },
   FailedLoadFormMetadata: { error: MetaError },
   FailedLoadHistory: { error: HistoryError, generation: Schema.Int },
