@@ -10,7 +10,11 @@
  * the passage of time. Only the wake-up test runs the worker loop.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { USER_CLASS_ID } from "@std/definitions/well-known";
+import {
+  USER_CLASS_ID,
+  SYSTEM_USER_ID,
+  HELPDESK_CASCADE_USER_ID,
+} from "@std/definitions/well-known";
 import {
   Deferred,
   Duration,
@@ -23,6 +27,7 @@ import {
 } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { Catalog } from "../src/catalog/catalog.ts";
 import {
   discardDeadDelivery,
   listDeadDeliveries,
@@ -651,6 +656,42 @@ const inactiveIdentity = Effect.gen(function* inactiveIdentityTest() {
   assert.strictEqual(yield* Ref.get(ran), 0);
 });
 
+const reservedIdentity = Effect.gen(function* reservedIdentity() {
+  const fixture = yield* AcmeFixture;
+
+  for (const identityId of [SYSTEM_USER_ID, HELPDESK_CASCADE_USER_ID]) {
+    const ran = yield* Ref.make(0);
+
+    const subscription = yield* subscribe({
+      classId: ACME.asset,
+      identityId: fixture.admin.id,
+      maxAttempts: 1,
+      operations: ["create"],
+    });
+
+    yield* values(
+      "UPDATE core.subscription SET identity_id = $2::uuid WHERE id = $1::uuid RETURNING id::text AS value",
+      [subscription, identityId]
+    );
+    yield* (yield* Catalog).refresh;
+    yield* serveOnly(subscription, {
+      kind: "external",
+      run: () => Ref.update(ran, (n) => n + 1),
+    });
+
+    const id = yield* createAsset(fixture.admin.id, {
+      name: "Reserved identity",
+      status: "in_use",
+    });
+
+    assert.strictEqual(yield* workerPass(), 1);
+    const row = yield* rowAt(subscription, id, 1);
+    assert.strictEqual(row?.status, "dead");
+    assert.include(row?.last_error ?? "", "reserved service identity");
+    assert.strictEqual(yield* Ref.get(ran), 0);
+  }
+});
+
 const retention = Effect.gen(function* retentionTest() {
   const { r, subscription } = yield* twoUpdates("retention", {
     deadLetter: "skip",
@@ -833,6 +874,11 @@ describe("outbox-worker", () => {
     dbTest.effect(
       "secrets never appear in payloads, neither as values nor as changed markers",
       () => secretCanary
+    );
+
+    dbTest.effect(
+      "local reserved subscription identities fail without invoking the effect and reach dead letters",
+      () => reservedIdentity
     );
 
     dbTest.effect(

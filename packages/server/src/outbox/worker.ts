@@ -53,6 +53,7 @@ import { PgClient } from "@effect/sql-pg";
 import type { SubscriptionDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
+import { SERVICE_USER_IDS } from "@std/definitions/well-known";
 import {
   Cause,
   Clock,
@@ -303,8 +304,20 @@ const IDENTITY_UNAVAILABLE =
  */
 const identityOf = Effect.fn("Outbox.identity")(function* identityOf(
   snapshot: ConfigSnapshot,
-  identityId: DefinitionId
+  subscription: SubscriptionDefinition
 ) {
+  const { identityId } = subscription;
+
+  if (
+    subscription.owner.layer === "local" &&
+    SERVICE_USER_IDS.has(identityId)
+  ) {
+    return yield* new DeliveryFailed({
+      reason:
+        "Local subscriptions cannot run as a reserved service identity; choose an ordinary user.",
+    });
+  }
+
   const users = yield* readUserRoles(snapshot, [identityId]);
   const user = users.get(identityId);
 
@@ -347,7 +360,7 @@ const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
   }
 
   const { subscription } = served;
-  const actor = yield* identityOf(snapshot, subscription.identityId);
+  const actor = yield* identityOf(snapshot, subscription);
   const { timeZone } = yield* InstanceSettings;
   const now = yield* Clock.currentTimeMillis;
   const entries = yield* readEntries(claimed.recordId, claimed.recordVersion);

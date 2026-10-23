@@ -64,9 +64,13 @@ import {
 import type { NameProblem } from "./names.ts";
 import { problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
-import { recordRuleProblems } from "./rule-validation.ts";
+import { recordRuleProblems, runIdentityOf } from "./rule-validation.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
-import { CONFIG_SUBSCRIPTION_CLASS_IDS, USER_FIELD_IDS } from "./well-known.ts";
+import {
+  CONFIG_SUBSCRIPTION_CLASS_IDS,
+  SERVICE_USER_IDS,
+  USER_FIELD_IDS,
+} from "./well-known.ts";
 
 /** Field kinds that can be created in Step 1 (Contracts plan, Step 1). */
 export const SUPPORTED_FIELD_KINDS: ReadonlySet<FieldKind> = new Set<FieldKind>(
@@ -1664,6 +1668,62 @@ const checkDefinition = (
   }
 };
 
+/** Refuses new local reserved identities without blocking legacy definitions.
+ * @param problems - The collected problems.
+ * @param snapshot - The configuration after the change.
+ * @param definition - The definition being checked.
+ * @param before - The configuration before the change, when available.
+ * @returns Nothing.
+ */
+const checkReservedIdentity = (
+  problems: Problems,
+  snapshot: ConfigSnapshot,
+  definition: Definition,
+  before: ConfigSnapshot | undefined
+): void => {
+  if (definition.owner.layer !== "local") {
+    return;
+  }
+
+  if (definition.kind === "recordRule") {
+    const identity = runIdentityOf(snapshot, definition);
+    const previous = before?.get(definition.id);
+
+    const unchanged =
+      before !== undefined &&
+      previous?.kind === "recordRule" &&
+      runIdentityOf(before, previous) === identity;
+
+    if (identity !== null && SERVICE_USER_IDS.has(identity) && !unchanged) {
+      problems.push(
+        problem(
+          "invalidRecordRule",
+          definition.id,
+          `Local rules cannot run as reserved service identity ${identity}; choose an ordinary user.`
+        )
+      );
+    }
+  } else if (definition.kind === "subscription") {
+    const previous = before?.get(definition.id);
+
+    if (
+      SERVICE_USER_IDS.has(definition.identityId) &&
+      !(
+        previous?.kind === "subscription" &&
+        previous.identityId === definition.identityId
+      )
+    ) {
+      problems.push(
+        problem(
+          "invalidSubscription",
+          definition.id,
+          `Local subscriptions cannot run as reserved service identity ${definition.identityId}; choose an ordinary user.`
+        )
+      );
+    }
+  }
+};
+
 /**
  * Validates every live definition of a snapshot.
  *
@@ -1675,12 +1735,14 @@ const checkDefinition = (
  *   definitions are checked as being stored (they may not read retired
  *   fields); the others were stored earlier and keep working when a field
  *   they read is retired. Every condition counts as stored by default.
+ * @param before - When applying a change, the previous snapshot; unchanged reserved identities remain loadable.
  * @returns Every problem found, in definition order.
  */
 export const validateSnapshot = (
   snapshot: ConfigSnapshot,
   only?: ReadonlySet<DefinitionId>,
-  storedConditions?: ReadonlySet<DefinitionId>
+  storedConditions?: ReadonlySet<DefinitionId>,
+  before?: ConfigSnapshot
 ): readonly DefinitionProblem[] => {
   const problems: Problems = [];
 
@@ -1689,6 +1751,7 @@ export const validateSnapshot = (
       const stored =
         storedConditions === undefined || storedConditions.has(definition.id);
 
+      checkReservedIdentity(problems, snapshot, definition, before);
       checkDefinition(
         problems,
         snapshot,

@@ -296,7 +296,8 @@ export const insertRecord = Effect.fn("Records.insertRecord")(
     snapshot: ConfigSnapshot,
     classId: DefinitionId,
     actorId: string,
-    writes: readonly ColumnWrite[]
+    writes: readonly ColumnWrite[],
+    fixedId?: string
   ) {
     const sql = yield* SqlClient.SqlClient;
     const [root, ...levels] = snapshot.lineage(classId);
@@ -306,6 +307,18 @@ export const insertRecord = Effect.fn("Records.insertRecord")(
     }
 
     const rootParameters = parameters([classId, actorId]);
+
+    const idValue =
+      fixedId === undefined
+        ? "uuidv7()"
+        : rootParameters.add({ cast: "uuid", text: fixedId });
+
+    // A repaired reserved identity keeps advancing its immutable history.
+    const initialVersion =
+      fixedId === undefined
+        ? "1"
+        : `(SELECT COALESCE(MAX(record_version), 0) + 1 FROM core.change WHERE record_id = ${idValue})`;
+
     const rootWrites = writesOf(writes, root.id);
 
     const rootColumns = columnList(rootWrites);
@@ -314,7 +327,7 @@ export const insertRecord = Effect.fn("Records.insertRecord")(
     const rows = yield* sql.unsafe(
       `INSERT INTO ${tableName(snapshot, root.id)} (
          id, class_id, version, created_at, created_by, updated_at, updated_by${rootColumns})
-       VALUES (uuidv7(), $1::uuid, 1, ${NOW}, $2::uuid, ${NOW}, $2::uuid${rootValues})
+       VALUES (${idValue}, $1::uuid, ${initialVersion}, ${NOW}, $2::uuid, ${NOW}, $2::uuid${rootValues})
        RETURNING id::text AS id`,
       rootParameters.values
     );

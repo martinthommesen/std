@@ -1,0 +1,1273 @@
+recordRules:
+  - id: d8ee949d-2721-5e2d-864f-b75980560934
+    name: short_description
+    table: helpdesk.ticket
+    phase: before
+    operations:
+      - create
+      - update
+    order: 10
+    condition:
+      op: empty
+      arg:
+        path:
+          - 45e8b4dc-7041-4556-af31-1c802d537b8a
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 45e8b4dc-7041-4556-af31-1c802d537b8a
+            value:
+              copy:
+                from: record
+                fieldId: 88514acc-6b0d-4772-8604-43fe9a913446
+                firstLine: 160
+  - id: 188cc6dc-286c-58c4-af12-1536eb49f63e
+    name: status_changed_at
+    table: helpdesk.ticket
+    phase: before
+    operations:
+      - create
+      - update
+    order: 30
+    condition:
+      op: changed
+      arg:
+        path:
+          - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 2e054ec0-656d-5246-9c67-8bbef55f774e
+            value:
+              ctx: now
+  - id: 43b18b4f-b20b-5a3b-8a4f-eab2a4a89859
+    name: resolved_at
+    table: helpdesk.ticket
+    phase: before
+    operations:
+      - create
+      - update
+    order: 40
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+          right:
+            value: resolved
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: e387a9f3-886a-5e91-8823-34a180d8cddf
+            value:
+              ctx: now
+        keepSupplied: true
+  - id: a3b6e4e9-3cb5-5d69-b441-446c356ac183
+    name: clear_resolved_at
+    table: helpdesk.ticket
+    phase: before
+    operations:
+      - create
+      - update
+    order: 50
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: not
+          arg:
+            op: in
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              - value: resolved
+              - value: closed
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: e387a9f3-886a-5e91-8823-34a180d8cddf
+            value:
+              value: null
+        keepSupplied: true
+  - id: 97a1b810-9382-57d6-80cd-54e4b21af48a
+    name: priority_1_1
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - create
+      - update
+    order: 111
+    condition:
+      op: and
+      args:
+        - op: or
+          args:
+            - op: changed
+              arg:
+                path:
+                  - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+            - op: changed
+              arg:
+                path:
+                  - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+        - op: eq
+          left:
+            path:
+              - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+          right:
+            value: "1"
+        - op: eq
+          left:
+            path:
+              - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+          right:
+            value: "1"
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 222508c2-9257-41db-a243-151441078982
+            value:
+              value: "1"
+        keepSupplied: true
+  - id: 84e5cb5e-b332-594e-b708-f31b4634cedd
+    name: priority_1_2
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - create
+      - update
+    order: 112
+    condition:
+      op: and
+      args:
+        - op: or
+          args:
+            - op: changed
+              arg:
+                path:
+                  - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+            - op: changed
+              arg:
+                path:
+                  - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+        - op: eq
+          left:
+            path:
+              - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+          right:
+            value: "1"
+        - op: eq
+          left:
+            path:
+              - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+          right:
+            value: "2"
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 222508c2-9257-41db-a243-151441078982
+            value:
+              value: "2"
+        keepSupplied: true
+  - id: 7e5d1e4d-8648-5ac1-a8dc-51767d4f44ee
+    name: priority_1_3
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - create
+      - update
+    order: 113
+    condition:
+      op: and
+      args:
+        - op: or
+          args:
+            - op: changed
+              arg:
+                path:
+                  - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+            - op: changed
+              arg:
+                path:
+                  - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+        - op: eq
+          left:
+            path:
+              - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+          right:
+            value: "1"
+        - op: eq
+          left:
+            path:
+              - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+          right:
+            value: "3"
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 222508c2-9257-41db-a243-151441078982
+            value:
+              value: "3"
+        keepSupplied: true
+  - id: 7a30fb6b-708a-539e-9df0-c5fef525af69
+    name: priority_2_1
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - create
+      - update
+    order: 121
+    condition:
+      op: and
+      args:
+        - op: or
+          args:
+            - op: changed
+              arg:
+                path:
+                  - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+            - op: changed
+              arg:
+                path:
+                  - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+        - op: eq
+          left:
+            path:
+              - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+          right:
+            value: "2"
+        - op: eq
+          left:
+            path:
+              - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+          right:
+            value: "1"
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 222508c2-9257-41db-a243-151441078982
+            value:
+              value: "2"
+        keepSupplied: true
+  - id: 639aa601-1ea0-5443-9c1e-f94555461ea3
+    name: priority_2_2
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - create
+      - update
+    order: 122
+    condition:
+      op: and
+      args:
+        - op: or
+          args:
+            - op: changed
+              arg:
+                path:
+                  - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+            - op: changed
+              arg:
+                path:
+                  - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+        - op: eq
+          left:
+            path:
+              - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+          right:
+            value: "2"
+        - op: eq
+          left:
+            path:
+              - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+          right:
+            value: "2"
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 222508c2-9257-41db-a243-151441078982
+            value:
+              value: "3"
+        keepSupplied: true
+  - id: 24bdb966-ee86-53d8-9427-152bb4322ebf
+    name: priority_2_3
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - create
+      - update
+    order: 123
+    condition:
+      op: and
+      args:
+        - op: or
+          args:
+            - op: changed
+              arg:
+                path:
+                  - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+            - op: changed
+              arg:
+                path:
+                  - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+        - op: eq
+          left:
+            path:
+              - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+          right:
+            value: "2"
+        - op: eq
+          left:
+            path:
+              - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+          right:
+            value: "3"
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 222508c2-9257-41db-a243-151441078982
+            value:
+              value: "4"
+        keepSupplied: true
+  - id: d6fab3b0-9393-5b95-8065-5e6cb2fbdc0d
+    name: priority_3_1
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - create
+      - update
+    order: 131
+    condition:
+      op: and
+      args:
+        - op: or
+          args:
+            - op: changed
+              arg:
+                path:
+                  - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+            - op: changed
+              arg:
+                path:
+                  - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+        - op: eq
+          left:
+            path:
+              - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+          right:
+            value: "3"
+        - op: eq
+          left:
+            path:
+              - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+          right:
+            value: "1"
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 222508c2-9257-41db-a243-151441078982
+            value:
+              value: "3"
+        keepSupplied: true
+  - id: 0a5f59e4-5690-5202-9e5d-863101fd8477
+    name: priority_3_2
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - create
+      - update
+    order: 132
+    condition:
+      op: and
+      args:
+        - op: or
+          args:
+            - op: changed
+              arg:
+                path:
+                  - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+            - op: changed
+              arg:
+                path:
+                  - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+        - op: eq
+          left:
+            path:
+              - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+          right:
+            value: "3"
+        - op: eq
+          left:
+            path:
+              - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+          right:
+            value: "2"
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 222508c2-9257-41db-a243-151441078982
+            value:
+              value: "4"
+        keepSupplied: true
+  - id: a0af4948-f08e-52b1-86aa-55e394a0d4d2
+    name: priority_3_3
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - create
+      - update
+    order: 133
+    condition:
+      op: and
+      args:
+        - op: or
+          args:
+            - op: changed
+              arg:
+                path:
+                  - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+            - op: changed
+              arg:
+                path:
+                  - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+        - op: eq
+          left:
+            path:
+              - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+          right:
+            value: "3"
+        - op: eq
+          left:
+            path:
+              - dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4
+          right:
+            value: "3"
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 222508c2-9257-41db-a243-151441078982
+            value:
+              value: "5"
+        keepSupplied: true
+  - id: cde9858f-0238-5150-bbe4-8377c2bafce7
+    name: clear_severity_label
+    table: helpdesk.ticket
+    phase: before
+    operations:
+      - create
+      - update
+    order: 200
+    condition:
+      op: changed
+      arg:
+        path:
+          - c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 8669c4c8-92da-5f4c-b4bb-eb6b139e10ed
+            value:
+              value: null
+        keepSupplied: true
+  - id: 887b1a16-70f2-5347-8d9d-1adc14ce6d11
+    name: clear_priority_label
+    table: helpdesk.ticket
+    phase: before
+    operations:
+      - create
+      - update
+    order: 210
+    condition:
+      op: changed
+      arg:
+        path:
+          - 222508c2-9257-41db-a243-151441078982
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: af216ccf-12c8-5ea8-b976-6045d47ea43a
+            value:
+              value: null
+        keepSupplied: true
+  - id: 92136105-6833-50bf-ac76-912f90541d77
+    name: transition_from_new
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: new
+        - op: not
+          arg:
+            op: in
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              - value: in_progress
+              - value: on_hold
+              - value: resolved
+              - value: canceled
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested incident status transition is not allowed.
+  - id: 3b1dd7fa-23bc-5419-9444-0d5bc28b5ed7
+    name: transition_from_in_progress
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: in_progress
+        - op: not
+          arg:
+            op: in
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              - value: on_hold
+              - value: resolved
+              - value: canceled
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested incident status transition is not allowed.
+  - id: 46191e35-4629-50fe-80fd-02d52d1fcee0
+    name: transition_from_on_hold
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: on_hold
+        - op: not
+          arg:
+            op: in
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              - value: in_progress
+              - value: resolved
+              - value: canceled
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested incident status transition is not allowed.
+  - id: c74e3613-60ee-58e6-af0c-a96bab37545d
+    name: transition_from_resolved
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: resolved
+        - op: not
+          arg:
+            op: in
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              - value: in_progress
+              - value: closed
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested incident status transition is not allowed.
+  - id: a3a5052c-1070-5afa-a754-59d11da9046b
+    name: transition_from_closed
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: closed
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested incident status transition is not allowed.
+  - id: 944a7c90-e5c1-5a8d-975a-aa11f3ac5b54
+    name: transition_from_canceled
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: canceled
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested incident status transition is not allowed.
+  - id: 16208b4c-5b83-57d9-b144-02eb69a7e752
+    name: default_hold_reason
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - create
+      - update
+    order: 60
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+          right:
+            value: on_hold
+        - op: empty
+          arg:
+            path:
+              - 2eb33b17-491c-568d-ba0e-67e1192f5bab
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 2eb33b17-491c-568d-ba0e-67e1192f5bab
+            value:
+              value: awaiting_vendor
+  - id: 93b32ebb-29c9-53cd-b445-b598ed42f55d
+    name: clear_hold_reason
+    table: helpdesk.incident
+    phase: before
+    operations:
+      - create
+      - update
+    order: 70
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: not
+          arg:
+            op: eq
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              value: on_hold
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 2eb33b17-491c-568d-ba0e-67e1192f5bab
+            value:
+              value: null
+  - id: 646195b6-eba6-5637-a2ee-1934f7873b21
+    name: transition_from_new
+    table: helpdesk.problem
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: new
+        - op: not
+          arg:
+            op: in
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              - value: assess
+              - value: root_cause_analysis
+              - value: canceled
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested problem status transition is not allowed.
+  - id: 33019a92-0796-5964-8832-6a6b5544d965
+    name: transition_from_assess
+    table: helpdesk.problem
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: assess
+        - op: not
+          arg:
+            op: in
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              - value: root_cause_analysis
+              - value: canceled
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested problem status transition is not allowed.
+  - id: 0f35a3ac-a425-503a-9df2-3739cba4e38b
+    name: transition_from_root_cause_analysis
+    table: helpdesk.problem
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: root_cause_analysis
+        - op: not
+          arg:
+            op: in
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              - value: fix_in_progress
+              - value: on_hold
+              - value: resolved
+              - value: canceled
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested problem status transition is not allowed.
+  - id: 325b1a3f-abc3-5ee9-a2b6-fbaa0a50bfd7
+    name: transition_from_fix_in_progress
+    table: helpdesk.problem
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: fix_in_progress
+        - op: not
+          arg:
+            op: in
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              - value: resolved
+              - value: root_cause_analysis
+              - value: on_hold
+              - value: canceled
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested problem status transition is not allowed.
+  - id: 05a40d29-5c28-53bd-a613-28d554d960b8
+    name: transition_from_on_hold
+    table: helpdesk.problem
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: on_hold
+        - op: not
+          arg:
+            op: in
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              - value: root_cause_analysis
+              - value: canceled
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested problem status transition is not allowed.
+  - id: 38012bb7-35a5-5076-a417-1a91c51ee623
+    name: transition_from_resolved
+    table: helpdesk.problem
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: resolved
+        - op: not
+          arg:
+            op: in
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              - value: closed
+              - value: root_cause_analysis
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested problem status transition is not allowed.
+  - id: 7879cf65-46d7-55bb-8a5d-eb9714019fd0
+    name: transition_from_closed
+    table: helpdesk.problem
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: closed
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested problem status transition is not allowed.
+  - id: 91ad6b05-7ca5-5715-9ec7-3c4db6d25b13
+    name: transition_from_canceled
+    table: helpdesk.problem
+    phase: before
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            image: previous
+          right:
+            value: canceled
+    kind: guard
+    actions:
+      - type: refuse
+        code: InvalidTransition
+        message: The requested problem status transition is not allowed.
+  - id: 08e46c7e-8c75-5288-a626-ce372e0c92bc
+    name: default_hold_reason
+    table: helpdesk.problem
+    phase: before
+    operations:
+      - create
+      - update
+    order: 60
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+          right:
+            value: on_hold
+        - op: empty
+          arg:
+            path:
+              - 2eb33b17-491c-568d-ba0e-67e1192f5bab
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 2eb33b17-491c-568d-ba0e-67e1192f5bab
+            value:
+              value: awaiting_vendor
+  - id: 1d3bbd55-c025-52c4-a429-944cdf2eefc5
+    name: clear_hold_reason
+    table: helpdesk.problem
+    phase: before
+    operations:
+      - create
+      - update
+    order: 70
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: not
+          arg:
+            op: eq
+            left:
+              path:
+                - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            right:
+              value: on_hold
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 2eb33b17-491c-568d-ba0e-67e1192f5bab
+            value:
+              value: null
+  - id: 3ec1dc80-5f8a-5689-9c9f-cca9e6530f94
+    name: resolve_major_children
+    table: helpdesk.incident
+    phase: after
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+          right:
+            value: resolved
+        - op: eq
+          left:
+            path:
+              - 6b1bd403-01ff-57a5-8746-990c9050fc0c
+          right:
+            value: true
+    actions:
+      - type: updateEach
+        forEach:
+          classId: 91446a86-8028-4d34-a501-b7cf0f59fdd5
+          where:
+            op: and
+            args:
+              - op: eq
+                left:
+                  path:
+                    - 57816def-a484-5c9e-b314-2c37053327b3
+                right:
+                  path: []
+                  scope: record
+              - op: in
+                left:
+                  path:
+                    - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+                right:
+                  - value: new
+                  - value: in_progress
+                  - value: on_hold
+        target: self
+        values:
+          - fieldId: 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            value:
+              value: resolved
+          - fieldId: b93e6de9-38f4-5ac9-b2f5-207586073d98
+            value:
+              copy:
+                from: record
+                fieldId: b93e6de9-38f4-5ac9-b2f5-207586073d98
+          - fieldId: 2ca8a806-2830-4dad-8075-07f32257cca4
+            value:
+              copy:
+                from: record
+                fieldId: 2ca8a806-2830-4dad-8075-07f32257cca4
+          - fieldId: e387a9f3-886a-5e91-8823-34a180d8cddf
+            value:
+              copy:
+                from: record
+                fieldId: e387a9f3-886a-5e91-8823-34a180d8cddf
+    runAs: 32187bcc-314f-53f1-9a54-4ae3cabd1598
+  - id: 4eebe362-5552-5ed3-ba29-fdd2d8e1b3a4
+    name: resume_waiting_incidents
+    table: helpdesk.problem
+    phase: after
+    operations:
+      - update
+    order: 100
+    condition:
+      op: and
+      args:
+        - op: changed
+          arg:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        - op: eq
+          left:
+            path:
+              - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+          right:
+            value: resolved
+    actions:
+      - type: updateEach
+        forEach:
+          classId: 91446a86-8028-4d34-a501-b7cf0f59fdd5
+          where:
+            op: and
+            args:
+              - op: eq
+                left:
+                  path:
+                    - 9ab746a9-2006-53ab-91d8-ab351c2798af
+                right:
+                  path: []
+                  scope: record
+              - op: eq
+                left:
+                  path:
+                    - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+                right:
+                  value: on_hold
+              - op: eq
+                left:
+                  path:
+                    - 2eb33b17-491c-568d-ba0e-67e1192f5bab
+                right:
+                  value: awaiting_problem
+        target: self
+        values:
+          - fieldId: 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+            value:
+              value: in_progress
+    runAs: 32187bcc-314f-53f1-9a54-4ae3cabd1598
+  - id: 67632aa7-f5f0-47d3-8884-5c764a7b75fe
+    name: note_author
+    table: helpdesk.ticket_note
+    phase: before
+    operations:
+      - create
+    order: 10
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 9b1a0ff8-dce6-523d-b230-4aab99f3cfe4
+            value:
+              ctx: me
+  - id: c867a3d0-a509-4d57-bc14-c6a694eb2643
+    name: description_required
+    table: helpdesk.ticket
+    phase: before
+    operations:
+      - create
+      - update
+    order: 5
+    kind: invariant
+    condition:
+      op: empty
+      arg:
+        path:
+          - 88514acc-6b0d-4772-8604-43fe9a913446
+    actions:
+      - type: refuse
+        code: RuleRefused
+        message: A ticket requires a description.
+  - id: 8e851d58-c017-40c7-bda8-39e1fb2a138c
+    name: note_author_immutable
+    table: helpdesk.ticket_note
+    phase: before
+    operations:
+      - update
+    order: 10
+    kind: invariant
+    condition:
+      op: changed
+      arg:
+        path:
+          - 9b1a0ff8-dce6-523d-b230-4aab99f3cfe4
+    actions:
+      - type: refuse
+        code: RuleRefused
+        message: A note author is assigned at creation and cannot be changed.

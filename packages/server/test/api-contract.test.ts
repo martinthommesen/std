@@ -1,9 +1,9 @@
 /**
- * `v2-contract` (Contracts 10.1): the server and the shared `StdApi`
+ * `api-contract` (Contracts 10.1): the server and the shared `StdApi`
  * definition, which `/api/v1/openapi.json` is generated from, cannot drift.
  *
  * - The test client checks every `/api/v1` response of every suite against
- *   the definition (`packages/testing/src/v2-contract.ts`): a documented
+ *   the definition (`packages/testing/src/api-contract.ts`): a documented
  *   status, and a body that decodes with that status's schemas. This file
  *   drives every documented endpoint to a success and to an error, so each
  *   is checked at least once.

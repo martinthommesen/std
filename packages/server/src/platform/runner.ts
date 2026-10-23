@@ -30,6 +30,7 @@ import { decodeRows } from "../sql/rows.ts";
 import { STD_VERSION } from "../version.ts";
 import {
   compareLedger,
+  installedSetVersions,
   readLedger,
   refusalOf,
   LEDGER_COLUMNS,
@@ -148,7 +149,11 @@ export const checkPlatformMigrations: (
   ) {
     const sql = yield* SqlClient.SqlClient;
     const ledger = yield* readLedger(sql);
-    const refusal = refusalOf(compareLedger(migrations, ledger), false);
+
+    const refusal = refusalOf(
+      compareLedger(migrations, ledger, yield* installedSetVersions(sql)),
+      false
+    );
 
     if (refusal !== undefined) {
       return yield* refusal;

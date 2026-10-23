@@ -121,7 +121,7 @@ The fixture packages in `tooling/canaries/` are not workspace packages and are e
 | `records/` | read compiler (visibility, masking, projection, cursors, references, counts), save pipeline, history, outbox producer, the party rules (a user's individual, an individual's name; decision 0024), aggregates (owner-chain locks, the touched set, finalization and the aggregate save; `aggregateOperation`, `lockAggregates`; decision 0029), `saveBatch` (Step 3) | 2, 3, 4, 11.3 |
 | `http/` | generic record routes, `HttpApi` handlers, error mapping, schema-revision header, stale-request checks | 3.8, 6 |
 | `cli/` | the `std` command: `serve`, `worker` (Step 3), `wait-upgraded` (Step 5), `upgrade`, `doctor`, `schema status | resume | abandon`, `bootstrap-admin`(decision 0016),`schema pull`, `codegen` | 1.10, 8.5, 8.7 |
-| `doctor/` | `runDoctor`: the 17 read-only checks of `std doctor`, as a library function returning typed findings and the exit code | 1.10 |
+| `doctor/` | `runDoctor`: the 18 read-only checks of `std doctor`, as a library function returning typed findings and the exit code | 1.10 |
 | `hooks/` | record rules (Step 3): selection, `before` rules (with the settled mode and `applyDeriveRules` for aggregates), `after` rules as nested saves, run-as identities, `afterCommit` carriers and their executor, `aggregate` rules settling in memory (decision 0029), the `RecordRuleSaveHooks` layer (decision 0022) | 4.1, 4.9, 4.10 |
 | `outbox/` | claim, fenced `done` and failure updates, backoff (1E); the delivery worker (`std worker`), effect handlers, payloads, dead letters and metrics (3B, decision 0023) | 4.5, 4.6 |
 | `import/` | import jobs (Step 4) | 7 |

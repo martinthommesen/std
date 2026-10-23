@@ -15,13 +15,17 @@ import {
   TestDatabase,
   testDatabaseLayer,
 } from "../../testing/src/test-database.ts";
-import { MigrationStateRefused } from "../src/platform/ledger.ts";
+import {
+  compareLedger,
+  MigrationStateRefused,
+} from "../src/platform/ledger.ts";
 import {
   migrationChecksum,
   validateMigrations,
 } from "../src/platform/migration.ts";
 import { PLATFORM_MIGRATIONS } from "../src/platform/migrations.ts";
 import { migration0001 } from "../src/platform/migrations/0001-core.ts";
+import { migration0018 } from "../src/platform/migrations/0018-helpdesk-v3.ts";
 import {
   applyPendingMigrations,
   checkPlatformMigrations,
@@ -129,10 +133,60 @@ const startChild = (
   );
 
 describe("platform-migrations", () => {
+  it("optional-app prerequisites defer only unstarted migrations", () => {
+    for (const versions of [
+      new Map<string, number>(),
+      new Map([["helpdesk", 2]]),
+    ]) {
+      assert.deepStrictEqual(
+        compareLedger([migration0018], [], versions).pending,
+        []
+      );
+    }
+
+    assert.deepStrictEqual(
+      compareLedger([migration0018], [], new Map([["helpdesk", 3]])).pending,
+      [migration0018]
+    );
+
+    const applied = {
+      checksum: migrationChecksum(migration0018),
+      id: 18,
+      phase: "contract" as const,
+      progress: null,
+      state: "applied" as const,
+    };
+
+    assert.deepStrictEqual(
+      compareLedger([migration0018], [applied], new Map()).pending,
+      []
+    );
+    assert.deepStrictEqual(
+      compareLedger([migration0018], [applied], new Map()).incomplete,
+      []
+    );
+    assert.deepStrictEqual(
+      compareLedger(
+        [migration0018],
+        [{ ...applied, checksum: "wrong" }],
+        new Map()
+      ).changed,
+      [18]
+    );
+    assert.lengthOf(
+      compareLedger(
+        [migration0018],
+        [{ ...applied, state: "running" }],
+        new Map()
+      ).incomplete,
+      1
+    );
+  });
+
   it("migration lists are numbered from 1 without gaps and keep their checksums", () => {
     assert.deepStrictEqual(
       PLATFORM_MIGRATIONS.map((migration) => migration.id),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     );
     assert.strictEqual(
       migrationChecksum(migration0001),
@@ -238,7 +292,8 @@ describe("platform-migrations", () => {
             const empty = yield* Effect.exit(checkPlatformMigrations());
             assert.deepStrictEqual(
               stateRefusal(errorOf(empty))?.pending,
-              [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+              [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+              "Helpdesk migration 18 is deferred until its optional set reaches v3"
             );
 
             const applied = yield* runPlatformMigrations([migration0001]);

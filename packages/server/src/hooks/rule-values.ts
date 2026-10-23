@@ -16,7 +16,7 @@ import type { RecordImage } from "@std/conditions/evaluate-core";
 import type { RuleAssignment } from "@std/definitions/rule-definition";
 import { decodeIn, encodeOut } from "@std/values/codec";
 import type { FieldType } from "@std/values/field-type";
-import { isBigint, isNumber } from "@std/values/field-value";
+import { isBigint, isNumber, isString } from "@std/values/field-value";
 import type { DecodedInput } from "@std/values/field-value";
 import type { JsonValue } from "@std/values/json-value";
 import { isPlaintext, isSecretState } from "@std/values/write-only";
@@ -47,6 +47,33 @@ export interface ValueSources {
 
 const defect = (message: string): never => {
   throw new RangeError(`Record rule value: ${message}`);
+};
+
+const LINE_BREAK = /[\r\n\u2028\u2029]/u;
+
+const copiedValue = (
+  value: DecodedInput,
+  limit: number | undefined
+): DecodedInput => {
+  if (limit === undefined || value === null) {
+    return value;
+  }
+
+  if (!isString(value)) {
+    return defect("a first-line copy read a non-text field");
+  }
+
+  const characters: string[] = [];
+
+  for (const character of value) {
+    if (LINE_BREAK.test(character) || characters.length === limit) {
+      break;
+    }
+
+    characters.push(character);
+  }
+
+  return characters.join("");
 };
 
 const converted = (type: FieldType, json: JsonValue): DecodedInput => {
@@ -122,10 +149,13 @@ export const ruleValue = (
     if (from === "owner") {
       return sources.owner === undefined
         ? defect("owner values are read only while settling (4.9)")
-        : read(sources.owner, fieldId);
+        : copiedValue(read(sources.owner, fieldId), value.copy.firstLine);
     }
 
-    return read(from === "record" ? sources.record : sources.source, fieldId);
+    return copiedValue(
+      read(from === "record" ? sources.record : sources.source, fieldId),
+      value.copy.firstLine
+    );
   }
 
   return incremented(type, read(sources.record, value.increment));

@@ -35,13 +35,26 @@ import type {
 } from "../schema/change-set.ts";
 import type { DedicatedConnection } from "../sql/dedicated.ts";
 import type { DatabaseError } from "../sql/errors.ts";
+import type { WorkerWakeup } from "../sql/wake-up.ts";
 import { countDataViolations } from "./data-preflight.ts";
 import { readInstalledState } from "./installed-state.ts";
 import type { InstalledState } from "./installed-state.ts";
+import type { InstanceSettings } from "./instance-settings.ts";
 import { setHash, writeSetLayers } from "./layer-store.ts";
 import { SCHEMA_LIFECYCLE } from "./lifecycle.ts";
 import { readSetDirectory } from "./set-files.ts";
+import type { SetIdentityFailed } from "./set-identities.ts";
+import { ensureSetIdentities } from "./set-identities.ts";
 import { SetRefused } from "./set-refused.ts";
+
+/** Errors from definition loading or its service-record provisioning. */
+export type SetLoadError = ChangeSetError | SetRefused | SetIdentityFailed;
+
+/** Services used to apply definitions and provision their service records. */
+export type SetLoadServices =
+  | ChangeSetServices
+  | InstanceSettings
+  | WorkerWakeup;
 
 /** Options of a set load. */
 export interface LoadSetOptions extends ChangeSetOptions {
@@ -215,11 +228,7 @@ export const applySetLoad = Effect.fn("Config.applySetLoad")(
   function* applySetLoad(
     planned: PlannedSetLoad,
     options: ChangeSetOptions = {}
-  ): Effect.fn.Return<
-    ChangeSetResult,
-    ChangeSetError | SetRefused,
-    ChangeSetServices
-  > {
+  ): Effect.fn.Return<ChangeSetResult, SetLoadError, SetLoadServices> {
     const { upgrade, header, installed } = planned;
 
     if (upgrade.report.refusals.length > 0) {
@@ -250,12 +259,22 @@ export const applySetLoad = Effect.fn("Config.applySetLoad")(
       },
     };
 
-    return yield* applyChangeSet(
+    const result = yield* applyChangeSet(
       installed.state === null
         ? request
         : { ...request, expectedState: installed.state },
       options
     );
+
+    if (
+      header.name === "helpdesk" &&
+      header.version >= 3 &&
+      result.state !== "needs_attention"
+    ) {
+      yield* ensureSetIdentities();
+    }
+
+    return result;
   }
 );
 
@@ -269,7 +288,11 @@ export const applySetLoad = Effect.fn("Config.applySetLoad")(
 export const loadSet = Effect.fn("Config.loadSet")(function* loadSet(
   files: readonly NamedSetFile[],
   options: LoadSetOptions = {}
-): Effect.fn.Return<LoadedSet, ChangeSetError | SetRefused, ChangeSetServices> {
+): Effect.fn.Return<
+  LoadedSet,
+  ChangeSetError | SetRefused | SetIdentityFailed,
+  SetLoadServices
+> {
   const installed = yield* readInstalledState;
 
   const planned = yield* planSetLoad(files, installed, {
@@ -299,11 +322,7 @@ export const loadSetDirectory = Effect.fn("Config.loadSetDirectory")(
   function* loadSetDirectory(
     directory: string,
     options: LoadSetOptions = {}
-  ): Effect.fn.Return<
-    LoadedSet,
-    ChangeSetError | SetRefused,
-    ChangeSetServices
-  > {
+  ): Effect.fn.Return<LoadedSet, SetLoadError, SetLoadServices> {
     const files = yield* readSetDirectory(directory);
 
     return yield* loadSet(files, options);

@@ -235,6 +235,22 @@ describe("allowed-records", () => {
     );
   });
 
+  it("compares aggregate reference types by value regardless of JSON property order", () => {
+    const w = world();
+    assert.isTrue(
+      sameTypeApartFromAllowedRecords(
+        { aggregate: true, kind: "reference", targetClassId: w.ticket.id },
+        { aggregate: true, kind: "reference", targetClassId: w.ticket.id }
+      )
+    );
+    assert.isFalse(
+      sameTypeApartFromAllowedRecords(
+        { aggregate: true, kind: "reference", targetClassId: w.ticket.id },
+        { aggregate: false, kind: "reference", targetClassId: w.ticket.id }
+      )
+    );
+  });
+
   it("checks the condition as a filter over the target when it is stored", () => {
     const w = world();
     const base = { kind: "reference", targetClassId: w.asset.id } as const;

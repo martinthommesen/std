@@ -27,7 +27,7 @@ import { decodeRows } from "../src/sql/rows.ts";
 import { STD_VERSION } from "../src/version.ts";
 import { startServe, startWorker } from "./cli-support.ts";
 import { outboxTestLayer, subscribe } from "./outbox-support.ts";
-import { setUpAcme } from "./records-support.ts";
+import { USERS, setUpAcme } from "./records-support.ts";
 import {
   ACME,
   ACME_SET_DIRECTORY,
@@ -208,7 +208,7 @@ describe("rolling-groundwork", () => {
 
           const subscriptionId = yield* subscribe({
             classId: PLATFORM_CLASS_IDS.role,
-            identityId: SYSTEM_USER_ID,
+            identityId: USERS.alice,
           });
 
           const role = addRole("version_floor_probe");
@@ -229,8 +229,23 @@ describe("rolling-groundwork", () => {
         Effect.gen(function* scenario2() {
           yield* runUpgrade({ sets: [ACME_SET_DIRECTORY] });
           const ledger = yield* readLedger(yield* SqlClient.SqlClient);
-          assert.strictEqual(ledger.length, 17);
-          assert.isTrue(ledger.every((entry) => entry.phase === "expand"));
+
+          const applicable = PLATFORM_MIGRATIONS.filter(
+            (migration) =>
+              migration.kind !== "data" || migration.requiredSet === undefined
+          );
+
+          assert.deepStrictEqual(
+            ledger.map((entry) => entry.id),
+            applicable.map((migration) => migration.id)
+          );
+
+          for (const migration of applicable) {
+            assert.strictEqual(
+              ledger.find((entry) => entry.id === migration.id)?.phase,
+              migration.phase
+            );
+          }
         })
     );
 
@@ -345,6 +360,9 @@ describe("rolling-groundwork", () => {
         Effect.gen(function* prePhaseDataMigration() {
           yield* runUpgrade({ sets: [ACME_SET_DIRECTORY] });
           const sql = yield* SqlClient.SqlClient;
+          // A pre-phase ledger predates the first contract migration. Restore
+          // that historical prefix before removing its phase column.
+          yield* sql`DELETE FROM core.platform_migration WHERE id > 17`;
           yield* sql.unsafe(
             "ALTER TABLE core.platform_migration DROP COLUMN phase"
           );
@@ -360,7 +378,10 @@ describe("rolling-groundwork", () => {
           };
 
           yield* runDataMigrations({
-            migrations: [...PLATFORM_MIGRATIONS, migration],
+            migrations: [
+              ...PLATFORM_MIGRATIONS.filter((entry) => entry.id <= 17),
+              migration,
+            ],
           });
           const ledger = yield* readLedger(sql);
           assert.deepStrictEqual(ledger.at(-1), {

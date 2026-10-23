@@ -24,6 +24,8 @@ import {
   Array as SchemaArray,
   Boolean as SchemaBoolean,
   Json,
+  Int,
+  isGreaterThanOrEqualTo,
   Literal,
   Literals,
   NullOr,
@@ -72,6 +74,8 @@ export const RuleValueSchema = Union([
   Struct({
     copy: Struct({
       fieldId: NullOr(DefinitionIdSchema),
+      /** First line, truncated to this many Unicode code points. */
+      firstLine: optionalKey(Int.check(isGreaterThanOrEqualTo(1))),
       from: CopySourceSchema,
     }),
   }),

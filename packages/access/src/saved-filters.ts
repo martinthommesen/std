@@ -19,7 +19,6 @@ import type { ClassView, FieldInfo } from "@std/conditions/class-view";
 import { printCondition } from "@std/conditions/syntax-print";
 import { withChoices } from "@std/definitions/condition-view";
 import type { DefinitionId } from "@std/definitions/ids";
-import { apiAttributeNameOf } from "@std/definitions/names";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import type { MetaSavedFilter } from "@std/definitions/table-metadata";
 import type { JsonValue } from "@std/values/json-value";
@@ -157,39 +156,4 @@ export const savedFiltersFor = (
             ];
       });
   });
-};
-
-// A field as `/api/v1` names it.
-const apiNamed = (info: FieldInfo | undefined): FieldInfo | undefined =>
-  info === undefined
-    ? undefined
-    : { ...info, name: apiAttributeNameOf(info.name) };
-
-/**
- * The text of a saved filter's condition for a caller in `/api/v1` names
- * (Contracts 10.3), as the API's `condition` parameter takes it, or undefined
- * when the caller may not use it.
- *
- * @param snapshot - The configuration at the request's revision.
- * @param caller - The caller's roles.
- * @param classId - The endpoint's class E.
- * @param condition - The stored condition.
- * @returns The filter text with API names.
- */
-export const apiFilterText = (
-  snapshot: ConfigSnapshot,
-  caller: Caller,
-  classId: DefinitionId,
-  condition: JsonValue
-): string | undefined => {
-  const view = callerFilterView(snapshot, caller);
-
-  return usableText(
-    {
-      ...view,
-      field: (owner, fieldId) => apiNamed(view.field(owner, fieldId)),
-    },
-    classId,
-    condition
-  );
 };

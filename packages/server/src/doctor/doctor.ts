@@ -24,6 +24,7 @@
  * | 15 | UTF8 encoding, `client_connection_check_interval` 0 | `check-server` |
  * | 16 | latest definition revision equals the effective record | `check-config` |
  * | 17 | observed Postgres TLS protocol and cipher (informational) | `check-server` |
+ * | 18 | service identities and exclusive role assignments | `check-service-identities` |
  */
 import type { DefinitionInvalid } from "@std/definitions/problems";
 import { Effect, Schema } from "effect";
@@ -67,6 +68,7 @@ import {
   checkServerSettings,
   checkUnicodeVersion,
 } from "./check-server.ts";
+import { checkServiceIdentities } from "./check-service-identities.ts";
 import { migrationTables } from "./described.ts";
 import { exitCodeOf, finding } from "./finding.ts";
 import type { Finding } from "./finding.ts";
@@ -175,6 +177,7 @@ const allChecks = Effect.fn("Doctor.checks")(function* allChecks(
     ...(yield* checkLevelRows(snapshot, exists)),
     ...(yield* checkAuditUsers(snapshot, exists)),
     ...(yield* checkExternalIdentities),
+    ...(yield* checkServiceIdentities(snapshot, exists)),
     ...(yield* checkProtected(snapshot, layers, options.coreDirectory)),
   ];
 });

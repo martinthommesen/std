@@ -1,4 +1,3 @@
-import { apiFilterText } from "@std/access/saved-filters";
 /**
  * The fixed resources of `/api/v1` (Contracts 10.1):
  *
@@ -45,6 +44,7 @@ import { displayName, signIn, signOut } from "../../auth/sessions.ts";
 import { Catalog } from "../../catalog/catalog.ts";
 import type { InstanceSettings } from "../../config/instance-settings.ts";
 import { currentReadScope } from "../../records/read-records.ts";
+import { savedFiltersInApiNames } from "../../records/saved-filter-names.ts";
 import { RequestRevision } from "../../sql/request-revision.ts";
 import { Transactions } from "../../sql/transactions.ts";
 import { DEFINITION_KIND_OF_TABLE } from "../change-sets.ts";
@@ -376,7 +376,7 @@ export const FixedRoutes = Layer.unwrap(
 
       return described === undefined || found === undefined
         ? yield* new UnknownTable({ table: collection })
-        : { classId: found.id, described };
+        : { actor, classId: found.id, described, snapshot };
     });
 
     // A session request, after its stated revision: one request
@@ -553,10 +553,10 @@ export const FixedRoutes = Layer.unwrap(
 
     const table = metadataRoute((origin, collection) =>
       Effect.gen(function* tableRoute() {
-        const { described } = yield* metadataOf(collection);
+        const { classId, described, snapshot, actor } =
+          yield* metadataOf(collection);
+
         const { revision } = yield* RequestRevision;
-        const snapshot = yield* (yield* Catalog).current;
-        const actor = yield* Actor;
 
         return jsonAnswer(
           {
@@ -571,17 +571,12 @@ export const FixedRoutes = Layer.unwrap(
             href: `${origin}${METADATA_PATH}/${collection}`,
             id: collection,
             resourceType: typeNameOf(snapshot, described.id),
-            // Saved filters in v2 names, as `condition` takes them.
-            savedFilters: (described.savedFilters ?? []).flatMap((saved) => {
-              const filter = apiFilterText(
-                snapshot,
-                actor,
-                described.id,
-                saved.condition
-              );
-
-              return filter === undefined ? [] : [{ ...saved, filter }];
-            }),
+            savedFilters: yield* savedFiltersInApiNames(
+              snapshot,
+              actor,
+              classId,
+              described.savedFilters ?? []
+            ),
             schemaRevision: revision,
           },
           200

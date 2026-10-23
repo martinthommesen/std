@@ -21,7 +21,9 @@ rows:
     level: mandatory
     requirement: "Every ITIL behavior of the helpdesk set is shipped configuration (choices, record rules, access rules), so an install changes it through overrides and local rules without code."
     note: "ITIL 4 describes practices, not tool states; STD's state models are its own statement of them."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#a local rule replaces one priority cell without changing the others
   - id: STD-ITIL@14/C14/14.1/every-surface
     source: "Contracts 14.1 (third bullet); plan Step 3 gate (ITIL)"
     level: mandatory
@@ -31,7 +33,9 @@ rows:
     source: "Contracts 14.1; plan Step 3 gate (rules follow the concrete class)"
     level: mandatory
     requirement: "Rules follow the record's concrete class: an incident saved through /api/v1/helpdeskTicket gets the incident's derived priority and resolved_at."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#labels clear after derivation, supplied labels survive, and parent endpoints use incident rules
   - id: STD-ITIL@14/C14/14.1/tmf-over-itil
     source: "Contracts 14.1 (TM Forum takes priority over ITIL; decision 0021, decision 34)"
     level: mandatory
@@ -42,52 +46,72 @@ rows:
     level: mandatory
     requirement: "An incident has impact and urgency, each a choice of 1 (high), 2 (medium) or 3 (low), always set; each defaults to 3, so a TMF621 create naming only severity, or a severity STD does not map, is valid."
     note: "ITIL 4 incident management practice: an incident's priority weighs its impact on the business against how urgently it needs resolving."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
   - id: STD-ITIL@14/C14/14.2/priority/impact-1-urgency-1
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
     requirement: "When impact or urgency changes to impact 1 and urgency 1, priority becomes 1, set by its own shipped derive rule."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
   - id: STD-ITIL@14/C14/14.2/priority/impact-1-urgency-2
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
     requirement: "When impact or urgency changes to impact 1 and urgency 2, priority becomes 2, set by its own shipped derive rule."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
   - id: STD-ITIL@14/C14/14.2/priority/impact-2-urgency-1
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
     requirement: "When impact or urgency changes to impact 2 and urgency 1, priority becomes 2, set by its own shipped derive rule."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
   - id: STD-ITIL@14/C14/14.2/priority/impact-1-urgency-3
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
     requirement: "When impact or urgency changes to impact 1 and urgency 3, priority becomes 3, set by its own shipped derive rule."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
   - id: STD-ITIL@14/C14/14.2/priority/impact-2-urgency-2
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
     requirement: "When impact or urgency changes to impact 2 and urgency 2, priority becomes 3, set by its own shipped derive rule."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
   - id: STD-ITIL@14/C14/14.2/priority/impact-3-urgency-1
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
     requirement: "When impact or urgency changes to impact 3 and urgency 1, priority becomes 3, set by its own shipped derive rule."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
   - id: STD-ITIL@14/C14/14.2/priority/impact-2-urgency-3
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
     requirement: "When impact or urgency changes to impact 2 and urgency 3, priority becomes 4, set by its own shipped derive rule."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
   - id: STD-ITIL@14/C14/14.2/priority/impact-3-urgency-2
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
     requirement: "When impact or urgency changes to impact 3 and urgency 2, priority becomes 4, set by its own shipped derive rule."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
   - id: STD-ITIL@14/C14/14.2/priority/impact-3-urgency-3
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
     requirement: "When impact or urgency changes to impact 3 and urgency 3, priority becomes 5, set by its own shipped derive rule."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
   - id: STD-ITIL@14/C14/14.2/priority-explicit-wins
     source: "Contracts 14.2 (first bullet); decision 0021, decision 53"
     level: mandatory
@@ -102,13 +126,17 @@ rows:
     source: "Contracts 14.2 (first bullet)"
     level: mandatory
     requirement: "An admin changes one matrix cell by deactivating its shipped rule and adding a local rule; the other cells keep working."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#a local rule replaces one priority cell without changing the others
   - id: STD-ITIL@14/C14/14.2/states
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
     requirement: "Incident states are new, in_progress, on_hold, resolved, closed and canceled."
-    note: "ITIL 4 incident management practice: an incident is an unplanned interruption or reduction in quality of a service, worked until service is restored."
-    status: pending
+    note: "STD treats an unexpected service failure or deterioration as an incident and tracks recovery to normal operation. Paraphrase of the ITIL 4 incident management practice; see PeopleCert, ITIL 4 Practitioner: Incident Management, Key Concepts (https://www.peoplecert.org/browse-certifications/it-governance-and-service-management/ITIL-1/itil4-practices-incident-management-3684)."
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
   - id: STD-ITIL@14/C14/14.2/hold-reason
     source: "Contracts 14.2 (second bullet); Contracts 14.4 rule kinds (incident derive)"
     level: mandatory
@@ -118,32 +146,44 @@ rows:
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
     requirement: "From new an incident may move only to in_progress, on_hold, resolved or canceled; a user's write of any other status is InvalidTransition (422) and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
   - id: STD-ITIL@14/C14/14.2/transitions/from-in-progress
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
     requirement: "From in_progress an incident may move only to on_hold, resolved or canceled; a user's write of any other status is InvalidTransition (422) and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
   - id: STD-ITIL@14/C14/14.2/transitions/from-on-hold
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
     requirement: "From on_hold an incident may move only to in_progress, resolved or canceled; a user's write of any other status is InvalidTransition (422) and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
   - id: STD-ITIL@14/C14/14.2/transitions/from-resolved
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
     requirement: "From resolved an incident may move only to in_progress (reopen) or closed; a user's write of any other status is InvalidTransition (422) and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
   - id: STD-ITIL@14/C14/14.2/transitions/final
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
     requirement: "closed and canceled are final: any status change from them is InvalidTransition and writes nothing."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
   - id: STD-ITIL@14/C14/14.2/transition-guards-kind
     source: "Contracts 14.4 rule kinds (incident guard)"
     level: mandatory
     requirement: "The transition rules are one guard per source state, so they judge users' writes and never the saves that aggregate settling persists."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#settled saves bypass incident transition guards
   - id: STD-ITIL@14/C14/14.2/resolution-required
     source: "Contracts 14.2 (third bullet); Contracts 14.1"
     level: mandatory
@@ -154,13 +194,17 @@ rows:
     source: "Contracts 14.2 (third bullet); Contracts 14.4 rule kinds (ticket derive)"
     level: mandatory
     requirement: "Entering resolved sets resolved_at unless the write gives it; leaving resolved (reopen) clears it; entering closed keeps the resolution fields and resolved_at."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#hold defaults, writable resolution fields, and bounded Unicode titles are shipped derives
   - id: STD-ITIL@14/C14/14.2/major-incident-role
     source: "Contracts 14.2 (fourth bullet)"
     level: mandatory
     requirement: "Only the major_incident_manager role can set major_incident (an access rule on the field)."
     note: "ITIL 4 incident management practice: a major incident is handled by its own procedure, under a dedicated manager."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#major incident permission holds through the API while priority never clears the flag and children resolve together
   - id: STD-ITIL@14/C14/14.2/major-incident-priority
     source: "Contracts 14.2 (fourth bullet); Contracts 14.1"
     level: mandatory
@@ -180,69 +224,93 @@ rows:
     source: "Contracts 14.2 (fourth bullet)"
     level: mandatory
     requirement: "A shipped saved filter lists open major incidents."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#major incident permission holds through the API while priority never clears the flag and children resolve together
   - id: STD-ITIL@14/C14/14.2/major-incident-children
     source: "Contracts 14.2 (fourth bullet)"
     level: mandatory
     requirement: "Child incidents name their major incident through parent_incident; resolving the major incident resolves its open children with the same resolution, by an after-write rule in the same transaction."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#major incident permission holds through the API while priority never clears the flag and children resolve together
   - id: STD-ITIL@14/C14/14.3/states
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
     requirement: "Problem states are new, assess, root_cause_analysis, fix_in_progress, on_hold, resolved, closed and canceled."
-    note: "ITIL 4 problem management practice: a problem is a cause, or potential cause, of one or more incidents; the practice identifies, analyses and controls problems and their errors."
-    status: pending
+    note: "STD tracks investigations into the faults behind service interruptions so teams can prevent recurrence. Concept reference: PeopleCert, ITIL 4 Practitioner Problem Management, https://www.peoplecert.org/browse-certifications/it-governance-and-service-management/ITIL-1/itil4-practices-problem-management-3688."
+    status: tested
+    tests:
+      - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
   - id: STD-ITIL@14/C14/14.3/transitions/from-new
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
     requirement: "From new a problem may move only to assess, root_cause_analysis or canceled; a user's write of any other status is InvalidTransition and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
   - id: STD-ITIL@14/C14/14.3/transitions/from-assess
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
     requirement: "From assess a problem may move only to root_cause_analysis or canceled; a user's write of any other status is InvalidTransition and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
   - id: STD-ITIL@14/C14/14.3/transitions/from-root-cause-analysis
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
     requirement: "From root_cause_analysis a problem may move only to fix_in_progress, on_hold, resolved or canceled; a user's write of any other status is InvalidTransition and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
   - id: STD-ITIL@14/C14/14.3/transitions/from-fix-in-progress
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
     requirement: "From fix_in_progress a problem may move only to resolved, root_cause_analysis, on_hold or canceled; a user's write of any other status is InvalidTransition and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
   - id: STD-ITIL@14/C14/14.3/transitions/from-on-hold
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
     requirement: "From on_hold a problem may move only to root_cause_analysis or canceled; a user's write of any other status is InvalidTransition and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
   - id: STD-ITIL@14/C14/14.3/transitions/from-resolved
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
     requirement: "From resolved a problem may move only to closed or root_cause_analysis; a user's write of any other status is InvalidTransition and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
   - id: STD-ITIL@14/C14/14.3/transitions/final
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
     requirement: "closed and canceled are final for a problem."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
   - id: STD-ITIL@14/C14/14.3/transition-guards-kind
     source: "Contracts 14.4 rule kinds (problem guard)"
     level: mandatory
     requirement: "The problem transition rules are one guard per source state (users' writes only)."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-problem.test.ts#settled saves bypass problem transition guards
   - id: STD-ITIL@14/C14/14.3/known-error-workaround
     source: "Contracts 14.3 (second bullet); Contracts 14.1"
     level: mandatory
     requirement: "The problem form requires a non-empty workaround while known_error is set; the APIs accept the flag without one."
-    note: "ITIL 4 problem management practice: a known error is a problem that has been analysed but not resolved; a workaround reduces or removes its impact while no full resolution exists."
+    note: "STD records an understood fault separately from its permanent repair and keeps temporary recovery guidance available. Concept reference: PeopleCert, ITIL 4 Practitioner Problem Management, https://www.peoplecert.org/browse-certifications/it-governance-and-service-management/ITIL-1/itil4-practices-problem-management-3688."
     status: pending
   - id: STD-ITIL@14/C14/14.3/known-error-any-state
     source: "Contracts 14.3 (second bullet)"
     level: mandatory
     requirement: "A problem is a known error from the moment the flag is set, whatever its state; the flag is not a lifecycle step."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-problem.test.ts#known errors work in every state without API-only workaround or root-cause restrictions
   - id: STD-ITIL@14/C14/14.3/root-cause-required
     source: "Contracts 14.3 (second bullet); Contracts 14.1"
     level: mandatory
@@ -257,17 +325,23 @@ rows:
     source: "Contracts 14.3 (third bullet)"
     level: mandatory
     requirement: "When a problem enters resolved, exactly its linked incidents that are on_hold with awaiting_problem return to in_progress (an after-write rule); none is resolved automatically."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-problem.test.ts#resolving a problem returns exactly its awaiting-problem incidents to work in one operation
   - id: STD-ITIL@14/C14/14.4/ticket-derive-short-description
     source: "Contracts 14.4 rule kinds (ticket derive); Contracts 11.2 name"
     level: mandatory
     requirement: "When short_description is absent on create, a derive rule fills it from the first line of description, cut to 160 code points."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#hold defaults, writable resolution fields, and bounded Unicode titles are shipped derives
   - id: STD-ITIL@14/C14/14.4/ticket-derive-status-changed-at
     source: "Contracts 14.4 rule kinds (ticket derive); Contracts 11.2 statusChangeDate"
     level: mandatory
     requirement: "Every status change sets status_changed_at, by a derive rule."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/itil-incident.test.ts#hold defaults, writable resolution fields, and bounded Unicode titles are shipped derives
   - id: STD-ITIL@14/C14/14.4/guards-users-only
     source: "Contracts 14.4 rule kinds; Contracts 4.10"
     level: mandatory

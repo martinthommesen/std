@@ -22,7 +22,6 @@ import {
   CORE_NAMESPACE_ID,
   PERMISSION_IDS,
   PLATFORM_CLASS_IDS,
-  SYSTEM_USER_ID,
   USER_CLASS_ID,
   USER_ROLE_CLASS_ID,
 } from "@std/definitions/well-known";
@@ -78,6 +77,7 @@ import {
   recordPath,
   resourceOf,
 } from "./reads-support.ts";
+import { USERS } from "./records-support.ts";
 import { CHANGE_SETS, postChangeSet } from "./schema-paths-support.ts";
 import {
   ACME,
@@ -605,7 +605,7 @@ const REFERENCE_CASES: Readonly<
           deadLetter: "block",
           enabled: true,
           id: freshId(),
-          identityId: SYSTEM_USER_ID,
+          identityId: USERS.alice,
           kind: "subscription",
           maxAttempts: 10,
           name: "k_sub",
@@ -763,7 +763,7 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
         deadLetter: "block",
         enabled: true,
         id: subscription,
-        identityId: SYSTEM_USER_ID,
+        identityId: USERS.alice,
         kind: "subscription",
         maxAttempts: 10,
         name: "walk_sub",
@@ -1206,7 +1206,7 @@ const OPERATION_CASES: Readonly<Record<Operation["op"], OperationCase>> = {
           deadLetter: "block",
           enabled: true,
           id,
-          identityId: SYSTEM_USER_ID,
+          identityId: USERS.alice,
           kind: "subscription",
           maxAttempts: 10,
           name: "m_sub",

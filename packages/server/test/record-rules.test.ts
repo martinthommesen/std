@@ -23,7 +23,6 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import type { Condition } from "@std/definitions/condition";
 import type { RuleAction, RuleValue } from "@std/definitions/rule-definition";
-import { SYSTEM_USER_ID } from "@std/definitions/well-known";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Exit, Layer, Option } from "effect";
@@ -48,6 +47,7 @@ import { loadRecord } from "../src/records/save-sql.ts";
 import { suppliedFieldsOf } from "../src/records/supplied-fields.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
+import { applyChangeSet } from "../src/schema/change-set.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { actorOf, setUpAcme, USERS } from "./records-support.ts";
@@ -1153,26 +1153,29 @@ describe("record-rules", () => {
             subscriptionId: carrier,
           });
 
-          yield* change([
-            {
-              definition: {
-                classId: PARENT.id,
-                condition: null,
-                deadLetter: "block",
-                enabled: true,
-                id: carrier,
-                identityId: SYSTEM_USER_ID,
-                kind: "subscription",
-                maxAttempts: 10,
-                name: "rr_parent_done",
-                operations: ["update"],
-                owner: { layer: "local" },
-                protected: false,
+          yield* applyChangeSet({
+            operations: [
+              {
+                definition: {
+                  classId: PARENT.id,
+                  condition: null,
+                  deadLetter: "block",
+                  enabled: true,
+                  id: carrier,
+                  identityId: USERS.alice,
+                  kind: "subscription",
+                  maxAttempts: 10,
+                  name: "rr_parent_done",
+                  operations: ["update"],
+                  owner: { layer: "local" },
+                  protected: false,
+                },
+                op: "createSubscription",
               },
-              op: "createSubscription",
-            },
-            rule.op,
-          ]);
+              rule.op,
+            ],
+            requester: { roleIds: [], userId: USERS.alice },
+          });
 
           const deliveries = () =>
             values(
@@ -1221,7 +1224,7 @@ describe("record-rules", () => {
 
           const [actor, cause] = (written[0] ?? "").split("|");
 
-          assert.strictEqual(actor, SYSTEM_USER_ID);
+          assert.strictEqual(actor, USERS.alice);
           assert.deepStrictEqual(JSON.parse(cause ?? "null"), {
             kind: "after_commit",
             parentChangeId: done.changeId,
@@ -1229,14 +1232,17 @@ describe("record-rules", () => {
           });
 
           // A disabled carrier takes no delivery, so its rule does not run.
-          yield* change([
-            {
-              changes: { enabled: false },
-              id: carrier,
-              op: "update",
-              version: 1,
-            },
-          ]);
+          yield* applyChangeSet({
+            operations: [
+              {
+                changes: { enabled: false },
+                id: carrier,
+                op: "update",
+                version: 1,
+              },
+            ],
+            requester: { roleIds: [], userId: USERS.alice },
+          });
 
           const other = yield* createParent({ name: "ac-2" });
 

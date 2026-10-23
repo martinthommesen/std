@@ -25,6 +25,8 @@ import { userTables } from "./user-table.ts";
 /** Who acts: the user and the effective role IDs. */
 export interface ActingUser extends Caller {
   readonly userId: DefinitionId;
+  /** The human who started this chain, retained across run-as switches. */
+  readonly origin?: { readonly userId: DefinitionId };
 }
 
 /**
