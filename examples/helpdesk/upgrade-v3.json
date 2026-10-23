@@ -902,18 +902,18 @@
     },
     {
       "id": "12ab5519-d676-40ec-9314-a0920506ce45",
-      "category": "recordRules",
-      "name": "The cascade service reads matching incidents and updates only their lifecycle and resolution fields."
+      "category": "accessRules",
+      "name": ""
     },
     {
       "id": "8047e6d0-abe7-4899-a280-107b6f2c1f50",
-      "category": "recordRules",
-      "name": "The cascade service reads matching incidents and updates only their lifecycle and resolution fields."
+      "category": "accessRules",
+      "name": ""
     },
     {
       "id": "4450b879-eed0-419d-8f56-63c6c26a8ffd",
-      "category": "recordRules",
-      "name": "The cascade service reads matching incidents and updates only their lifecycle and resolution fields."
+      "category": "accessRules",
+      "name": ""
     },
     {
       "id": "67632aa7-f5f0-47d3-8884-5c764a7b75fe",

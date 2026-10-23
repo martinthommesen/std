@@ -58,6 +58,7 @@ import {
 } from "@std/definitions/record-rules";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
+  SYSTEM_USER_ID,
   PARTY_CLASS_IDS,
   PARTY_FIELD_IDS,
   USER_CLASS_ID,
@@ -74,6 +75,7 @@ import { Effect, Option, Result } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
 
 import { Actor } from "../auth/actor.ts";
+import { protectServiceIdentity } from "../auth/service-identity-policy.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import type { CurrentTransaction } from "../sql/transaction-context.ts";
 import { Transactions } from "../sql/transactions.ts";
@@ -165,6 +167,8 @@ export interface SaveInput {
 
 /** A create: a record of exactly the endpoint's class (2.2 item 5). */
 export interface CreateInput extends SaveInput {
+  /** Stable record ID for internal system-user provisioning only. */
+  readonly fixedId?: string;
   /** The body's values object, as parsed JSON. */
   readonly body: unknown;
 }
@@ -847,6 +851,13 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     const hooks = yield* SaveHooks;
     const classId = input.endpointClassId;
 
+    if (
+      input.fixedId !== undefined &&
+      (yield* Actor).userId !== SYSTEM_USER_ID
+    ) {
+      return yield* new NotAllowed();
+    }
+
     yield* refuseRetiredClass(snapshot, classId);
 
     const resolved = yield* resolveBody(snapshot, input, body, "create");
@@ -941,13 +952,16 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
         ])
       : numbered;
 
+    yield* protectServiceIdentity(snapshot, classId, input.fixedId, assigned);
+
     const writes = yield* columnWrites(fields, assigned);
 
     const id = yield* insertRecord(
       snapshot,
       classId,
       (yield* Actor).userId,
-      writes
+      writes,
+      input.fixedId
     ).pipe(mapConstraints(snapshot, "write", shown));
 
     const after = yield* reload(snapshot, classId, id);
@@ -1212,6 +1226,14 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
             "update"
           );
 
+    yield* protectServiceIdentity(
+      snapshot,
+      classId,
+      record.id,
+      new Map([...evaluated.entries].map(([id, entry]) => [id, entry.json])),
+      record
+    );
+
     const fields = effectiveById(snapshot, classId);
     const rules = rulesById(snapshot, fields, { input, update: true });
     const proposed = proposeUpdate(rules, evaluated, record);
@@ -1249,6 +1271,13 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     });
 
     const proposal = finalizeUpdate(rules, hooked, record);
+    yield* protectServiceIdentity(
+      snapshot,
+      classId,
+      record.id,
+      changedValues(fields, proposal.values, record),
+      record
+    );
 
     // Recomputed from the final candidate: a hook may restore a value
     // (no-op again) or add fields, which the existing state must allow too.
@@ -1430,6 +1459,14 @@ const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
     const { record } = yield* lockExisting(snapshot, input, "FOR UPDATE");
 
     yield* refusePlatformTable(snapshot, record.classId);
+    yield* protectServiceIdentity(
+      snapshot,
+      record.classId,
+      record.id,
+      new Map(),
+      record,
+      "delete"
+    );
 
     yield* access.checkExisting({
       action: "delete",

@@ -1,5 +1,6 @@
 /** Problem lifecycle and its incident continuation rule (Contracts 14.3). */
 import { assert, describe, it } from "@effect/vitest";
+import { HELPDESK_CASCADE_USER_ID } from "@std/definitions/well-known";
 import { Effect } from "effect";
 import { TestClock } from "effect/testing";
 
@@ -15,6 +16,7 @@ import {
   reference,
   recordServices,
 } from "./itil-support.ts";
+import { values } from "./schema-support.ts";
 import { asObject, textOf } from "./v2-support.ts";
 
 const TRANSITIONS = {
@@ -192,6 +194,21 @@ describe("itil-problem", () => {
           { status: "resolved" },
           "helpdeskProblem",
           "agent"
+        );
+
+        assert.deepStrictEqual(
+          yield* values(
+            `SELECT c.actor_id::text AS value FROM core.change c
+           JOIN core.change parent ON parent.id::text = c.cause ->> 'parentChangeId'
+           WHERE c.record_id = $1::uuid AND parent.record_id = $2::uuid
+             AND c.cause ->> 'kind' = 'hook' AND c.cause ->> 'hookId' = $3`,
+            [
+              textOf(waiting.id),
+              textOf(problem.id),
+              "4eebe362-5552-5ed3-ba29-fdd2d8e1b3a4",
+            ]
+          ),
+          [HELPDESK_CASCADE_USER_ID]
         );
 
         for (const record of [waiting, vendor, unrelated, active]) {

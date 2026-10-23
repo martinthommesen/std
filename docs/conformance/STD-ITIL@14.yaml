@@ -133,7 +133,7 @@ rows:
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
     requirement: "Incident states are new, in_progress, on_hold, resolved, closed and canceled."
-    note: "ITIL 4 incident management practice: an incident is an unplanned interruption or reduction in quality of a service, worked until service is restored."
+    note: "STD treats an unexpected service failure or deterioration as an incident and tracks recovery to normal operation. Paraphrase of the ITIL 4 incident management practice; see PeopleCert, ITIL 4 Practitioner: Incident Management, Key Concepts (https://www.peoplecert.org/browse-certifications/it-governance-and-service-management/ITIL-1/itil4-practices-incident-management-3684)."
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies

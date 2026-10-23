@@ -1,6 +1,8 @@
 /** The incident part of Contracts 14, through the generic TMF630 API. */
 import { assert, describe, it } from "@effect/vitest";
+import { StdApiV2 } from "@std/api/v2/api";
 import { ConfigSnapshot } from "@std/definitions/snapshot";
+import { HELPDESK_CASCADE_USER_ID } from "@std/definitions/well-known";
 import { Effect, Exit } from "effect";
 import { TestClock } from "effect/testing";
 
@@ -8,6 +10,7 @@ import {
   HELPDESK,
   HelpdeskFixture,
 } from "../../testing/src/helpdesk-fixture.ts";
+import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { editDefinition } from "../src/config/config-service.ts";
 import { updateRecord } from "../src/records/save-pipeline.ts";
@@ -22,7 +25,7 @@ import {
   recordServices,
   reference,
 } from "./itil-support.ts";
-import { addRecordRule, change } from "./schema-support.ts";
+import { addRecordRule, change, values } from "./schema-support.ts";
 import { asArray, asObject, textOf } from "./v2-support.ts";
 
 const TRANSITIONS = {
@@ -465,6 +468,20 @@ describe("itil-incident", () => {
           (yield* readIncident(client, textOf(other.id))).status,
           "new"
         );
+        assert.deepStrictEqual(
+          yield* values(
+            `SELECT c.actor_id::text AS value FROM core.change c
+           JOIN core.change parent ON parent.id::text = c.cause ->> 'parentChangeId'
+           WHERE c.record_id = $1::uuid AND parent.record_id = $2::uuid
+             AND c.cause ->> 'kind' = 'hook' AND c.cause ->> 'hookId' = $3`,
+            [
+              textOf(child.id),
+              textOf(parent.id),
+              "3ec1dc80-5f8a-5689-9c9f-cca9e6530f94",
+            ]
+          ),
+          [HELPDESK_CASCADE_USER_ID]
+        );
         const snapshot = yield* (yield* Catalog).refresh;
         const filters = snapshot.savedFiltersOf(HELPDESK.incident);
         assert.isTrue(filters.some((filter) => filter.name === "open_major"));
@@ -546,16 +563,28 @@ describe("itil-incident", () => {
   );
   it.effect("a description is required on create and cannot be cleared", () =>
     Effect.gen(function* requiredDescription() {
-      const client = yield* clientFor();
+      const http = yield* TestHttpClient;
+      const fixture = yield* HelpdeskFixture;
 
-      const absent = yield* client.records
-        .create({
-          params: { table: "helpdeskIncident" },
-          payload: { shortDescription: "Title only" },
-        })
-        .pipe(Effect.result);
+      const token = yield* http.signIn(
+        fixture.admin.login,
+        fixture.admin.password
+      );
 
-      assert.strictEqual(absent._tag, "Failure");
+      const absent = yield* http.request(
+        "POST",
+        StdApiV2.groups.records.endpoints.create.path.replace(
+          ":table",
+          "helpdeskIncident"
+        ),
+        {
+          body: { shortDescription: "Title only" },
+          token,
+        }
+      );
+
+      assert.strictEqual(absent.status, 422);
+      assert.strictEqual(asObject(absent.json).code, "RuleRefused");
       const ticket = yield* createTicket();
       assert.strictEqual(
         (yield* patchResponse(ticket, { description: null })).status,

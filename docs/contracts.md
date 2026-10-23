@@ -259,6 +259,7 @@ Checks:
 16. Each definition's latest `core.definition_revision` row equals its effective record (4.4). A row written before a release added a property is read with that property's documented default (absent `numberPrefix` and `choices` are null), so old rows are not drift and real differences still are [decision 0017].
 
 17. Observed Postgres connection TLS protocol and cipher from `pg_stat_ssl`, or plaintext (informational: `databaseTls`); startup enforces the transport policy.
+18. When helpdesk v3 is installed, its reserved cascade identity exists, is active and passwordless, holds exactly its cascade role, and no other user holds that role. Failures are errors; loading the set again repairs them through system-user saves.
 
 ### Acceptance tests
 
@@ -425,7 +426,8 @@ Alternatives on their own trade-offs (the same list as the plan's storage decisi
 - `core.access_rule`: `effect` (allow or deny), `roles`, `class` (one class or `*`), `target` (records, or fields as a list or `*`), `actions` (read, create, update, delete; field rules cannot use delete), optional `condition`.
 - Built-in roles: `admin`; `authenticated`, held implicitly by every active user [judgment]; `schema_purger`, which holds `schema.purge`. Built-in roles, permissions and rules are protected definitions.
 - Password sign-in for every active user (Stage 0: the demo users). The first administrator of an install is created by `std bootstrap-admin`, as the system user through the save pipeline, once per login (decision 0016). API tokens, explain mode and the rule editor come in Step 4. The web app holds its session in an HTTP-only, `SameSite=Strict` cookie set by `POST /api/v1/auth/cookie-sign-in`; an unsafe request authenticated by it needs `STD-Client: web` (decision 0018).
-- The acting user is a required Effect service of every record-service operation, so a code path with no actor does not type-check. The HTTP layer has no default actor. The system user acts only for bootstrap, definition loading and `data` migrations run by `std upgrade` (1.9), which write through the save pipeline with cause `system` naming the migration and are not checked against access rules, like definition loading: it never signs in and no session authenticates as it, even if it is activated and given a password (decision 0014).
+- The acting user is a required Effect service of every record-service operation, so a code path with no actor does not type-check. The HTTP layer has no default actor. The system user acts only for bootstrap, definition loading (including repair of reserved set service identities) and `data` migrations run by `std upgrade` (1.9), which write through the save pipeline with cause `system` naming the migration and are not checked against access rules, like definition loading: it never signs in and no session authenticates as it, even if it is activated and given a password (decision 0014).
+- The helpdesk v3 cascade identity is reserved, not an interactive user. Password sign-in, session authentication and bootstrap refuse it regardless of stored credentials. Record clients cannot change its password or activity, delete it, modify its role assignments or assign its cascade role to another user. Set loading ensures and repairs it as the system user through the save pipeline, including normal local-field defaults, its individual, audit and outbox. A repaired missing identity advances from its last recorded version, preserving immutable history.
 
 ### 3.2 Decision rule
 

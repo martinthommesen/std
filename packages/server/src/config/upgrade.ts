@@ -96,6 +96,7 @@ import {
 } from "./load-set.ts";
 import type { PlannedSetLoad } from "./load-set.ts";
 import { CORE_SET_DIRECTORY, readSetDirectory } from "./set-files.ts";
+import type { SetIdentityFailed } from "./set-identities.ts";
 import type { SetRefused } from "./set-refused.ts";
 import { UpgradeIncomplete } from "./upgrade-incomplete.ts";
 import { UpgradePlanStale } from "./upgrade-plan-stale.ts";
@@ -189,6 +190,7 @@ export type UpgradeError =
   | MigrationStateRefused
   | UpgradePlanStale
   | SetRefused
+  | SetIdentityFailed
   | ChangeSetError;
 
 /** One set read from disk. */
@@ -631,7 +633,11 @@ const applySets = Effect.fn("Config.applySets")(function* applySets(
   connection: DedicatedConnection,
   computed: ComputedPlan,
   options: UpgradeOptions
-): Effect.fn.Return<readonly UpgradedSet[], UpgradeError, ChangeSetServices> {
+): Effect.fn.Return<
+  readonly UpgradedSet[],
+  UpgradeError,
+  ChangeSetServices | DataMigrationServices
+> {
   const outcomes: UpgradedSet[] = [];
   const owners = new Map<string, Owner>();
   const lifecycle = options.lifecycle ?? SCHEMA_LIFECYCLE;
