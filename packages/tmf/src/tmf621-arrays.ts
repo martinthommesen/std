@@ -63,14 +63,40 @@ const invalid = (message: string): Written =>
 const storedValue = (values: SourceValues, source: SourceKey): JsonValue =>
   values.get(source)?.value ?? null;
 
+/**
+ * The items kept in a json field, as rendered: objects only, each with
+ * the members the profile requires that STD can fill in (`@type`, and a
+ * characteristic's `id`), since a generic write may have stored them
+ * without (decision 0035).
+ *
+ * @param values - The record's readable values.
+ * @param source - The json field.
+ * @param normalize - Fills an item's defaults.
+ * @returns The items.
+ */
 const storedItems = (
   values: SourceValues,
-  source: SourceKey
-): readonly JsonValue[] => {
+  source: SourceKey,
+  normalize: (item: JsonObject) => JsonObject
+): readonly JsonObject[] => {
   const stored = storedValue(values, source);
+  const items = stored !== null && isJsonArray(stored) ? stored : [];
 
-  return stored !== null && isJsonArray(stored) ? stored : [];
+  return items.flatMap((item) =>
+    item !== null && isJsonObject(item) ? [normalize(item)] : []
+  );
 };
+
+/**
+ * An item's `@type` when it has none.
+ *
+ * @param type - The default type.
+ * @returns The normalizer.
+ */
+const typed =
+  (type: string) =>
+  (item: JsonObject): JsonObject =>
+    item["@type"] === undefined ? { "@type": type, ...item } : item;
 
 const present = (items: readonly JsonValue[]): JsonValue | undefined =>
   items.length === 0 ? undefined : items;
@@ -104,9 +130,6 @@ const itemsOf = (
         message: `${name} is an array of objects.`,
       });
 };
-
-const withType = (item: JsonObject, type: string): JsonObject =>
-  item["@type"] === undefined ? { "@type": type, ...item } : item;
 
 // Characteristics (Contracts 11.2, `troubleTicketCharacteristic`).
 
@@ -248,6 +271,26 @@ const characteristicTypeOf = (value: JsonValue | undefined): string => {
     : "StringCharacteristic";
 };
 
+/**
+ * A json-stored characteristic with its defaults: `@type` by its value's
+ * JSON type, `id` its name (Contracts 11.2: a characteristic without `id`
+ * gets one).
+ *
+ * @param item - The stored characteristic.
+ * @returns The characteristic.
+ */
+const normalizedCharacteristic = (item: JsonObject): JsonObject => {
+  const defaults = new Map<string, JsonValue>([
+    ["@type", characteristicTypeOf(item.value)],
+  ]);
+
+  if (item.name !== undefined) {
+    defaults.set("id", item.name);
+  }
+
+  return { ...Object.fromEntries(defaults), ...item };
+};
+
 const writeCharacteristics = (
   value: JsonValue,
   _current: SourceValues | undefined,
@@ -311,7 +354,7 @@ export const characteristicAttribute: ValueAttribute = derivedAttribute({
 
         return rendered === undefined ? [] : [rendered];
       }),
-      ...storedItems(values, F.characteristic),
+      ...storedItems(values, F.characteristic, normalizedCharacteristic),
     ]),
   sources: [F.characteristic],
   write: writeCharacteristics,
@@ -394,7 +437,7 @@ const writeRelationships = (
     }
 
     if (mapped === undefined) {
-      kept.push(withType(item, "TroubleTicketRelationship"));
+      kept.push(typed("TroubleTicketRelationship")(item));
     } else {
       written.set(mapped.field, id);
     }
@@ -431,7 +474,11 @@ export const relationshipAttribute: ValueAttribute = derivedAttribute({
 
         return rendered === undefined ? [] : [rendered];
       }),
-      ...storedItems(values, F.ticketRelationship),
+      ...storedItems(
+        values,
+        F.ticketRelationship,
+        typed("TroubleTicketRelationship")
+      ),
     ]),
   sources: [F.ticketRelationship],
   write: writeRelationships,
@@ -482,7 +529,7 @@ const writeExternalIdentifiers = (
     }
 
     if (!isNumber) {
-      kept.push(withType(item, "ExternalIdentifier"));
+      kept.push(typed("ExternalIdentifier")(item));
     }
   }
 
@@ -499,7 +546,7 @@ export const externalIdentifierAttribute: ValueAttribute = derivedAttribute({
 
     return present([
       ...(own === undefined ? [] : [own]),
-      ...storedItems(values, F.externalIdentifier),
+      ...storedItems(values, F.externalIdentifier, typed("ExternalIdentifier")),
     ]);
   },
   sources: [F.number, F.externalIdentifier],
@@ -515,12 +562,17 @@ interface JsonArraySpec {
   readonly source: SourceKey;
   readonly type: string;
   readonly check: (item: JsonObject) => string | undefined;
+  /** Fills a stored item's defaults on render; by default its `@type`. */
+  readonly normalize?: (item: JsonObject) => JsonObject;
 }
 
 const jsonArrayAttribute = (spec: JsonArraySpec): ValueAttribute =>
   derivedAttribute({
     name: spec.name,
-    render: (values) => present(storedItems(values, spec.source)),
+    render: (values) =>
+      present(
+        storedItems(values, spec.source, spec.normalize ?? typed(spec.type))
+      ),
     sources: [spec.source],
     write: (value) => {
       const items = itemsOf(spec.name, value);
@@ -540,7 +592,7 @@ const jsonArrayAttribute = (spec: JsonArraySpec): ValueAttribute =>
                 spec.source,
                 items.success.length === 0
                   ? null
-                  : items.success.map((item) => withType(item, spec.type)),
+                  : items.success.map((item) => typed(spec.type)(item)),
               ],
             ])
           )
@@ -595,6 +647,18 @@ export const relatedEntityAttribute: ValueAttribute = jsonArrayAttribute({
       : "A relatedEntity needs a role and an entity with @type and id.";
   },
   name: "relatedEntity",
+  // A related entity stored by a generic write may lack its reference's
+  // `@type`: `EntityRef`, the generic reference type, is its default.
+  normalize: (item) => {
+    const { entity } = item;
+
+    const withEntity =
+      entity !== undefined && entity !== null && isJsonObject(entity)
+        ? { ...item, entity: typed("EntityRef")(entity) }
+        : item;
+
+    return typed("RelatedEntity")(withEntity);
+  },
   source: F.relatedEntity,
   type: "RelatedEntity",
 });
@@ -681,7 +745,7 @@ const renderStatusHistory = (
   );
 
   return present([
-    ...storedItems(values, F.statusChangeHistory),
+    ...storedItems(values, F.statusChangeHistory, typed("StatusChange")),
     ...recorded.map((change) => change.item),
   ]);
 };
@@ -697,7 +761,7 @@ const writeStatusHistory = (value: JsonValue): Written => {
             F.statusChangeHistory,
             value === null
               ? null
-              : items.success.map((item) => withType(item, "StatusChange")),
+              : items.success.map((item) => typed("StatusChange")(item)),
           ],
         ])
       );

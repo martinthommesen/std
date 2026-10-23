@@ -29,6 +29,23 @@ import {
 } from "./itil-support.ts";
 import { postChangeSet } from "./schema-paths-support.ts";
 import { addRecordRule, change, values } from "./schema-support.ts";
+import {
+  arrayOf,
+  bodyOf,
+  JSON_PATCH,
+  TICKETS,
+  ticketBody,
+  TMF621_INCIDENT_STATES,
+  tmf621As,
+} from "./tmf621-support.ts";
+
+/** TMF621 severities of impact 1 to 3 (Contracts 11.2). */
+const SEVERITIES = ["Critical", "Major", "Minor"] as const;
+
+/** TMF621 priorities of priority 1 to 5 (Contracts 11.2). */
+const PRIORITIES = ["Critical", "High", "Medium", "Low", "Planning"] as const;
+
+const INCIDENT_STATES = TMF621_INCIDENT_STATES;
 
 const TRANSITIONS = {
   canceled: [],
@@ -843,5 +860,195 @@ describe("itil-incident", () => {
 
         assert.isTrue(Exit.isFailure(result));
       })
+  );
+
+  it.effect(
+    "all nine shipped matrix cells derive priority through TMF621 severity and the urgency characteristic",
+    () =>
+      Effect.gen(function* tmfMatrixCells() {
+        const admin = yield* tmf621As("admin");
+
+        for (const [impact, severity] of SEVERITIES.entries()) {
+          for (const urgency of [1, 2, 3]) {
+            const created = yield* admin.post(
+              TICKETS,
+              ticketBody({
+                severity,
+                troubleTicketCharacteristic: [
+                  { name: "urgency", value: urgency },
+                ],
+              })
+            );
+
+            const ticket = bodyOf(created);
+
+            assert.strictEqual(created.status, 201, created.text);
+            assert.strictEqual(
+              ticket.priority,
+              PRIORITIES[impact + urgency - 1]
+            );
+
+            const other = impact === 2 ? 0 : 2;
+
+            const changed = yield* admin.patch(
+              `${TICKETS}/${textOf(ticket.id)}`,
+              { severity: SEVERITIES[other] }
+            );
+
+            assert.strictEqual(
+              bodyOf(changed).priority,
+              PRIORITIES[other + urgency - 1]
+            );
+
+            const urgent = yield* admin.patch(
+              `${TICKETS}/${textOf(ticket.id)}`,
+              {
+                severity,
+                troubleTicketCharacteristic: [{ name: "urgency", value: 1 }],
+              }
+            );
+
+            assert.strictEqual(bodyOf(urgent).priority, PRIORITIES[impact]);
+          }
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "an explicit TMF621 priority wins over the matrix, by merge-patch and JSON Patch, and a test of /priority supplies nothing",
+    () =>
+      Effect.gen(function* tmfSuppliedPriority() {
+        const admin = yield* tmf621As("admin");
+
+        const created = yield* admin.post(
+          TICKETS,
+          ticketBody({
+            priority: "Low",
+            severity: "Critical",
+            troubleTicketCharacteristic: [{ name: "urgency", value: 1 }],
+          })
+        );
+
+        const path = `${TICKETS}/${textOf(bodyOf(created).id)}`;
+
+        assert.strictEqual(bodyOf(created).priority, "Low");
+
+        const merged = yield* admin.patch(path, {
+          priority: "Low",
+          severity: "Major",
+        });
+
+        assert.strictEqual(bodyOf(merged).priority, "Low");
+
+        const replaced = yield* admin.patch(
+          path,
+          [
+            { op: "replace", path: "/priority", value: "Low" },
+            { op: "replace", path: "/severity", value: "Minor" },
+          ],
+          { contentType: JSON_PATCH }
+        );
+
+        assert.strictEqual(bodyOf(replaced).priority, "Low");
+
+        const tested = yield* admin.patch(
+          path,
+          [
+            { op: "test", path: "/priority", value: "Low" },
+            { op: "replace", path: "/severity", value: "Critical" },
+          ],
+          { contentType: JSON_PATCH }
+        );
+
+        assert.strictEqual(bodyOf(tested).priority, "Critical");
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "every TMF621 status write is an allowed incident transition or is refused with no write",
+    () =>
+      Effect.gen(function* tmfIncidentTransitions() {
+        const admin = yield* tmf621As("admin");
+
+        for (const [source, allowed] of Object.entries<readonly string[]>(
+          TRANSITIONS
+        )) {
+          for (const [status, target] of INCIDENT_STATES) {
+            const record = yield* createTicket("helpdeskIncident", {
+              status: source,
+            });
+
+            const path = `${TICKETS}/${textOf(record.id)}`;
+            const before = yield* admin.get(path);
+            const response = yield* admin.patch(path, { status });
+            const accepted = source === target || allowed.includes(target);
+
+            assert.strictEqual(
+              response.status,
+              accepted ? 200 : 400,
+              `${source} -> ${status}: ${response.text}`
+            );
+
+            if (accepted) {
+              assert.strictEqual(bodyOf(response).status, status);
+            } else {
+              assert.strictEqual(
+                asObject(response.json).code,
+                "InvalidTransition"
+              );
+              assert.deepStrictEqual(
+                bodyOf(yield* admin.get(path)),
+                bodyOf(before)
+              );
+            }
+          }
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "TMF621 accepts a resolve without resolution code and notes and renders the major flag as a characteristic",
+    () =>
+      Effect.gen(function* tmfOverItil() {
+        const admin = yield* tmf621As("admin");
+        const manager = yield* tmf621As("manager");
+
+        const created = yield* admin.post(
+          TICKETS,
+          ticketBody({ severity: "Critical" })
+        );
+
+        const path = `${TICKETS}/${textOf(bodyOf(created).id)}`;
+        const resolved = yield* admin.patch(path, { status: "resolved" });
+
+        assert.strictEqual(bodyOf(resolved).status, "resolved");
+
+        const major = yield* manager.post(
+          TICKETS,
+          ticketBody({
+            troubleTicketCharacteristic: [
+              { name: "majorIncident", value: true },
+            ],
+          })
+        );
+
+        assert.strictEqual(major.status, 201, major.text);
+        assert.deepStrictEqual(
+          arrayOf(bodyOf(major), "troubleTicketCharacteristic").find(
+            (item) => item.name === "majorIncident"
+          ),
+          {
+            "@type": "BooleanCharacteristic",
+            id: "majorIncident",
+            name: "majorIncident",
+            value: true,
+            valueType: "boolean",
+          }
+        );
+
+        // The flag at a priority other than 1: accepted (the form, not the
+        // API, offers it only at priority 1).
+        assert.strictEqual(bodyOf(major).priority, "Low");
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 });
