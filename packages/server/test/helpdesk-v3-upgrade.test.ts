@@ -1,8 +1,11 @@
+import { readFile } from "node:fs/promises";
+
 /** The offline v2 to v3 upgrade retains records, audit, and local customization. */
 import { assert, describe, it } from "@effect/vitest";
 import type { LayoutElement } from "@std/definitions/definition";
+import type { NamedSetFile } from "@std/definitions/set-file";
 import type { JsonValue } from "@std/values/json-value";
-import { Effect } from "effect";
+import { Schema, Effect } from "effect";
 import { TestClock } from "effect/testing";
 
 import {
@@ -14,15 +17,25 @@ import {
 import { Catalog } from "../src/catalog/catalog.ts";
 import { editDefinition } from "../src/config/config-service.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
+import { readSetDirectory } from "../src/config/set-files.ts";
 import { runUpgrade } from "../src/config/upgrade.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
 import { runDataMigrations } from "../src/platform/data-migrations.ts";
 import { DataMigrationFailed } from "../src/platform/migration.ts";
 import { PLATFORM_MIGRATIONS } from "../src/platform/migrations.ts";
 import { migration0018 } from "../src/platform/migrations/0018-helpdesk-v3.ts";
+import { createRecord, updateRecord } from "../src/records/save-pipeline.ts";
 import { overridesOf } from "./config-support.ts";
-import { HELPDESK_V3 } from "./itil-support.ts";
+import {
+  HELPDESK_V3,
+  recordServices,
+  createTicket,
+  patchTicket,
+  itilLayer,
+  clientFor,
+} from "./itil-support.ts";
 import { currentRevision, schemaTestLayer, values } from "./schema-support.ts";
+import { textOf } from "./v2-support.ts";
 
 const edit = Effect.fn("HelpdeskUpgrade.edit")(function* edit(
   id: string,
@@ -56,16 +69,45 @@ const LOCAL_FORM: readonly LayoutElement[] = [
   { fieldId: HELPDESK.fields.number, kind: "field" },
 ];
 
+const definitionIds = (files: readonly NamedSetFile[]): string[] =>
+  files.flatMap(({ content }) => {
+    const roots = [
+      ...(content.set === undefined ? [] : [content.set]),
+      ...(content.namespaces ?? []),
+      ...(content.roles ?? []),
+      ...(content.permissions ?? []),
+      ...(content.grants ?? []),
+      ...(content.accessRules ?? []),
+      ...(content.recordRules ?? []),
+      ...(content.subscriptions ?? []),
+      ...(content.tables ?? []),
+    ];
+
+    const nested = (content.tables ?? []).flatMap((table) => [
+      ...(table.fields ?? []),
+      ...(table.indexes ?? []),
+      ...(table.overrides ?? []),
+      ...(table.layouts ?? []),
+      ...(table.savedFilters ?? []),
+      ...(table.fields ?? []).flatMap((field) => field.choices ?? []),
+    ]);
+
+    return [...roots, ...nested].map((entry) => entry.id);
+  });
+
 describe("helpdesk-v3-upgrade", () => {
   it("declares the old-key rewrite in contract rather than expand", () => {
     assert.strictEqual(migration0018.phase, "contract");
-    assert.isTrue(migration0018.repeatable);
+    assert.deepStrictEqual(migration0018.requiredSet, {
+      minVersion: 3,
+      name: "helpdesk",
+    });
   });
 
   it.effect(
     "v2 to v3 keeps every incident, all prior history and the Step 2 choice and layout overrides",
     () =>
-      Effect.gen(function* scenario1() {
+      Effect.gen(function* upgradeThousandIncidents() {
         // The same four customizations as the Step 2 upgrade proof.
         yield* edit(HELPDESK.choices.inProgress, { label: "Working" });
         yield* edit(HELPDESK.choices.onHold, { label: "Waiting on caller" });
@@ -74,11 +116,37 @@ describe("helpdesk-v3-upgrade", () => {
           elements: LOCAL_FORM.map((entry) => ({ ...entry })),
         });
         yield* runUpgrade({ sets: [HELPDESK_SET_DIRECTORIES.v2] });
+
+        // Five fixture incidents plus 995 gives exactly 1,000, each with history.
+        for (let index = 0; index < 995; index += 1) {
+          const record = yield* createRecord({
+            body: {
+              impact: "low",
+              priority: "moderate",
+              short_description: `Upgrade incident ${index}`,
+            },
+            endpointClassId: HELPDESK.incident,
+          }).pipe(Effect.provide(recordServices));
+
+          yield* updateRecord({
+            body: { status: "in_progress" },
+            endpointClassId: HELPDESK.incident,
+            expectedVersion: null,
+            id: record.id,
+          }).pipe(Effect.provide(recordServices));
+        }
+
+        assert.deepStrictEqual(
+          yield* values(
+            "SELECT count(*)::text AS value FROM helpdesk.incident"
+          ),
+          ["1000"]
+        );
         const oldRows = yield* preserved;
         const oldHistory = yield* history;
 
         const result = yield* runUpgrade({
-          dataBatchSize: 2,
+          dataBatchSize: 100,
           sets: [HELPDESK_V3],
         });
 
@@ -86,11 +154,11 @@ describe("helpdesk-v3-upgrade", () => {
         assert.strictEqual(
           result.plan.migrations.find((migration) => migration.id === 18)
             ?.state,
-          "recheck"
+          "pending"
         );
         assert.strictEqual(
           result.dataMigrations.find((entry) => entry.id === 18)?.changed,
-          6
+          1001
         );
 
         // The assignee rename changes only a physical column's name, never values.
@@ -101,7 +169,7 @@ describe("helpdesk-v3-upgrade", () => {
         assert.deepStrictEqual(newRows, oldRows);
         const newHistory = yield* history;
         assert.isTrue(oldHistory.every((entry) => newHistory.includes(entry)));
-        assert.lengthOf(newHistory, oldHistory.length + 6);
+        assert.lengthOf(newHistory, oldHistory.length + 1001);
         assert.deepStrictEqual(
           yield* values(
             "SELECT DISTINCT priority AS value FROM helpdesk.ticket ORDER BY priority"
@@ -159,9 +227,8 @@ describe("helpdesk-v3-upgrade", () => {
         const revision = yield* currentRevision;
         const rerun = yield* runUpgrade({ sets: [HELPDESK_V3] });
         assert.deepStrictEqual(rerun.dataMigrations, []);
-        assert.strictEqual(
-          rerun.plan.migrations.find((migration) => migration.id === 18)?.state,
-          "recheck"
+        assert.isUndefined(
+          rerun.plan.migrations.find((migration) => migration.id === 18)
         );
         assert.deepStrictEqual(yield* countChanges, beforeRerun);
         assert.strictEqual(yield* currentRevision, revision);
@@ -175,12 +242,12 @@ describe("helpdesk-v3-upgrade", () => {
   it.effect(
     "an interrupted v3 backfill resumes committed batches and proves remaining zero before applied",
     () =>
-      Effect.gen(function* scenario2() {
+      Effect.gen(function* interruptedBackfill() {
         const snapshot = yield* (yield* Catalog).refresh;
         const owner = snapshot.classByName("core.user")?.owner;
 
         if (owner === undefined) {
-          return yield* Effect.die(new Error("Missing core owner"));
+          throw new Error("Missing core owner");
         }
 
         yield* loadSetDirectory(HELPDESK_V3, {
@@ -283,8 +350,6 @@ describe("helpdesk-v3-upgrade", () => {
         const beforeRerun = yield* countChanges;
         yield* runUpgrade({ sets: [HELPDESK_V3] });
         assert.deepStrictEqual(yield* countChanges, beforeRerun);
-
-        return yield* Effect.void;
       }).pipe(
         Effect.provide(helpdeskTestLayer({ version: "v2" })),
         TestClock.withLive
@@ -307,7 +372,11 @@ describe("helpdesk-v3-upgrade", () => {
         assert.isTrue(
           snapshot
             .recordRulesOf(HELPDESK.ticket)
-            .every((rule) => rule.ruleKind === "derive")
+            .some(
+              (rule) =>
+                rule.name === "description_required" &&
+                rule.ruleKind === "invariant"
+            )
         );
         assert.strictEqual(
           snapshot
@@ -320,5 +389,79 @@ describe("helpdesk-v3-upgrade", () => {
         assert.strictEqual(yield* currentRevision, revision);
         assert.strictEqual((yield* runDoctor()).exitCode, 0);
       }).pipe(Effect.provide(schemaTestLayer()), TestClock.withLive)
+  );
+  it.effect(
+    "a later upgrade preserves v3 impact and a deliberately cleared status date",
+    () =>
+      Effect.gen(function* preserveV3() {
+        const created = yield* createTicket("helpdeskIncident", {
+          impact: "1",
+        });
+
+        const cleared = yield* patchTicket(created, { statusChangedAt: null });
+        const before = yield* countChanges;
+        const result = yield* runUpgrade({ sets: [HELPDESK_V3] });
+        assert.deepStrictEqual(result.dataMigrations, []);
+        const client = yield* clientFor();
+
+        const after = yield* client.records.get({
+          params: { id: textOf(created.id), table: "helpdeskIncident" },
+          query: {},
+        });
+
+        assert.deepStrictEqual(after, cleared);
+        assert.strictEqual(after.impact, "1");
+        assert.notProperty(after, "statusChangedAt");
+        assert.deepStrictEqual(yield* countChanges, before);
+        assert.deepStrictEqual(
+          yield* values(
+            "SELECT state AS value FROM core.platform_migration WHERE id = 18"
+          ),
+          ["applied"]
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "the upgrade partition covers exactly the new set definition IDs",
+    () =>
+      Effect.gen(function* partitionCoverage() {
+        const before = new Set(
+          definitionIds(yield* readSetDirectory(HELPDESK_SET_DIRECTORIES.v2))
+        );
+
+        const after = new Set(
+          definitionIds(yield* readSetDirectory(HELPDESK_V3))
+        );
+
+        const delta = [...after].filter((id) => !before.has(id)).toSorted();
+
+        const partition = yield* Effect.tryPromise(
+          async () =>
+            await readFile(
+              new URL(
+                "../../../examples/helpdesk/upgrade-v3.json",
+                import.meta.url
+              ),
+              "utf-8"
+            )
+        );
+
+        const parsed = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(
+            Schema.Struct({
+              additive: Schema.Array(Schema.Struct({ id: Schema.String })),
+              behavior: Schema.Array(Schema.Struct({ id: Schema.String })),
+            })
+          )
+        )(partition);
+
+        const listed = [...parsed.additive, ...parsed.behavior]
+          .flatMap((entry) => (before.has(entry.id) ? [] : [entry.id]))
+          .toSorted();
+
+        assert.deepStrictEqual(listed, delta);
+        assert.strictEqual(new Set(listed).size, listed.length);
+      })
   );
 });

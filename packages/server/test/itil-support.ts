@@ -1,6 +1,7 @@
 /** Shared helpdesk v3 fixture and clients built from the live API definition. */
 import { StdApiV2 } from "@std/api/v2/api";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
+import { stringifyJson } from "@std/values/json";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer, Redacted } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -26,6 +27,10 @@ const account = (login: string, fixture: HelpdeskFixture["Service"]) => {
     return { login: "itil-manager", password: "itil-manager-password" };
   }
 
+  if (login === "agent2") {
+    return fixture.agent2;
+  }
+
   return login === "agent" ? fixture.agent : fixture.admin;
 };
 
@@ -42,7 +47,7 @@ const upgraded = Layer.effectDiscard(
     const role = snapshot.roleByName("major_incident_manager");
 
     if (role === undefined) {
-      return yield* Effect.die(new Error("Missing manager role"));
+      throw new Error("Missing manager role");
     }
 
     yield* ensureUser(
@@ -53,8 +58,6 @@ const upgraded = Layer.effectDiscard(
       },
       [role.id]
     );
-
-    return yield* Effect.void;
   })
 ).pipe(Layer.provideMerge(helpdeskTestLayer({ version: "v2" })));
 
@@ -211,7 +214,7 @@ export const patchResponse = Effect.fn("Itil.patchResponse")(
         "content-type": contentType ?? "application/merge-patch+json",
         "if-match": `"${numberOf(record.revision)}"`,
       },
-      rawBody: JSON.stringify(body),
+      rawBody: stringifyJson(body),
       token,
     });
   }

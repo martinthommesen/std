@@ -1,4 +1,3 @@
-# Helpdesk v3: Contracts 14; decisions/0034-helpdesk-v3.md.
 set:
   id: 8405d65d-4573-43cb-931c-e59fee0557a0
   name: helpdesk
@@ -18,3 +17,7 @@ roles:
   - id: 58854e06-29de-524b-b087-aafd6d6945dd
     name: major_incident_manager
     label: Major incident manager
+  - id: f02cabb1-cdc9-5371-81f0-d77cc1cd2ef3
+    name: helpdesk_cascade
+    label: Helpdesk cascade service
+    helpText: Passwordless service identity; updates incident status and resolution during shipped cascades.

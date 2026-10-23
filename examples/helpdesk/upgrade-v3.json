@@ -611,11 +611,6 @@
       "name": "short_description"
     },
     {
-      "id": "2fef4eb5-98f3-5c50-a176-336fb669efb3",
-      "category": "recordRules",
-      "name": "description_default"
-    },
-    {
       "id": "188cc6dc-286c-58c4-af12-1536eb49f63e",
       "category": "recordRules",
       "name": "status_changed_at"
@@ -904,6 +899,41 @@
       "id": "386f5415-7aa1-5cfe-b4d1-43a50a2638ca",
       "category": "fields",
       "name": "ticket"
+    },
+    {
+      "id": "12ab5519-d676-40ec-9314-a0920506ce45",
+      "category": "recordRules",
+      "name": "The cascade service reads matching incidents and updates only their lifecycle and resolution fields."
+    },
+    {
+      "id": "8047e6d0-abe7-4899-a280-107b6f2c1f50",
+      "category": "recordRules",
+      "name": "The cascade service reads matching incidents and updates only their lifecycle and resolution fields."
+    },
+    {
+      "id": "4450b879-eed0-419d-8f56-63c6c26a8ffd",
+      "category": "recordRules",
+      "name": "The cascade service reads matching incidents and updates only their lifecycle and resolution fields."
+    },
+    {
+      "id": "67632aa7-f5f0-47d3-8884-5c764a7b75fe",
+      "category": "recordRules",
+      "name": "note_author"
+    },
+    {
+      "id": "c867a3d0-a509-4d57-bc14-c6a694eb2643",
+      "category": "recordRules",
+      "name": "description_required"
+    },
+    {
+      "id": "f02cabb1-cdc9-5371-81f0-d77cc1cd2ef3",
+      "category": "roles",
+      "name": "helpdesk_cascade"
+    },
+    {
+      "id": "8e851d58-c017-40c7-bda8-39e1fb2a138c",
+      "category": "recordRules",
+      "name": "note_author_immutable"
     }
   ],
   "newFeatures": [

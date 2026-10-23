@@ -16,18 +16,14 @@
  * `/api`. No fixed resource's name is a table's v2 name: definition
  * validation refuses it (`apiNameClash`).
  */
-import { callerFilterView } from "@std/access/saved-filters";
 import { tableList, tableMetadata } from "@std/access/table-metadata";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { UnknownTable } from "@std/api/errors/unknown-table";
 import { SessionToken } from "@std/api/session-token";
-import { decodeExpr } from "@std/conditions/ast";
-import { printCondition } from "@std/conditions/syntax-print";
 import { apiAttributeNameOf } from "@std/definitions/names";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import type {
   MetaField,
-  MetaSavedFilter,
   MetaTable,
   MetaTableSummary,
 } from "@std/definitions/table-metadata";
@@ -46,6 +42,7 @@ import { displayName, signIn, signOut } from "../../auth/sessions.ts";
 import { Catalog } from "../../catalog/catalog.ts";
 import type { InstanceSettings } from "../../config/instance-settings.ts";
 import { currentReadScope } from "../../records/read-records.ts";
+import { savedFiltersInApiNames } from "../../records/saved-filter-names.ts";
 import { RequestRevision } from "../../sql/request-revision.ts";
 import { Transactions } from "../../sql/transactions.ts";
 import { genericWriteLimits } from "../metadata-limits.ts";
@@ -76,36 +73,6 @@ import {
 
 const SESSION_PATH = `${V2_PREFIX}/session`;
 const CURRENT_SESSION = `${SESSION_PATH}/current`;
-
-const savedFiltersInApiNames = (
-  snapshot: ConfigSnapshot,
-  actor: ActingUser,
-  classId: string,
-  filters: readonly MetaSavedFilter[]
-): readonly MetaSavedFilter[] => {
-  const view = callerFilterView(snapshot, actor);
-
-  return filters.flatMap((filter) => {
-    const expression = decodeExpr(filter.condition);
-
-    if (expression._tag === "Failure") {
-      return [];
-    }
-
-    const printed = printCondition(expression.success, {
-      classId,
-      field: (owner, id) => {
-        const field = view.field(owner, id);
-
-        return field === undefined
-          ? undefined
-          : { ...field, name: apiAttributeNameOf(field.name) };
-      },
-    });
-
-    return printed.ok ? [{ ...filter, filter: printed.value }] : [];
-  });
-};
 
 const METADATA_PATH = `${V2_PREFIX}/tableMetadata`;
 
@@ -403,7 +370,7 @@ export const FixedRoutes = Layer.unwrap(
 
       return described === undefined || found === undefined
         ? yield* new UnknownTable({ table: collection })
-        : { classId: found.id, described };
+        : { actor, classId: found.id, described, snapshot };
     });
 
     // A session request, after its stated revision: one request
@@ -567,9 +534,9 @@ export const FixedRoutes = Layer.unwrap(
 
     const table = metadataRoute((origin, collection) =>
       Effect.gen(function* tableRoute() {
-        const { classId, described } = yield* metadataOf(collection);
-        const snapshot = yield* (yield* Catalog).current;
-        const actor = yield* Actor;
+        const { classId, described, snapshot, actor } =
+          yield* metadataOf(collection);
+
         const { revision } = yield* RequestRevision;
 
         return jsonAnswer(
@@ -583,7 +550,7 @@ export const FixedRoutes = Layer.unwrap(
             })),
             href: `${origin}${METADATA_PATH}/${collection}`,
             id: collection,
-            savedFilters: savedFiltersInApiNames(
+            savedFilters: yield* savedFiltersInApiNames(
               snapshot,
               actor,
               classId,
@@ -598,9 +565,8 @@ export const FixedRoutes = Layer.unwrap(
 
     const schema = metadataRoute((origin, collection) =>
       Effect.gen(function* schemaRoute() {
-        const { classId, described } = yield* metadataOf(collection);
-        const snapshot = yield* (yield* Catalog).current;
-        const actor = yield* Actor;
+        const { classId, described, snapshot, actor } =
+          yield* metadataOf(collection);
 
         // Metadata names a target only when the caller knows it.
         const refs: RefTypes = {

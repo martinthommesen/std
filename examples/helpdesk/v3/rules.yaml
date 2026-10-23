@@ -3,7 +3,7 @@ recordRules:
     name: short_description
     table: helpdesk.ticket
     phase: before
-    operations: &id001
+    operations:
       - create
       - update
     order: 10
@@ -22,32 +22,13 @@ recordRules:
                 from: record
                 fieldId: 88514acc-6b0d-4772-8604-43fe9a913446
                 firstLine: 160
-  - id: 2fef4eb5-98f3-5c50-a176-336fb669efb3
-    name: description_default
-    table: helpdesk.ticket
-    phase: before
-    operations: *id001
-    order: 20
-    condition:
-      op: empty
-      arg:
-        path:
-          - 88514acc-6b0d-4772-8604-43fe9a913446
-    kind: derive
-    actions:
-      - type: set
-        values:
-          - fieldId: 88514acc-6b0d-4772-8604-43fe9a913446
-            value:
-              copy:
-                from: record
-                fieldId: 45e8b4dc-7041-4556-af31-1c802d537b8a
-                firstLine: 160
   - id: 188cc6dc-286c-58c4-af12-1536eb49f63e
     name: status_changed_at
     table: helpdesk.ticket
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 30
     condition:
       op: changed
@@ -65,7 +46,9 @@ recordRules:
     name: resolved_at
     table: helpdesk.ticket
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 40
     condition:
       op: and
@@ -92,7 +75,9 @@ recordRules:
     name: clear_resolved_at
     table: helpdesk.ticket
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 50
     condition:
       op: and
@@ -117,11 +102,14 @@ recordRules:
           - fieldId: e387a9f3-886a-5e91-8823-34a180d8cddf
             value:
               value: null
+        keepSupplied: true
   - id: 97a1b810-9382-57d6-80cd-54e4b21af48a
     name: priority_1_1
     table: helpdesk.incident
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 111
     condition:
       op: and
@@ -160,7 +148,9 @@ recordRules:
     name: priority_1_2
     table: helpdesk.incident
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 112
     condition:
       op: and
@@ -199,7 +189,9 @@ recordRules:
     name: priority_1_3
     table: helpdesk.incident
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 113
     condition:
       op: and
@@ -238,7 +230,9 @@ recordRules:
     name: priority_2_1
     table: helpdesk.incident
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 121
     condition:
       op: and
@@ -277,7 +271,9 @@ recordRules:
     name: priority_2_2
     table: helpdesk.incident
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 122
     condition:
       op: and
@@ -316,7 +312,9 @@ recordRules:
     name: priority_2_3
     table: helpdesk.incident
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 123
     condition:
       op: and
@@ -355,7 +353,9 @@ recordRules:
     name: priority_3_1
     table: helpdesk.incident
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 131
     condition:
       op: and
@@ -394,7 +394,9 @@ recordRules:
     name: priority_3_2
     table: helpdesk.incident
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 132
     condition:
       op: and
@@ -433,7 +435,9 @@ recordRules:
     name: priority_3_3
     table: helpdesk.incident
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 133
     condition:
       op: and
@@ -472,7 +476,9 @@ recordRules:
     name: clear_severity_label
     table: helpdesk.ticket
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 200
     condition:
       op: changed
@@ -491,7 +497,9 @@ recordRules:
     name: clear_priority_label
     table: helpdesk.ticket
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 210
     condition:
       op: changed
@@ -706,7 +714,9 @@ recordRules:
     name: default_hold_reason
     table: helpdesk.incident
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 60
     condition:
       op: and
@@ -736,7 +746,9 @@ recordRules:
     name: clear_hold_reason
     table: helpdesk.incident
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 70
     condition:
       op: and
@@ -1031,7 +1043,9 @@ recordRules:
     name: default_hold_reason
     table: helpdesk.problem
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 60
     condition:
       op: and
@@ -1061,7 +1075,9 @@ recordRules:
     name: clear_hold_reason
     table: helpdesk.problem
     phase: before
-    operations: *id001
+    operations:
+      - create
+      - update
     order: 70
     condition:
       op: and
@@ -1153,6 +1169,7 @@ recordRules:
               copy:
                 from: record
                 fieldId: e387a9f3-886a-5e91-8823-34a180d8cddf
+    runAs: 32187bcc-314f-53f1-9a54-4ae3cabd1598
   - id: 4eebe362-5552-5ed3-ba29-fdd2d8e1b3a4
     name: resume_waiting_incidents
     table: helpdesk.problem
@@ -1204,3 +1221,53 @@ recordRules:
           - fieldId: 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
             value:
               value: in_progress
+    runAs: 32187bcc-314f-53f1-9a54-4ae3cabd1598
+  - id: 67632aa7-f5f0-47d3-8884-5c764a7b75fe
+    name: note_author
+    table: helpdesk.ticket_note
+    phase: before
+    operations:
+      - create
+    order: 10
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 9b1a0ff8-dce6-523d-b230-4aab99f3cfe4
+            value:
+              ctx: me
+  - id: c867a3d0-a509-4d57-bc14-c6a694eb2643
+    name: description_required
+    table: helpdesk.ticket
+    phase: before
+    operations:
+      - create
+      - update
+    order: 5
+    kind: invariant
+    condition:
+      op: empty
+      arg:
+        path:
+          - 88514acc-6b0d-4772-8604-43fe9a913446
+    actions:
+      - type: refuse
+        code: RuleRefused
+        message: A ticket requires a description.
+  - id: 8e851d58-c017-40c7-bda8-39e1fb2a138c
+    name: note_author_immutable
+    table: helpdesk.ticket_note
+    phase: before
+    operations:
+      - update
+    order: 10
+    kind: invariant
+    condition:
+      op: changed
+      arg:
+        path:
+          - 9b1a0ff8-dce6-523d-b230-4aab99f3cfe4
+    actions:
+      - type: refuse
+        code: RuleRefused
+        message: A note author is assigned at creation and cannot be changed.

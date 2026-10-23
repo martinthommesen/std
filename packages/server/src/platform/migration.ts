@@ -130,10 +130,8 @@ export interface DataMigration {
    * hash, so the text changes whenever what the migration does changes.
    */
   readonly description: string;
-  /** Recheck after set loads: an optional app may be installed or upgraded later. */
-  readonly repeatable?: boolean;
-  /** Restricts planned rechecks to installs that have, or request, this set version. */
-  readonly recheckForSet?: {
+  /** Starts once this optional set reaches the stated version; applied stays applied. */
+  readonly requiredSet?: {
     readonly name: string;
     readonly minVersion: number;
   };

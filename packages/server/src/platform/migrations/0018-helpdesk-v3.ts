@@ -1,17 +1,29 @@
 /** Helpdesk v2 to v3 data conversion, after the optional app's sets load. */
 import { rawSql, sql, textParameter } from "@std/conditions/sql-fragment";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
+import {
+  SYSTEM_USER_ID,
+  USER_CLASS_ID,
+  USER_ROLE_CLASS_ID,
+} from "@std/definitions/well-known";
 import { isString, isNumber } from "@std/values/field-value";
 import type { StoredValue } from "@std/values/field-value";
 import type { JsonObject } from "@std/values/json-value";
 import { Effect, Option } from "effect";
 
 import { Catalog } from "../../catalog/catalog.ts";
-import { updateRecord } from "../../records/save-pipeline.ts";
+import { changedFields, writeChangeEntry } from "../../records/change-entry.ts";
+import {
+  ensureUserIndividual,
+  createRecord,
+  updateRecord,
+} from "../../records/save-pipeline.ts";
 import { loadRecord } from "../../records/save-sql.ts";
-import { readRows } from "../../records/sql-run.ts";
+import { readRows, writeRows } from "../../records/sql-run.ts";
 import type { StoredRecord } from "../../records/stored-record.ts";
 import { tableName } from "../../schema/sql-text.ts";
+import { RequestRevision } from "../../sql/request-revision.ts";
+import { Transactions } from "../../sql/transactions.ts";
 import { DataMigrationFailed } from "../migration.ts";
 import type { DataMigration } from "../migration.ts";
 
@@ -52,31 +64,63 @@ const IMPACTS = new Map([
 ]);
 
 const priorityOf = (value: StoredValue | null | undefined): string => {
-  const key = isString(value) ? value : "5";
+  if (!isString(value)) {
+    throw new Error("Legacy ticket priority is missing");
+  }
+
+  const key = value;
 
   return PRIORITIES.get(key) ?? key;
 };
 
-const impactOf = (value: StoredValue | null | undefined): string =>
-  IMPACTS.get(isString(value) ? value : "") ?? "3";
+const impactOf = (value: string): string => {
+  const impact = IMPACTS.get(value);
+
+  if (impact === undefined) {
+    throw new Error(`Unknown legacy impact ${value}`);
+  }
+
+  return impact;
+};
 
 const needsMigration = (snapshot: ConfigSnapshot) => {
   const table = rawSql(tableName(snapshot, TICKET));
 
-  return sql`SELECT id::text AS id, class_id::text AS class_id FROM ${table}
+  const incidents = rawSql(
+    tableName(snapshot, "91446a86-8028-4d34-a501-b7cf0f59fdd5")
+  );
+
+  return sql`SELECT t.id::text AS id, t.class_id::text AS class_id FROM ${table} t
+    LEFT JOIN ${incidents} i ON i.id = t.id
     WHERE priority IN ('critical', 'high', 'moderate', 'low')
-       OR description IS NULL OR status_changed_at IS NULL`;
+       OR (i.legacy_impact IS NOT NULL AND t.impact IS DISTINCT FROM
+         CASE i.legacy_impact WHEN 'high' THEN '1' WHEN 'medium' THEN '2' ELSE '3' END)`;
 };
 
-const migratedTitle = (title: StoredValue | null | undefined): string =>
-  isString(title) ? title : "Migrated ticket";
+const migratedTitle = (title: StoredValue | null | undefined): string => {
+  if (!isString(title)) {
+    throw new Error("Legacy ticket title is missing");
+  }
+
+  return title;
+};
 
 const migratedValues = (
   snapshot: ConfigSnapshot,
   record: StoredRecord
 ): JsonObject => {
   const fields = fieldsOf(snapshot);
-  const field = (name: string) => fields.get(name) ?? "";
+
+  const field = (name: string) => {
+    const id = fields.get(name);
+
+    if (id === undefined) {
+      throw new Error(`Missing helpdesk field ${name}`);
+    }
+
+    return id;
+  };
+
   const status = record.values.get(STATUS);
   const description = record.values.get(DESCRIPTION);
   const title = record.values.get(TITLE);
@@ -85,29 +129,97 @@ const migratedValues = (
   const hold = record.values.get(field("hold_reason"));
   const resolved = record.values.get(field("resolved_at"));
 
-  const body = {
+  const legacyImpact = record.values.get(LEGACY_IMPACT);
+  const statusChangedAt = record.values.get(STATUS_CHANGED_AT);
+  const defaultHold = status === "on_hold" ? "awaiting_caller" : null;
+  const holdReason = isString(hold) ? hold : defaultHold;
+
+  const defaultResolved =
+    status === "resolved" || status === "closed" ? date : null;
+
+  const resolvedAt = isNumber(resolved)
+    ? new Date(resolved).toISOString()
+    : defaultResolved;
+
+  const body: JsonObject = {
     description: isString(description) ? description : migratedTitle(title),
-    hold_reason: isString(hold) ? hold : null,
-    impact: impactOf(record.values.get(LEGACY_IMPACT)),
+    hold_reason: holdReason,
     priority: priorityOf(record.values.get(PRIORITY)),
-    resolved_at: isNumber(resolved) ? new Date(resolved).toISOString() : null,
-    status_changed_at: date,
+    resolved_at: resolvedAt,
+    status_changed_at: isNumber(statusChangedAt)
+      ? new Date(statusChangedAt).toISOString()
+      : date,
   };
 
-  if (isString(hold)) {
-    body.hold_reason = hold;
-  } else if (status === "on_hold") {
-    body.hold_reason = "awaiting_caller";
-  }
-
-  if (isNumber(resolved)) {
-    body.resolved_at = new Date(resolved).toISOString();
-  } else if (status === "resolved" || status === "closed") {
-    body.resolved_at = date;
+  if (isString(legacyImpact)) {
+    return { ...body, impact: impactOf(legacyImpact) };
   }
 
   return body;
 };
+
+const CASCADE_USER = "32187bcc-314f-53f1-9a54-4ae3cabd1598";
+const CASCADE_ROLE = "f02cabb1-cdc9-5371-81f0-d77cc1cd2ef3";
+
+// A passwordless service account with a stable ID for the set's runAs references.
+const ensureCascadeIdentity = Effect.fn("Platform.helpdeskCascadeIdentity")(
+  function* ensureCascadeIdentity(snapshot: ConfigSnapshot) {
+    yield* (yield* Transactions).request(
+      Effect.gen(function* initializeCascadeAccount() {
+        const existing = yield* loadRecord(
+          snapshot,
+          USER_CLASS_ID,
+          CASCADE_USER
+        );
+
+        if (Option.isSome(existing)) {
+          return;
+        }
+
+        yield* writeRows(sql`INSERT INTO core."user"
+      (id, class_id, version, created_at, updated_at, created_by, updated_by, name, login, active)
+      VALUES (${textParameter(CASCADE_USER, "uuid")}, ${textParameter(USER_CLASS_ID, "uuid")}, 1, now(), now(),
+        ${textParameter(SYSTEM_USER_ID, "uuid")}, ${textParameter(SYSTEM_USER_ID, "uuid")},
+        'Helpdesk cascade service', 'std-helpdesk-cascade', true)`);
+        const loaded = yield* loadRecord(snapshot, USER_CLASS_ID, CASCADE_USER);
+
+        if (Option.isNone(loaded)) {
+          throw new Error("Missing cascade identity after insert");
+        }
+
+        const cause = {
+          kind: "system",
+          migration: { id: ID, name: NAME },
+        } as const;
+
+        yield* writeChangeEntry(
+          {
+            actorId: SYSTEM_USER_ID,
+            cause,
+            fields: changedFields({
+              after: loaded.value,
+              before: null,
+              classId: USER_CLASS_ID,
+              snapshot,
+              writeOnlySet: new Set(),
+            }),
+            kind: "create",
+            recordClassId: USER_CLASS_ID,
+            recordId: CASCADE_USER,
+            recordVersion: 1,
+          },
+          (yield* RequestRevision).revision
+        );
+        yield* ensureUserIndividual({ cause, id: CASCADE_USER });
+        yield* createRecord({
+          body: { role: CASCADE_ROLE, user: CASCADE_USER },
+          cause,
+          endpointClassId: USER_ROLE_CLASS_ID,
+        });
+      })
+    );
+  }
+);
 
 const batch = Effect.fn("Platform.helpdeskV3")(function* batch(
   after: string | null,
@@ -119,16 +231,34 @@ const batch = Effect.fn("Platform.helpdeskV3")(function* batch(
     return { changed: 0, next: null };
   }
 
+  yield* ensureCascadeIdentity(snapshot);
+
   const rows =
     yield* readRows(sql`SELECT id, class_id FROM (${needsMigration(snapshot)}) AS candidates
       WHERE id::uuid > ${textParameter(after ?? NIL_UUID, "uuid")}
       ORDER BY id::uuid LIMIT ${textParameter(String(size), "int4")}`);
 
   let last: string | null = null;
+  let changed = 0;
 
   for (const row of rows) {
-    const id = row.id ?? "";
-    const loaded = yield* loadRecord(snapshot, row.class_id ?? TICKET, id);
+    const { id, class_id: classId } = row;
+
+    if (
+      id === null ||
+      id === undefined ||
+      classId === null ||
+      classId === undefined
+    ) {
+      return yield* new DataMigrationFailed({
+        id: ID,
+        migration: NAME,
+        reason: "Candidate is missing its record or class ID",
+      });
+    }
+
+    last = id;
+    const loaded = yield* loadRecord(snapshot, classId, id);
 
     if (Option.isNone(loaded)) {
       continue;
@@ -142,10 +272,10 @@ const batch = Effect.fn("Platform.helpdeskV3")(function* batch(
       expectedVersion: record.version,
       id,
     });
-    last = id;
+    changed += 1;
   }
 
-  return { changed: rows.length, next: rows.length < size ? null : last };
+  return { changed, next: rows.length < size ? null : last };
 }, Effect.mapError(failed));
 
 const remaining = Effect.gen(function* remaining() {
@@ -159,19 +289,26 @@ const remaining = Effect.gen(function* remaining() {
     sql`SELECT count(*)::text AS remaining FROM (${needsMigration(snapshot)}) AS candidates`
   );
 
-  return Number(row?.remaining ?? "0");
+  if (row?.remaining === null || row?.remaining === undefined) {
+    return yield* new DataMigrationFailed({
+      id: ID,
+      migration: NAME,
+      reason: "Missing remaining count",
+    });
+  }
+
+  return Number(row.remaining);
 }).pipe(Effect.mapError(failed));
 
 /** Optional-app backfill; contract phase because old clients use the old keys. */
 export const migration0018: DataMigration = {
   batch,
   description:
-    "After helpdesk v3 is installed, converts old priority keys to 1..4, copies legacy incident impact to the shared 1..3 impact, defaults urgency to 3, fills missing descriptions from titles, preserves statuses, maps old on_hold to awaiting_caller, and dates resolved/closed records from their last update. Saves through the system-user pipeline without current business rules, retaining IDs, history and overrides. Rechecks after later optional app installation; remaining counts old keys or missing description/status date.",
+    "After helpdesk v3 is installed, converts old priority keys to 1..4, copies legacy incident impact to the shared 1..3 impact, defaults urgency to 3, fills missing descriptions from titles, preserves statuses, maps old on_hold to awaiting_caller, and dates resolved/closed records from their last update. Saves through the system-user pipeline without current business rules, retaining IDs, history and overrides. Runs once on installation of helpdesk v3, including creation of its passwordless cascade identity. Remaining counts old priority keys or uncopied non-null legacy impact.",
   id: ID,
   kind: "data",
   name: NAME,
   phase: "contract",
-  recheckForSet: { minVersion: 3, name: "helpdesk" },
   remaining,
-  repeatable: true,
+  requiredSet: { minVersion: 3, name: "helpdesk" },
 };

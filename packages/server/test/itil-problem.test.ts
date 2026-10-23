@@ -3,6 +3,9 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { TestClock } from "effect/testing";
 
+import { HelpdeskFixture } from "../../testing/src/helpdesk-fixture.ts";
+import { Catalog } from "../src/catalog/catalog.ts";
+import { updateRecord } from "../src/records/save-pipeline.ts";
 import {
   createTicket,
   clientFor,
@@ -10,6 +13,7 @@ import {
   patchResponse,
   patchTicket,
   reference,
+  recordServices,
 } from "./itil-support.ts";
 import { asObject, textOf } from "./v2-support.ts";
 
@@ -41,10 +45,12 @@ describe("itil-problem", () => {
   it.effect(
     "every problem transition including TMF621 allowances is accepted or refused without a write",
     () =>
-      Effect.gen(function* scenario1() {
+      Effect.gen(function* problemTransitions() {
         const client = yield* clientFor();
 
-        for (const [source, allowed] of Object.entries(TRANSITIONS)) {
+        for (const [source, allowed] of Object.entries<readonly string[]>(
+          TRANSITIONS
+        )) {
           for (const target of Object.keys(TRANSITIONS)) {
             const record = yield* createTicket("helpdeskProblem", {
               status: source,
@@ -56,10 +62,7 @@ describe("itil-problem", () => {
               "helpdeskProblem"
             );
 
-            if (
-              source === target ||
-              allowed.some((status: string) => status === target)
-            ) {
+            if (source === target || allowed.includes(target)) {
               assert.strictEqual(
                 response.status,
                 200,
@@ -95,7 +98,7 @@ describe("itil-problem", () => {
   it.effect(
     "known errors work in every state without API-only workaround or root-cause restrictions",
     () =>
-      Effect.gen(function* scenario2() {
+      Effect.gen(function* knownErrors() {
         for (const status of Object.keys(TRANSITIONS)) {
           const record = yield* createTicket("helpdeskProblem", {
             knownError: true,
@@ -144,16 +147,24 @@ describe("itil-problem", () => {
   it.effect(
     "resolving a problem returns exactly its awaiting-problem incidents to work in one operation",
     () =>
-      Effect.gen(function* scenario3() {
+      Effect.gen(function* problemCascade() {
         const client = yield* clientFor();
 
-        const problem = yield* createTicket("helpdeskProblem", {
-          status: "root_cause_analysis",
-        });
+        const fixture = yield* HelpdeskFixture;
+
+        const problem = yield* createTicket(
+          "helpdeskProblem",
+          {
+            assignedTo: { id: fixture.agent.id },
+            status: "root_cause_analysis",
+          },
+          "agent"
+        );
 
         const other = yield* createTicket("helpdeskProblem");
 
         const waiting = yield* createTicket("helpdeskIncident", {
+          assignedTo: { id: fixture.agent2.id },
           holdReason: "awaiting_problem",
           problem: reference(problem),
           status: "on_hold",
@@ -176,7 +187,12 @@ describe("itil-problem", () => {
           status: "in_progress",
         });
 
-        yield* patchTicket(problem, { status: "resolved" }, "helpdeskProblem");
+        yield* patchTicket(
+          problem,
+          { status: "resolved" },
+          "helpdeskProblem",
+          "agent"
+        );
 
         for (const record of [waiting, vendor, unrelated, active]) {
           const updated = yield* client.records.get({
@@ -197,5 +213,36 @@ describe("itil-problem", () => {
           }
         }
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+  it.effect("settled saves bypass problem transition guards", () =>
+    Effect.gen(function* settledTransitions() {
+      const record = yield* createTicket("helpdeskProblem", {
+        status: "closed",
+      });
+
+      const snapshot = yield* (yield* Catalog).refresh;
+      const table = snapshot.classByName("helpdesk.problem");
+
+      if (table === undefined) {
+        throw new Error("Missing problem class");
+      }
+
+      assert.strictEqual(
+        snapshot
+          .recordRulesOf(table.id)
+          .filter((rule) => rule.ruleKind === "guard").length,
+        8
+      );
+
+      const saved = yield* updateRecord({
+        body: { status: "new" },
+        endpointClassId: table.id,
+        expectedVersion: null,
+        id: textOf(record.id),
+        mode: "settled",
+      }).pipe(Effect.provide(recordServices));
+
+      assert.strictEqual(asObject(saved.record?.values).status, "new");
+    }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 });

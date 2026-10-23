@@ -34,10 +34,6 @@ const migrationStateText = (state: PlannedMigration["state"]): string => {
     return "incomplete, resumed";
   }
 
-  if (state === "recheck") {
-    return "recheck remaining records after sets";
-  }
-
   return "pending";
 };
 

@@ -121,8 +121,7 @@ export interface PlannedMigration {
   readonly id: number;
   readonly name: string;
   readonly kind: PlatformMigration["kind"];
-  /** `recheck` inspects an applied optional-app migration after its sets load. */
-  readonly state: "pending" | "running" | "recheck";
+  readonly state: "pending" | "running";
 }
 
 /** A security change and the set making it. */
@@ -387,13 +386,14 @@ interface ComputedPlan {
 const pendingMigrations = Effect.fn("Config.pendingMigrations")(
   function* pendingMigrations(
     connection: DedicatedConnection,
-    migrations: readonly PlatformMigration[]
+    migrations: readonly PlatformMigration[],
+    setVersions: ReadonlyMap<string, number>
   ): Effect.fn.Return<
     readonly PlannedMigration[],
     MigrationStateRefused | DatabaseError
   > {
     const ledger = yield* hygienic(readLedger(connection.client));
-    const comparison = compareLedger(migrations, ledger);
+    const comparison = compareLedger(migrations, ledger, setVersions);
     const refusal = refusalOf(comparison, true);
 
     if (refusal !== undefined) {
@@ -511,11 +511,6 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
   MigrationStateRefused | DefinitionInvalid | DatabaseError,
   ChangeSetServices
 > {
-  const migrations = yield* pendingMigrations(
-    connection,
-    options.migrations ?? PLATFORM_MIGRATIONS
-  );
-
   const resume = yield* plannedResumes(connection);
   const installed = yield* readInstalledState;
 
@@ -524,9 +519,6 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
     ...(options.sets ?? []),
   ]);
 
-  // A repeated data migration may first become applicable when this run
-  // installs its optional app. Show the check in the plan and its hash,
-  // even when the post-set remaining proof will find no work to do.
   const setVersions = new Map(
     [...installed.layers.sets.values()].map((set) => [set.name, set.version])
   );
@@ -535,32 +527,11 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
     setVersions.set(source.header.name, source.header.version);
   }
 
-  const listed = new Set(migrations.map((migration) => migration.id));
-  const rechecks: PlannedMigration[] = [];
-
-  for (const migration of options.migrations ?? PLATFORM_MIGRATIONS) {
-    if (
-      migration.kind !== "data" ||
-      migration.repeatable !== true ||
-      listed.has(migration.id)
-    ) {
-      continue;
-    }
-
-    const requiredSet = migration.recheckForSet;
-
-    if (
-      requiredSet === undefined ||
-      (setVersions.get(requiredSet.name) ?? 0) >= requiredSet.minVersion
-    ) {
-      rechecks.push({
-        id: migration.id,
-        kind: migration.kind,
-        name: migration.name,
-        state: "recheck",
-      });
-    }
-  }
+  const migrations = yield* pendingMigrations(
+    connection,
+    options.migrations ?? PLATFORM_MIGRATIONS,
+    setVersions
+  );
 
   const { order, refusals: orderRefusals } = orderSets(
     sources,
@@ -582,9 +553,7 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
       changeSetId: installed.state?.changeSetId ?? null,
       revision: installed.state?.revision ?? null,
     },
-    migrations: [...migrations, ...rechecks].toSorted(
-      (left, right) => left.id - right.id
-    ),
+    migrations,
     refusals: [
       ...unfinishedRefusals(resume),
       ...orderRefusals,

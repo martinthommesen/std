@@ -23,7 +23,7 @@ rows:
     note: "ITIL 4 describes practices, not tool states; STD's state models are its own statement of them."
     status: tested
     tests:
-      - packages/server/test/helpdesk-v3-upgrade.test.ts#a fresh helpdesk v3 install and unchanged reload leave doctor clean
+      - packages/server/test/itil-incident.test.ts#a local rule replaces one priority cell without changing the others
   - id: STD-ITIL@14/C14/14.1/every-surface
     source: "Contracts 14.1 (third bullet); plan Step 3 gate (ITIL)"
     level: mandatory
@@ -183,7 +183,7 @@ rows:
     requirement: "The transition rules are one guard per source state, so they judge users' writes and never the saves that aggregate settling persists."
     status: tested
     tests:
-      - packages/server/test/helpdesk-v3-upgrade.test.ts#a fresh helpdesk v3 install and unchanged reload leave doctor clean
+      - packages/server/test/itil-incident.test.ts#settled saves bypass incident transition guards
   - id: STD-ITIL@14/C14/14.2/resolution-required
     source: "Contracts 14.2 (third bullet); Contracts 14.1"
     level: mandatory
@@ -238,7 +238,7 @@ rows:
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
     requirement: "Problem states are new, assess, root_cause_analysis, fix_in_progress, on_hold, resolved, closed and canceled."
-    note: "ITIL 4 problem management practice: a problem is a cause, or potential cause, of one or more incidents; the practice identifies, analyses and controls problems and their errors."
+    note: "STD tracks investigations into the faults behind service interruptions so teams can prevent recurrence. Concept reference: PeopleCert, ITIL 4 Practitioner Problem Management, https://www.peoplecert.org/browse-certifications/it-governance-and-service-management/ITIL-1/itil4-practices-problem-management-3688."
     status: tested
     tests:
       - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
@@ -297,12 +297,12 @@ rows:
     requirement: "The problem transition rules are one guard per source state (users' writes only)."
     status: tested
     tests:
-      - packages/server/test/helpdesk-v3-upgrade.test.ts#a fresh helpdesk v3 install and unchanged reload leave doctor clean
+      - packages/server/test/itil-problem.test.ts#settled saves bypass problem transition guards
   - id: STD-ITIL@14/C14/14.3/known-error-workaround
     source: "Contracts 14.3 (second bullet); Contracts 14.1"
     level: mandatory
     requirement: "The problem form requires a non-empty workaround while known_error is set; the APIs accept the flag without one."
-    note: "ITIL 4 problem management practice: a known error is a problem that has been analysed but not resolved; a workaround reduces or removes its impact while no full resolution exists."
+    note: "STD records an understood fault separately from its permanent repair and keeps temporary recovery guidance available. Concept reference: PeopleCert, ITIL 4 Practitioner Problem Management, https://www.peoplecert.org/browse-certifications/it-governance-and-service-management/ITIL-1/itil4-practices-problem-management-3688."
     status: pending
   - id: STD-ITIL@14/C14/14.3/known-error-any-state
     source: "Contracts 14.3 (second bullet)"

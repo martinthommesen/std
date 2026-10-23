@@ -229,9 +229,18 @@ describe("rolling-groundwork", () => {
         Effect.gen(function* scenario2() {
           yield* runUpgrade({ sets: [ACME_SET_DIRECTORY] });
           const ledger = yield* readLedger(yield* SqlClient.SqlClient);
-          assert.strictEqual(ledger.length, PLATFORM_MIGRATIONS.length);
 
-          for (const migration of PLATFORM_MIGRATIONS) {
+          const applicable = PLATFORM_MIGRATIONS.filter(
+            (migration) =>
+              migration.kind !== "data" || migration.requiredSet === undefined
+          );
+
+          assert.deepStrictEqual(
+            ledger.map((entry) => entry.id),
+            applicable.map((migration) => migration.id)
+          );
+
+          for (const migration of applicable) {
             assert.strictEqual(
               ledger.find((entry) => entry.id === migration.id)?.phase,
               migration.phase

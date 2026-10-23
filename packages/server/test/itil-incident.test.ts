@@ -1,6 +1,7 @@
 /** The incident part of Contracts 14, through the generic TMF630 API. */
 import { assert, describe, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { ConfigSnapshot } from "@std/definitions/snapshot";
+import { Effect, Exit } from "effect";
 import { TestClock } from "effect/testing";
 
 import {
@@ -10,6 +11,7 @@ import {
 import { Catalog } from "../src/catalog/catalog.ts";
 import { editDefinition } from "../src/config/config-service.ts";
 import { updateRecord } from "../src/records/save-pipeline.ts";
+import { savedFiltersInApiNames } from "../src/records/saved-filter-names.ts";
 import {
   clientFor,
   createTicket,
@@ -38,6 +40,21 @@ const readIncident = (
 ) =>
   client.records.get({ params: { id, table: "helpdeskIncident" }, query: {} });
 
+const filterSnapshot = ConfigSnapshot.empty({ changeSetId: "", revision: 0 });
+
+const filterActor = {
+  roleIds: [],
+  userId: "00000000-0000-0000-0000-000000000001",
+};
+
+const invalidFilter = {
+  filter: "old text",
+  id: "filter",
+  label: "Filter",
+  name: "filter",
+  table: "helpdesk.ticket",
+};
+
 describe("itil-incident", () => {
   it("checks every incident state in the transition matrix", () => {
     assert.deepStrictEqual(Object.keys(TRANSITIONS).toSorted(), [
@@ -53,7 +70,7 @@ describe("itil-incident", () => {
   it.effect(
     "all nine shipped matrix cells derive priority through the generic API",
     () =>
-      Effect.gen(function* scenario1() {
+      Effect.gen(function* matrixCells() {
         for (const impact of [1, 2, 3]) {
           for (const urgency of [1, 2, 3]) {
             const record = yield* createTicket("helpdeskIncident", {
@@ -92,7 +109,7 @@ describe("itil-incident", () => {
   it.effect(
     "explicit priority wins even equal to the previous value and JSON Patch preserves supplied-field provenance",
     () =>
-      Effect.gen(function* scenario2() {
+      Effect.gen(function* suppliedPriority() {
         let record = yield* createTicket("helpdeskIncident", {
           impact: "1",
           priority: "4",
@@ -137,10 +154,12 @@ describe("itil-incident", () => {
   it.effect(
     "every incident transition is accepted or refused with no write exactly as Contracts 14 specifies",
     () =>
-      Effect.gen(function* scenario3() {
+      Effect.gen(function* incidentTransitions() {
         const client = yield* clientFor();
 
-        for (const [source, allowed] of Object.entries(TRANSITIONS)) {
+        for (const [source, allowed] of Object.entries<readonly string[]>(
+          TRANSITIONS
+        )) {
           for (const target of Object.keys(TRANSITIONS)) {
             const record = yield* createTicket("helpdeskIncident", {
               status: source,
@@ -148,10 +167,7 @@ describe("itil-incident", () => {
 
             const response = yield* patchResponse(record, { status: target });
 
-            if (
-              source === target ||
-              allowed.some((status: string) => status === target)
-            ) {
+            if (source === target || allowed.includes(target)) {
               assert.strictEqual(
                 response.status,
                 200,
@@ -187,7 +203,7 @@ describe("itil-incident", () => {
   it.effect(
     "labels clear after derivation, supplied labels survive, and parent endpoints use incident rules",
     () =>
-      Effect.gen(function* scenario4() {
+      Effect.gen(function* labelLifecycle() {
         let record = yield* createTicket("helpdeskIncident", {
           impact: "1",
           priorityLabel: "Urgent custom",
@@ -227,7 +243,7 @@ describe("itil-incident", () => {
   it.effect(
     "hold defaults, writable resolution fields, and bounded Unicode titles are shipped derives",
     () =>
-      Effect.gen(function* scenario5() {
+      Effect.gen(function* resolutionDefaults() {
         const long = `${"😀".repeat(161)}\nsecond line`;
 
         let record = yield* createTicket("helpdeskIncident", {
@@ -267,13 +283,24 @@ describe("itil-incident", () => {
 
         reopened = yield* patchTicket(reopened, { status: "in_progress" });
         assert.notProperty(reopened, "resolvedAt");
+
+        const another = yield* createTicket("helpdeskIncident", {
+          status: "resolved",
+        });
+
+        const supplied = yield* patchTicket(another, {
+          resolvedAt: explicitDate,
+          status: "in_progress",
+        });
+
+        assert.strictEqual(supplied.resolvedAt, explicitDate);
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
   it.effect(
     "a local rule replaces one priority cell without changing the others",
     () =>
-      Effect.gen(function* scenario6() {
+      Effect.gen(function* localPriorityCell() {
         const snapshot = yield* (yield* Catalog).refresh;
 
         const shipped = snapshot
@@ -330,7 +357,7 @@ describe("itil-incident", () => {
   it.effect(
     "major incident permission holds through the API while priority never clears the flag and children resolve together",
     () =>
-      Effect.gen(function* scenario7() {
+      Effect.gen(function* majorIncidentCascade() {
         const fixture = yield* HelpdeskFixture;
         const client = yield* clientFor();
 
@@ -404,11 +431,16 @@ describe("itil-incident", () => {
         });
 
         const other = yield* createTicket();
-        parent = yield* patchTicket(parent, {
-          resolutionCode: "solved_permanently",
-          resolutionNotes: "Service restored",
-          status: "resolved",
-        });
+        parent = yield* patchTicket(
+          parent,
+          {
+            resolutionCode: "solved_permanently",
+            resolutionNotes: "Service restored",
+            status: "resolved",
+          },
+          "helpdeskIncident",
+          "manager"
+        );
         const got = readIncident(client, textOf(child.id));
         const resolvedChild = yield* got;
         assert.deepStrictEqual(
@@ -445,7 +477,7 @@ describe("itil-incident", () => {
   it.effect(
     "record-service writes run the same matrix and resolution derives",
     () =>
-      Effect.gen(function* scenario8() {
+      Effect.gen(function* serviceParity() {
         const record = yield* createTicket("helpdeskIncident", {
           impact: "1",
           urgency: "2",
@@ -465,19 +497,31 @@ describe("itil-incident", () => {
   it.effect(
     "ticket notes are owned parts whose creates and deletes advance the ticket exactly once",
     () =>
-      Effect.gen(function* scenario9() {
-        const client = yield* clientFor();
+      Effect.gen(function* noteOwnership() {
+        const client = yield* clientFor("agent");
+        const fixture = yield* HelpdeskFixture;
         const ticket = yield* createTicket();
         const other = yield* createTicket();
 
         const note = yield* client.records.create({
           params: { table: "helpdeskTicketNote" },
           payload: {
+            author: { id: fixture.agent2.id },
             text: "Caller supplied a reproduction",
             ticket: reference(ticket),
           },
         });
 
+        assert.strictEqual(asObject(note.author).id, fixture.agent.id);
+
+        const forged = yield* patchResponse(
+          asObject(note),
+          { author: { id: fixture.agent2.id } },
+          "helpdeskTicketNote",
+          "agent"
+        );
+
+        assert.strictEqual(forged.status, 422);
         const owner = yield* readIncident(client, textOf(ticket.id));
         assert.strictEqual(owner.revision, Number(ticket.revision) + 1);
 
@@ -499,5 +543,91 @@ describe("itil-incident", () => {
           other.revision
         );
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+  it.effect("a description is required on create and cannot be cleared", () =>
+    Effect.gen(function* requiredDescription() {
+      const client = yield* clientFor();
+
+      const absent = yield* client.records
+        .create({
+          params: { table: "helpdeskIncident" },
+          payload: { shortDescription: "Title only" },
+        })
+        .pipe(Effect.result);
+
+      assert.strictEqual(absent._tag, "Failure");
+      const ticket = yield* createTicket();
+      assert.strictEqual(
+        (yield* patchResponse(ticket, { description: null })).status,
+        422
+      );
+    }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect("settled saves bypass incident transition guards", () =>
+    Effect.gen(function* settledTransitions() {
+      const record = yield* createTicket("helpdeskIncident", {
+        status: "closed",
+      });
+
+      const snapshot = yield* (yield* Catalog).refresh;
+      const table = snapshot.classByName("helpdesk.incident");
+
+      if (table === undefined) {
+        throw new Error("Missing incident class");
+      }
+
+      assert.strictEqual(
+        snapshot
+          .recordRulesOf(table.id)
+          .filter((rule) => rule.ruleKind === "guard").length,
+        6
+      );
+
+      const saved = yield* updateRecord({
+        body: { status: "new" },
+        endpointClassId: table.id,
+        expectedVersion: null,
+        id: textOf(record.id),
+        mode: "settled",
+      }).pipe(Effect.provide(recordServices));
+
+      assert.strictEqual(asObject(saved.record?.values).status, "new");
+    }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+  it.effect("a malformed visible filter fails rather than disappearing", () =>
+    Effect.gen(function* malformedFilter() {
+      const result = yield* savedFiltersInApiNames(
+        filterSnapshot,
+        filterActor,
+        "table",
+        [{ ...invalidFilter, condition: { invalid: true } }]
+      ).pipe(Effect.exit);
+
+      assert.isTrue(Exit.isFailure(result));
+    })
+  );
+
+  it.effect(
+    "an unprintable visible filter fails rather than disappearing",
+    () =>
+      Effect.gen(function* unprintableFilter() {
+        const result = yield* savedFiltersInApiNames(
+          filterSnapshot,
+          filterActor,
+          "table",
+          [
+            {
+              ...invalidFilter,
+              condition: {
+                arg: { path: ["00000000-0000-0000-0000-000000000002"] },
+                op: "empty",
+              },
+            },
+          ]
+        ).pipe(Effect.exit);
+
+        assert.isTrue(Exit.isFailure(result));
+      })
   );
 });
