@@ -19,12 +19,14 @@ import { IdRow, query } from "../src/execute.ts";
 import { generate } from "../src/generate.ts";
 import type { ClassName } from "../src/hierarchy.ts";
 import { endpointFields, ticketClass } from "../src/hierarchy.ts";
+import { measureRead, runRequest } from "../src/measure.ts";
 import { ticketTable } from "../src/models/common.ts";
 import { modelById } from "../src/models/registry.ts";
 import { makeRng } from "../src/random.ts";
 import type { ModelContext, StorageModel } from "../src/storage-model.ts";
 import { modelIds } from "../src/storage-model.ts";
 import { sampleValue } from "../src/values.ts";
+import type { CompiledRequest, ReadDef, Samples } from "../src/workload.ts";
 import { executeSteps } from "../src/writes.ts";
 
 const records = 2000;
@@ -332,6 +334,92 @@ describe("branch-form", () => {
     assert.isTrue(branchFormApplies(listQueries.q7TargetFilter));
     assert.isTrue(branchFormApplies(listQueries.q6Shared));
   });
+
+  it.live(
+    "runs settings before page and count in direct and prepared requests",
+    () =>
+      Effect.gen(function* settingsAndCountTest() {
+        const server = yield* serverConfig;
+
+        const request: CompiledRequest = {
+          count: {
+            params: ["7"],
+            text: "SELECT $1::text AS count WHERE current_setting('max_parallel_workers_per_gather') = '0'",
+          },
+          page: {
+            params: ["3"],
+            text: "SELECT n::text AS id, current_setting('max_parallel_workers_per_gather') AS setting FROM generate_series(1, $1::integer) AS n WHERE current_setting('max_parallel_workers_per_gather') = '0'",
+          },
+          settings: [
+            {
+              params: [],
+              text: "SET LOCAL max_parallel_workers_per_gather = 0",
+            },
+          ],
+        };
+
+        const samples: Samples = {
+          admin: "unused",
+          laptops: [],
+          records: [],
+          users: [],
+        };
+
+        const def: ReadDef = {
+          caller: "admin",
+          decisive: true,
+          description:
+            "prepared request with transaction settings and a separate count",
+          endpoint: "item",
+          instance: () => ({
+            caller: { kind: "admin", userId: "unused" },
+            endpoint: "item",
+            id: "unused",
+            kind: "get",
+          }),
+          name: "settings and count",
+          query: "Q5",
+        };
+
+        yield* Effect.gen(function* checkRequestResults() {
+          const direct = yield* runRequest(request);
+
+          assert.deepStrictEqual(direct, {
+            count: [{ count: "7" }],
+            page: [
+              { id: "1", setting: "0" },
+              { id: "2", setting: "0" },
+              { id: "3", setting: "0" },
+            ],
+          });
+
+          const measured = yield* measureRead(
+            {
+              ctx: contextFor("unused"),
+              model: modelById("class-table"),
+              samples,
+            },
+            def,
+            { runs: 2, seed: 1, setupConcurrency: 2, warmup: 1 },
+            { compile: () => Effect.succeed(request) }
+          );
+
+          assert.strictEqual(measured.meanRows, 3);
+          assert.strictEqual(measured.runs, 2);
+          assert.deepStrictEqual(
+            measured.plans.map(({ text, params }) => ({ params, text })),
+            [request.page, request.count]
+          );
+          assert.isTrue(
+            measured.plans.every((plan) => plan.plan.includes("Execution Time"))
+          );
+        }).pipe(
+          Effect.provide(
+            clientLayer(server, server.adminDatabase, { maxConnections: 2 })
+          )
+        );
+      })
+  );
 
   // it.live: a real Postgres with crafted records in every storage model.
   it.live(

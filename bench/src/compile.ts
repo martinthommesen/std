@@ -363,6 +363,20 @@ const whereClause = (conditions: readonly (string | null)[]): string => {
   return present.length === 0 ? "" : ` WHERE ${present.join(" AND ")}`;
 };
 
+interface BranchKey {
+  readonly expression: string;
+  readonly direction: "asc" | "desc";
+}
+
+const orderClause = (keys: readonly BranchKey[], id: string): string => {
+  const items = [
+    ...keys.map((key) => orderItem(key.expression, key.direction)),
+    orderItem(id, keys[0]?.direction ?? "asc"),
+  ];
+
+  return ` ORDER BY ${items.join(", ")}`;
+};
+
 interface PreparedKey {
   readonly expression: string;
   readonly direction: "asc" | "desc";
@@ -393,15 +407,10 @@ const prepare = (target: Target, query: ListQuery): Prepared => {
     expression: scope.expression(key.path),
   }));
 
-  const items = [
-    ...keys.map((key) => orderItem(key.expression, key.direction)),
-    orderItem(scope.id, keys[0]?.direction ?? "asc"),
-  ];
-
   return {
     filters,
     keys,
-    orderBy: ` ORDER BY ${items.join(", ")}`,
+    orderBy: orderClause(keys, scope.id),
     params,
     scope,
   };
@@ -528,20 +537,6 @@ export const compileGet = (
   const text = `SELECT ${selection} FROM ${scope.from()}${whereClause([idCondition, scope.endpointFilter])}`;
 
   return { params: params.values(), text };
-};
-
-interface BranchKey {
-  readonly expression: string;
-  readonly direction: "asc" | "desc";
-}
-
-const orderClause = (keys: readonly BranchKey[], id: string): string => {
-  const items = [
-    ...keys.map((key) => orderItem(key.expression, key.direction)),
-    orderItem(id, keys[0]?.direction ?? "asc"),
-  ];
-
-  return ` ORDER BY ${items.join(", ")}`;
 };
 
 const keysOf = (

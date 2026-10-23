@@ -17,6 +17,7 @@ import type {
   ModelContext,
   WriteState,
 } from "../storage-model.ts";
+import { systemColumns } from "../storage-model.ts";
 import { hashMod, sqlValue } from "../values.ts";
 
 /** Schema of the staging tables. */
@@ -416,24 +417,14 @@ export const ticketLoad = (
 ): readonly LoadJob[] => {
   const withClass = storage === "fk-with-class";
 
-  const system = [
-    "id",
-    "class_id",
-    "version",
-    "created_at",
-    "created_by",
-    "updated_at",
-    "updated_by",
-  ];
-
   const columns = [
-    ...system,
+    ...systemColumns,
     ...ticketClass.fields.map((def) => q(def.name)),
     ...(withClass ? ["item_class"] : []),
   ];
 
   const values = [
-    ...system.map((column) =>
+    ...systemColumns.map((column) =>
       column === "class_id" ? uuidLiteral(ticketClass.id) : `ts.${column}`
     ),
     ...ticketClass.fields.map((def) => ticketValue(def)),

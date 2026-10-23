@@ -401,6 +401,13 @@ const withCursor: (
     : { ...instance.query, cursor: { id: row.id, values: row.keys } };
 });
 
+/** Statements of a read, executed as settings, page, then optional count in one transaction. */
+export interface CompiledRequest {
+  readonly settings: readonly Compiled[];
+  readonly page: Compiled;
+  readonly count?: Compiled;
+}
+
 /**
  * Compiles an instance into the statements of one request. Q2's cursor is
  * found first with an unmeasured probe, as a client paging there would hold it.
@@ -408,13 +415,13 @@ const withCursor: (
  * @param model - The storage model.
  * @param ctx - Its schema and sizes.
  * @param instance - The request.
- * @returns The statements, in order (the page, then the count if requested).
+ * @returns The settings, page and optional count statements.
  */
 export const compileInstance: (
   model: StorageModel,
   ctx: ModelContext,
   instance: ReadInstance
-) => Effect.Effect<readonly Compiled[], SqlError | BenchError, PgClient> =
+) => Effect.Effect<CompiledRequest, SqlError | BenchError, PgClient> =
   Effect.fnUntraced(function* compileRequest(
     model: StorageModel,
     ctx: ModelContext,
@@ -423,14 +430,17 @@ export const compileInstance: (
     const target: Target = { caller: instance.caller, ctx, model };
 
     if (instance.kind === "get") {
-      return [compileGet(target, instance.endpoint, instance.id, false)];
+      return {
+        page: compileGet(target, instance.endpoint, instance.id, false),
+        settings: [],
+      };
     }
 
     const page = compileList(target, yield* withCursor(target, instance));
 
     return instance.count
-      ? [page, compileCount(target, instance.query)]
-      : [page];
+      ? { count: compileCount(target, instance.query), page, settings: [] }
+      : { page, settings: [] };
   });
 
 const SampleRow = Schema.Struct({
@@ -446,48 +456,61 @@ const UserRow = Schema.Struct({ id: Schema.String });
  *
  * @param seed - The run's seed.
  * @param count - Samples per kind.
+ * @param concurrency - The caller's SQL connection-pool capacity.
  * @returns The samples.
  */
 export const loadSamples: (
   seed: number,
-  count: number
+  count: number,
+  concurrency: number
 ) => Effect.Effect<Samples, SqlError | BenchError, PgClient> = Effect.fn(
   "bench.loadSamples"
-)(function* drawSamples(seed: number, count: number) {
+)(function* drawSamples(seed: number, count: number, concurrency: number) {
   const params = [String(seed), String(count)];
 
   const order = "ORDER BY hashint8extended(n, $1::bigint), n LIMIT $2::integer";
 
-  const records = yield* query(
+  // Sampling shares the caller's existing connection-pool budget.
+  const {
+    records,
+    laptops,
+    users,
+    admin: [adminRow],
+  } = yield* Effect.all(
     {
-      params,
-      text: `SELECT id::text AS id, owner::text AS owner FROM ${auxSchema}.stage ${order}`,
-    },
-    SampleRow
-  );
+      admin: query(
+        {
+          params: [],
+          text: `SELECT id::text AS id FROM ${auxSchema}.user_map WHERE k = 1`,
+        },
+        UserRow
+      ),
 
-  const laptops = yield* query(
-    {
-      params,
-      text: `SELECT id::text AS id, owner::text AS owner FROM ${auxSchema}.stage WHERE class_id = '${classDef("laptop").id}'::uuid ${order}`,
-    },
-    SampleRow
-  );
+      laptops: query(
+        {
+          params,
+          text: `SELECT id::text AS id, owner::text AS owner FROM ${auxSchema}.stage WHERE class_id = '${classDef("laptop").id}'::uuid ${order}`,
+        },
+        SampleRow
+      ),
 
-  const users = yield* query(
-    {
-      params,
-      text: `SELECT id::text AS id FROM ${auxSchema}.user_map ORDER BY hashint8extended(k, $1::bigint), k LIMIT $2::integer`,
-    },
-    UserRow
-  );
+      records: query(
+        {
+          params,
+          text: `SELECT id::text AS id, owner::text AS owner FROM ${auxSchema}.stage ${order}`,
+        },
+        SampleRow
+      ),
 
-  const [adminRow] = yield* query(
-    {
-      params: [],
-      text: `SELECT id::text AS id FROM ${auxSchema}.user_map WHERE k = 1`,
+      users: query(
+        {
+          params,
+          text: `SELECT id::text AS id FROM ${auxSchema}.user_map ORDER BY hashint8extended(k, $1::bigint), k LIMIT $2::integer`,
+        },
+        UserRow
+      ),
     },
-    UserRow
+    { concurrency }
   );
 
   return {

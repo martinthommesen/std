@@ -29,9 +29,10 @@ import { postgresInfo } from "./environment.ts";
 import { checkBranchedEquivalence } from "./equivalence.ts";
 import { BenchError } from "./errors.ts";
 import { execute } from "./execute.ts";
-import type { ReadResult, ReadVariant, StatementPlan } from "./measure.ts";
+import type { ReadResult, ReadVariant } from "./measure.ts";
 import { measureRead } from "./measure.ts";
 import { prepareModel, samplesPerRun } from "./pipeline.ts";
+import { planBlock } from "./report.ts";
 import type { Compiled } from "./sql-text.ts";
 import { q, table } from "./sql-text.ts";
 import type { ModelContext, StorageModel } from "./storage-model.ts";
@@ -40,6 +41,9 @@ import { compileInstance, loadSamples, reads } from "./workload.ts";
 
 const millisecondsPerSecond = 1000;
 const equivalenceInstances = 200;
+
+// Reuse the rewrites pool's existing capacity for unmeasured request setup.
+const maxConnections = 2;
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
 
 /** The extra index the "what would be needed" variant measures. */
@@ -65,13 +69,13 @@ const branched =
   (model: StorageModel, ctx: ModelContext): ReadVariant => ({
     compile: (instance: ReadInstance) =>
       instance.kind === "list" && instance.depth === 0
-        ? Effect.succeed([
-            ...prefix,
-            compileBranchedList(
+        ? Effect.succeed({
+            page: compileBranchedList(
               { caller: instance.caller, ctx, model },
               instance.query
             ),
-          ])
+            settings: prefix,
+          })
         : compileInstance(model, ctx, instance),
   });
 
@@ -167,8 +171,8 @@ const measureVariants = (
         const result = yield* measureRead(
           { ctx, model, samples },
           def,
-          options,
-          { ...entry.variant(model, ctx), seedName: def.name }
+          { ...options, setupConcurrency: maxConnections },
+          entry.variant(model, ctx)
         );
 
         yield* Effect.logInfo(
@@ -201,25 +205,11 @@ export interface RewritesReport {
   readonly totalSeconds: number;
 }
 
-const planText = (plan: StatementPlan): string =>
-  [
-    "```sql",
-    plan.text,
-    "```",
-    "",
-    `Parameters: \`${JSON.stringify(plan.params)}\``,
-    "",
-    "```text",
-    plan.plan,
-    "```",
-    "",
-  ].join("\n");
-
 const variantPlans = (result: VariantResult): string =>
   [
     `### ${result.variant}: p50 ${result.p50} ms, p95 ${result.p95} ms`,
     "",
-    ...result.plans.map((plan) => planText(plan)),
+    ...result.plans.map((plan) => planBlock(plan)),
   ].join("\n");
 
 /**
@@ -281,7 +271,11 @@ const measureAll = Effect.fn("bench.measureAll")(function* measureRewrites(
   ctx: ModelContext,
   options: Options
 ) {
-  const samples = yield* loadSamples(options.seed, samplesPerRun);
+  const samples = yield* loadSamples(
+    options.seed,
+    samplesPerRun,
+    maxConnections
+  );
 
   const equivalence = yield* checkBranchedEquivalence(
     model,
@@ -367,7 +361,7 @@ export const runRewrites: (
       scale,
     });
 
-    const layer = clientLayer(server, prepared.database, { maxConnections: 2 });
+    const layer = clientLayer(server, prepared.database, { maxConnections });
 
     const measured = yield* measureAll(
       prepared.model,

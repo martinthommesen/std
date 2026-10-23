@@ -153,10 +153,16 @@ const measureOne =
     options: Options
   ) =>
   (def: (typeof reads)[number]) =>
-    Effect.tap(measureRead({ ctx, model, samples }, def, options), (result) =>
-      Effect.logInfo(
-        `${model.id} @ ${ctx.records}: ${result.name} p50 ${result.p50} ms, p95 ${result.p95} ms`
-      )
+    Effect.tap(
+      measureRead({ ctx, model, samples }, def, {
+        ...options,
+        // runModel and runSmoke allocate this pool for reads and writes.
+        setupConcurrency: options.clients + 2,
+      }),
+      (result) =>
+        Effect.logInfo(
+          `${model.id} @ ${ctx.records}: ${result.name} p50 ${result.p50} ms, p95 ${result.p95} ms`
+        )
     );
 
 const measureModel: (
@@ -264,21 +270,20 @@ const runModel: (
   function* runOneModel(server: ServerConfig, options: Options, spec: RunSpec) {
     const startedAt = new Date().toISOString();
     const begin = performance.now();
-    const model = modelById(spec.model);
-    const database = databaseFor(spec.model, spec.scale, spec.mitigations);
-    const ctx = contextFor(spec.scale, "bench", spec.mitigations);
     const label = runLabel(spec.model, spec.scale, spec.mitigations);
 
-    yield* Effect.logInfo(`run ${label} in ${database}`);
+    yield* Effect.logInfo(
+      `run ${label} in ${databaseFor(spec.model, spec.scale, spec.mitigations)}`
+    );
 
-    const generation = yield* prepareDatabase(
+    const { model, database, ctx, generation } = yield* prepareModel(
       server,
-      planFor(database, spec.scale, [{ ctx, model }]),
-      options.reuse
+      options,
+      spec
     );
 
     const measured = yield* Effect.flatMap(
-      loadSamples(options.seed, sampleCount),
+      loadSamples(options.seed, sampleCount, options.clients + 2),
       (samples) => measureModel(model, ctx, samples, options)
     ).pipe(
       Effect.provide(
@@ -326,7 +331,13 @@ const smokeRuns: (
   "bench.smokeRuns"
 )(function* measureSmoke(smoke: SmokeContext) {
   const { generation, options, planned } = smoke;
-  const samples = yield* loadSamples(options.seed, sampleCount);
+
+  const samples = yield* loadSamples(
+    options.seed,
+    sampleCount,
+    options.clients + 2
+  );
+
   const crossModel = yield* checkEquivalence(planned, samples, options.seed);
 
   const equivalence = [...crossModel];
