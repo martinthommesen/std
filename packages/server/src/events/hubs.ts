@@ -15,7 +15,7 @@ import {
   PLATFORM_CLASS_IDS,
 } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
-import { Clock, Config, Effect, Option, Schema } from "effect";
+import { Clock, Config, Context, Effect, Layer, Option, Schema } from "effect";
 import type { Redacted } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -38,13 +38,46 @@ const DEFAULT_MAX_ACTIVE_HUBS = 20;
 const DEFAULT_MAX_ACTIVE_HUBS_PER_HOST = 10;
 const HUB_MAX_ATTEMPTS = 10;
 
-const conditionOf = (value: Expr): Condition => {
+const conditionOf = Effect.fn("Hubs.conditionOf")(function* conditionOf(
+  value: Expr
+) {
   if (!Schema.is(ConditionSchema)(value)) {
-    throw new Error("Parsed subscription condition is not persistable");
+    return yield* Effect.die(
+      new Error("Parsed subscription condition is not persistable")
+    );
   }
 
   return value;
-};
+});
+
+/** Hub capacity configuration, validated once when the HTTP application starts. */
+export class HubSettings extends Context.Service<
+  HubSettings,
+  {
+    readonly maxActive: number;
+    readonly maxPerHost: number;
+  }
+>()("std/events/HubSettings") {
+  static readonly layer = Layer.effect(
+    HubSettings,
+    Effect.gen(function* hubSettingsLayer() {
+      const maxActive = yield* Config.schema(
+        Schema.Int.check(Schema.isGreaterThan(0)),
+        "STD_HUB_MAX_ACTIVE_PER_IDENTITY"
+      ).pipe(Config.withDefault(DEFAULT_MAX_ACTIVE_HUBS));
+
+      const maxPerHost = yield* Config.schema(
+        Schema.Int.check(Schema.isGreaterThan(0)),
+        "STD_HUB_MAX_ACTIVE_PER_HOST"
+      ).pipe(Config.withDefault(DEFAULT_MAX_ACTIVE_HUBS_PER_HOST));
+
+      return HubSettings.of({ maxActive, maxPerHost });
+    })
+  );
+}
+
+const callbackHost = (address: string): string =>
+  new URL(address).hostname.replace(/\.$/u, "");
 
 /** The API and resource a hub watches. */
 export interface HubTarget {
@@ -137,7 +170,7 @@ export const prepareRegistration = Effect.fn("Hubs.prepare")(
     const condition =
       conditions.length === 0
         ? null
-        : conditionOf({
+        : yield* conditionOf({
             args: conditions,
             op: "and",
           });
@@ -147,11 +180,11 @@ export const prepareRegistration = Effect.fn("Hubs.prepare")(
 
     const attributeCondition = Option.isNone(parsed.tmf)
       ? null
-      : conditionOf(parsed.tmf.value);
+      : yield* conditionOf(parsed.tmf.value);
 
     const standardCondition = Option.isNone(parsed.condition)
       ? null
-      : conditionOf(parsed.condition.value.expr);
+      : yield* conditionOf(parsed.condition.value.expr);
 
     for (const fieldId of queryFieldIds) {
       for (const child of scope.snapshot.subtree(target.classId)) {
@@ -241,15 +274,7 @@ export const registerHub = Effect.fn("Hubs.register")(function* registerHub(
   registration: Registration,
   session?: Redacted.Redacted
 ) {
-  const maxActive = yield* Config.schema(
-    Schema.Int.check(Schema.isGreaterThan(0)),
-    "STD_HUB_MAX_ACTIVE_PER_IDENTITY"
-  ).pipe(Config.withDefault(DEFAULT_MAX_ACTIVE_HUBS));
-
-  const maxPerHost = yield* Config.schema(
-    Schema.Int.check(Schema.isGreaterThan(0)),
-    "STD_HUB_MAX_ACTIVE_PER_HOST"
-  ).pipe(Config.withDefault(DEFAULT_MAX_ACTIVE_HUBS_PER_HOST));
+  const { maxActive, maxPerHost } = yield* HubSettings;
 
   const actor = yield* Actor;
   const id = uuidv7At(yield* Clock.currentTimeMillis);
@@ -321,8 +346,8 @@ export const registerHub = Effect.fn("Hubs.register")(function* registerHub(
 
         const hostCount = active.filter(
           (entry) =>
-            new URL(entry.hub?.callback ?? "").hostname ===
-            new URL(registration.callback).hostname
+            callbackHost(entry.hub?.callback ?? "") ===
+            callbackHost(registration.callback)
         ).length;
 
         if (

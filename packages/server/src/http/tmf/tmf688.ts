@@ -14,16 +14,27 @@ import { Actor } from "../../auth/actor.ts";
 import { Catalog } from "../../catalog/catalog.ts";
 import type { InstanceSettings } from "../../config/instance-settings.ts";
 import {
+  eventLookupPending,
+  invalidAfter,
+  readEventCursor,
+  writeEventCursor,
+} from "../../events/event-cursor.ts";
+import type { EventPosition } from "../../events/event-cursor.ts";
+import {
   hubResource,
   ownedHub,
   prepareRegistration,
   registerHub,
   unregisterHub,
 } from "../../events/hubs.ts";
-import type { HubTarget } from "../../events/hubs.ts";
-import { listResourceEvents } from "../../events/resource-events.ts";
+import type { HubTarget, HubSettings } from "../../events/hubs.ts";
+import {
+  resourceEventPosition,
+  listResourceEvents,
+} from "../../events/resource-events.ts";
 import {
   findClientEvent,
+  clientEventPosition,
   createEvent,
   createTopic,
   deleteTopic,
@@ -31,6 +42,7 @@ import {
   listClientEvents,
   listTopics,
 } from "../../events/tmf688-resources.ts";
+import type { EventTopic } from "../../events/tmf688-resources.ts";
 import { TooManyRequests } from "../../events/too-many-requests.ts";
 import type { SaveHooks } from "../../records/save-hooks.ts";
 import { RuleWriteAccess } from "../../records/write-access-rules.ts";
@@ -51,9 +63,14 @@ import { jsonAnswer } from "../v2/records.ts";
 import { jsonBodyOf, mediaTypeOf, withSession } from "../v2/request.ts";
 import { originOf } from "../v2/resource.ts";
 import { isTmfFailure, tmfErrorResponse } from "../v2/tmf-error.ts";
-import { pageAnswer, pageBounds, selectedResource } from "./page.ts";
+import {
+  filteredResources,
+  pageAnswer,
+  pageBounds,
+  selectedResource,
+} from "./page.ts";
 
-type EventSaveServices = SaveHooks | WriteOnlyValues;
+type EventSaveServices = SaveHooks | WriteOnlyValues | HubSettings;
 
 const IDENTITY_FIELDS = ["@type", "@baseType", "@schemaLocation", "id", "href"];
 
@@ -334,58 +351,41 @@ const readHubs = Effect.fn("Tmf688.readHubs")(function* readHubs(
   );
 });
 
-const readEvents = Effect.fn("Tmf688.readEvents")(function* readEvents(
-  input: RequestInput
+// Bounds apply to raw candidates and full payload renderings independently.
+const EVENT_SCAN_BUDGET = 1000;
+const EVENT_BATCH_SIZE = 100;
+const EVENT_PAYLOAD_BUDGET = 100;
+
+interface EventBounds {
+  readonly offset: number;
+  readonly limit: number;
+}
+
+interface EventScan {
+  readonly selected: readonly JsonObject[];
+  readonly scanned: number;
+  readonly complete: boolean;
+  readonly position: EventPosition | null;
+}
+
+const getEvent = Effect.fn("Tmf688.getEvent")(function* getEvent(
+  input: RequestInput,
+  topic: EventTopic,
+  lookupPending: boolean
 ) {
-  const topicId = input.params.topicId ?? "";
-  const topic = yield* getTopic(topicId, input.origin);
-
-  const bounds = pageBounds(input.query);
-
-  if (bounds === undefined) {
-    return yield* new InvalidRequest({
-      message: "offset plus limit must be at most 1000.",
-      parameter: "limit",
-    });
-  }
-
-  const hasFilters = [...input.query.keys()].some(
-    (name) =>
-      !["fields", "offset", "limit", "after", "sort", "count"].includes(name)
-  );
-
-  const window = hasFilters ? 1000 : bounds.offset + bounds.limit;
-
-  if (input.operation === "listEvents") {
-    const events =
-      topic.version === null
-        ? yield* listResourceEvents(
-            topic,
-            input.origin,
-            window,
-            undefined,
-            input.query.get("after") ?? undefined
-          )
-        : yield* listClientEvents(topicId, input.origin, window);
-
-    const params = new URLSearchParams(input.query);
-
-    if (topic.version === null) {
-      params.delete("after");
-    }
-
-    return yield* pageAnswer(
-      events,
-      params,
-      EVENT_FIELDS,
-      topic.version !== null && events.length < window
-    );
-  }
-
   const event =
     topic.version === null
-      ? (yield* listResourceEvents(topic, input.origin, 1, input.params.id))[0]
-      : yield* findClientEvent(topicId, input.params.id ?? "", input.origin);
+      ? (yield* listResourceEvents(topic, input.origin, {
+          eventId: input.params.id ?? "",
+          limit: 1,
+          lookupPending,
+        })).events[0]
+      : yield* findClientEvent(
+          topic.resource.id,
+          input.params.id ?? "",
+          input.origin,
+          lookupPending
+        );
 
   if (event === undefined) {
     return yield* new NotFound();
@@ -395,6 +395,219 @@ const readEvents = Effect.fn("Tmf688.readEvents")(function* readEvents(
     yield* selectedResource(event, input.query.get("fields"), EVENT_FIELDS),
     200
   );
+});
+
+const eventStartPosition = Effect.fn("Tmf688.eventStartPosition")(
+  function* eventStartPosition(
+    input: RequestInput,
+    topic: EventTopic,
+    lookupPending: boolean
+  ) {
+    const after = input.query.get("after");
+
+    if (after === null) {
+      return null;
+    }
+
+    if (after.startsWith("cursor:")) {
+      return yield* readEventCursor(after, topic.resource.id, input.query);
+    }
+
+    if (topic.version !== null) {
+      return yield* clientEventPosition(
+        topic.resource.id,
+        after,
+        input.origin,
+        lookupPending
+      );
+    }
+
+    const visible = yield* listResourceEvents(topic, input.origin, {
+      eventId: after,
+      limit: 1,
+      lookupPending,
+    });
+
+    if (visible.events.length === 0) {
+      return yield* invalidAfter();
+    }
+
+    return yield* resourceEventPosition(topic, after, lookupPending);
+  }
+);
+
+const scanEvents = Effect.fn("Tmf688.scanEvents")(function* scanEvents(
+  input: RequestInput,
+  topic: EventTopic,
+  bounds: EventBounds,
+  start: EventPosition | null
+) {
+  const selected: JsonObject[] = [];
+  let position = start;
+  let scanned = 0;
+  let complete = false;
+  let payloads = 0;
+  const window = bounds.offset + bounds.limit;
+  let batchSize = Math.min(EVENT_BATCH_SIZE, window);
+  const allowed = new Set(EVENT_FIELDS);
+
+  while (!complete && selected.length < window && scanned < EVENT_SCAN_BUDGET) {
+    const options = { limit: Math.min(batchSize, EVENT_SCAN_BUDGET - scanned) };
+
+    const positioned = position === null ? options : { ...options, position };
+
+    const batch =
+      topic.version === null
+        ? yield* listResourceEvents(topic, input.origin, {
+            ...positioned,
+            fullPayloads: Math.max(0, EVENT_PAYLOAD_BUDGET - payloads),
+          })
+        : yield* listClientEvents(topic.resource.id, input.origin, positioned);
+
+    let consumed = 0;
+
+    for (const candidate of batch.candidates) {
+      selected.push(
+        ...(yield* filteredResources(candidate.events, input.query, allowed))
+      );
+      ({ position } = candidate);
+      scanned += 1;
+      consumed += 1;
+
+      if (selected.length >= window) {
+        break;
+      }
+    }
+
+    batchSize = EVENT_BATCH_SIZE;
+    payloads += batch.scanned;
+    complete = batch.complete && consumed === batch.candidates.length;
+  }
+
+  return { complete, position, scanned, selected } satisfies EventScan;
+});
+
+const eventPageLinks = Effect.fn("Tmf688.eventPageLinks")(
+  function* eventPageLinks(
+    input: RequestInput,
+    topic: EventTopic,
+    bounds: EventBounds,
+    scan: EventScan
+  ) {
+    const self = new URL(input.request.url, input.origin);
+    const links = [`<${self.href}>; rel="self"`];
+
+    if (!scan.complete && scan.position !== null) {
+      const next = new URL(self);
+      next.searchParams.set(
+        "after",
+        yield* writeEventCursor(scan.position, topic.resource.id, input.query)
+      );
+      next.searchParams.set(
+        "offset",
+        String(Math.max(0, bounds.offset - scan.selected.length))
+      );
+      links.push(`<${next.href}>; rel="next"`);
+    }
+
+    return links.join(", ");
+  }
+);
+
+const eventPageAnswer = Effect.fn("Tmf688.eventPageAnswer")(
+  function* eventPageAnswer(
+    input: RequestInput,
+    topic: EventTopic,
+    bounds: EventBounds,
+    scan: EventScan
+  ) {
+    const page = [];
+
+    for (const [index, event] of scan.selected
+      .slice(bounds.offset, bounds.offset + bounds.limit)
+      .entries()) {
+      const resource =
+        topic.version === null || index < EVENT_PAYLOAD_BUDGET
+          ? event
+          : {
+              "@type": event["@type"] ?? "Event",
+              href: event.href ?? "",
+              id: event.id ?? "",
+            };
+
+      page.push(
+        yield* selectedResource(
+          resource,
+          input.query.get("fields"),
+          EVENT_FIELDS
+        )
+      );
+    }
+
+    const headers = {
+      "cache-control": "no-store",
+      "content-type": "application/json;charset=utf-8",
+      link: yield* eventPageLinks(input, topic, bounds, scan),
+      "x-result-count": String(page.length),
+    };
+
+    if (
+      !scan.complete ||
+      input.query.has("after") ||
+      input.query.get("count") === "false"
+    ) {
+      return jsonAnswer(page, 200, headers);
+    }
+
+    const hasFilters = [...input.query.keys()].some(
+      (name) =>
+        !["fields", "offset", "limit", "after", "sort", "count"].includes(name)
+    );
+
+    const count =
+      topic.version !== null && !hasFilters
+        ? scan.scanned
+        : scan.selected.length;
+
+    return jsonAnswer(page, 200, {
+      ...headers,
+      "x-total-count": String(count),
+    });
+  }
+);
+
+const readEvents = Effect.fn("Tmf688.readEvents")(function* readEvents(
+  input: RequestInput
+) {
+  const topic = yield* getTopic(input.params.topicId ?? "", input.origin);
+  const after = input.query.get("after");
+
+  const needsLookup =
+    (after !== null && !after.startsWith("cursor:")) ||
+    input.operation !== "listEvents";
+
+  const lookupPending = needsLookup ? yield* eventLookupPending() : false;
+
+  if (input.operation !== "listEvents") {
+    return yield* getEvent(input, topic, lookupPending);
+  }
+
+  const bounds = pageBounds(input.query);
+
+  if (bounds === undefined || input.query.has("sort")) {
+    return yield* new InvalidRequest({
+      message:
+        "Events use newest-first order; offset plus limit must be at most 1000.",
+      parameter: "limit",
+    });
+  }
+
+  yield* filteredResources([], input.query, new Set(EVENT_FIELDS));
+  yield* selectedResource({}, input.query.get("fields"), EVENT_FIELDS);
+  const position = yield* eventStartPosition(input, topic, lookupPending);
+  const scan = yield* scanEvents(input, topic, bounds, position);
+
+  return yield* eventPageAnswer(input, topic, bounds, scan);
 });
 
 const resourceRequest = Effect.fn("Tmf688.resourceRequest")(

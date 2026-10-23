@@ -1,15 +1,15 @@
 import type { Definition } from "@std/definitions/definition";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { Clock, Effect } from "effect";
+import { Clock, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { collectionNameOf } from "../http/v2/table-names.ts";
-import { readEntries } from "../outbox/delivery-payload.ts";
 import { writeChangeEntry } from "../records/change-entry.ts";
 import { matchingSubscriptions } from "../records/outbox-producer.ts";
 import { NOW } from "../records/save-sql.ts";
+import { decodeRows } from "../sql/rows.ts";
 import { STD_VERSION } from "../version.ts";
 import { eventIdOf } from "./event-id.ts";
 
@@ -60,11 +60,14 @@ export const writeResourceTopicChanges = Effect.fn(
 
     const recordId = eventIdOf(definition.id, "TMF688.ResourceTopic");
 
-    const history = yield* readEntries(recordId, Number.MAX_SAFE_INTEGER).pipe(
-      Effect.catchTag("PayloadUnreadable", Effect.die)
-    );
+    const [history] =
+      yield* sql`SELECT record_version::text AS version FROM core.change WHERE record_id = ${recordId}::uuid ORDER BY record_version DESC LIMIT 1`.pipe(
+        Effect.flatMap(
+          decodeRows(Schema.Struct({ version: Schema.FiniteFromString }))
+        )
+      );
 
-    const recordVersion = (history.at(-1)?.recordVersion ?? 0) + 1;
+    const recordVersion = (history?.version ?? 0) + 1;
 
     const existingKind = newName === null ? "delete" : "update";
     const kind = oldName === null ? "create" : existingKind;

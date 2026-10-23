@@ -15,26 +15,33 @@ import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { asObject, textOf } from "./v2-support.ts";
 
+/** Build HTTP and worker services with explicit startup configuration.
+ * @param config - Startup environment overrides.
+ * @returns The isolated HTTP and worker layer.
+ */
+export const hubTestLayerWith = (config: Readonly<Record<string, string>>) =>
+  Layer.mergeAll(TestHttpClient.layer, ProductionDeliveryHandlers).pipe(
+    Layer.provideMerge(
+      Layer.mergeAll(
+        OutboxSaveHooks,
+        WriteAccess.allowAll,
+        WriteOnlyValues.scrypt,
+        WorkerSettings.layerOf()
+      )
+    ),
+    Layer.provideMerge(acmeTestLayer()),
+    Layer.provide(
+      ConfigProvider.layer(
+        ConfigProvider.fromUnknown({
+          STD_HUB_ALLOW_PRIVATE_ADDRESSES: "true",
+          ...config,
+        })
+      )
+    )
+  );
+
 /** HTTP application and the production worker on one isolated database. */
-export const hubTestLayer = Layer.mergeAll(
-  TestHttpClient.layer,
-  ProductionDeliveryHandlers
-).pipe(
-  Layer.provideMerge(
-    Layer.mergeAll(
-      OutboxSaveHooks,
-      WriteAccess.allowAll,
-      WriteOnlyValues.scrypt,
-      WorkerSettings.layerOf()
-    )
-  ),
-  Layer.provideMerge(acmeTestLayer()),
-  Layer.provide(
-    ConfigProvider.layer(
-      ConfigProvider.fromUnknown({ STD_HUB_ALLOW_PRIVATE_ADDRESSES: "true" })
-    )
-  )
-);
+export const hubTestLayer = hubTestLayerWith({});
 
 /** A recorded local HTTP call. */
 export interface CallbackCall {

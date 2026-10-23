@@ -17,11 +17,16 @@ import { SqlClient } from "effect/sql";
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { collectionNameOf } from "../http/v2/table-names.ts";
+import { encodeCursor } from "../records/read-cursor.ts";
+import { systemField } from "../records/read-field.ts";
 import { getRecord, listRecords } from "../records/read-records.ts";
 import type { ListRequest } from "../records/read-records.ts";
 import { createRecord, deleteRecord } from "../records/save-pipeline.ts";
 import { decodeRows } from "../sql/rows.ts";
+import { invalidAfter } from "./event-cursor.ts";
+import type { EventPosition } from "./event-cursor.ts";
 import type { HubTarget } from "./hubs.ts";
+import type { EventBatch } from "./resource-events.ts";
 
 const objectOf = (value: JsonValue | undefined): JsonObject =>
   value !== undefined && isJsonObject(value) ? value : {};
@@ -129,9 +134,9 @@ export const getTopic = Effect.fn("Tmf688.getTopic")(function* getTopic(
   } satisfies EventTopic;
 });
 
-/** Read at most one request window using authorized record cursor pages. */
-export const allRecords = Effect.fn("Tmf688.recordsWindow")(
-  function* allRecords(table: string, limit: number, filter?: string) {
+/** Read a bounded number of authorized records across record cursor pages. */
+export const recordsWindow = Effect.fn("Tmf688.recordsWindow")(
+  function* recordsWindow(table: string, limit: number, filter?: string) {
     return yield* Stream.paginate(null, (cursor: string | null) => {
       const request: ListRequest = {
         count: "false",
@@ -166,7 +171,7 @@ export const listTopics = Effect.fn("Tmf688.listTopics")(function* listTopics(
   const snapshot = yield* (yield* Catalog).current;
 
   if (knowsTable(snapshot, actor, EVENT_CLASS_IDS.topic)) {
-    for (const record of yield* allRecords(
+    for (const record of yield* recordsWindow(
       "core.event_topic",
       Math.max(1, limit - topics.length)
     )) {
@@ -293,46 +298,91 @@ export const createEvent = Effect.fn("Tmf688.createEvent")(
 
     const payload = yield* receivedEvent(body);
 
-    const saved = yield* createRecord({
+    yield* createRecord({
       body: { payload, topic: topicId },
       endpointClassId: EVENT_CLASS_IDS.event,
     });
-
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`INSERT INTO core.client_event (topic_id, event_id, record_id) VALUES (${topicId}::uuid, ${textOf(payload.eventId)}, ${saved.id}::uuid)`;
 
     return clientEvent(payload, topicId, origin);
   }
 );
 
-/** Client event reads use row predicates and the payload field's mask. */
+/** Read descending UUIDv7 rows with ordinary visibility and payload masks. */
 export const listClientEvents = Effect.fn("Tmf688.listClientEvents")(
-  function* listClientEvents(topicId: string, origin: string, limit: number) {
-    const rows = yield* allRecords(
-      "core.event",
-      limit,
-      `topic = ${JSON.stringify(topicId)}`
-    );
+  function* listClientEvents(
+    topicId: string,
+    origin: string,
+    options: { readonly limit: number; readonly position?: EventPosition }
+  ) {
+    const request: ListRequest = {
+      count: "false",
+      filter: `topic = ${JSON.stringify(topicId)}`,
+      limit: String(options.limit),
+      sort: "-id",
+      table: "core.event",
+    };
 
-    return rows.flatMap((record) => {
+    const keys = [
+      { descending: true, field: systemField("id", EVENT_CLASS_IDS.event) },
+    ];
+
+    const positioned =
+      options.position === undefined
+        ? request
+        : {
+            ...request,
+            cursor: encodeCursor(keys, {
+              id: options.position.id,
+              values: [options.position.id],
+            }),
+          };
+
+    const page = yield* listRecords(positioned);
+    const rows = page.records;
+
+    const candidates = rows.map((record) => {
       const value = objectOf(record.values).payload;
 
-      return value !== undefined && isJsonObject(value)
-        ? [clientEvent(value, topicId, origin)]
-        : [];
+      return {
+        events:
+          value !== undefined && isJsonObject(value)
+            ? [clientEvent(value, topicId, origin)]
+            : [],
+        position: { id: textOf(record.id) },
+      };
     });
+
+    const last = rows.at(-1);
+
+    return {
+      candidates,
+      complete: page.nextCursor === null,
+      events: candidates.flatMap((candidate) => candidate.events),
+      position: last === undefined ? options.position : { id: textOf(last.id) },
+      scanned: rows.length,
+    } satisfies EventBatch;
   }
 );
 
-/** Retrieve by the public event ID, under the same authorization as a list. */
-export const findClientEvent = Effect.fn("Tmf688.findClientEvent")(
-  function* findClientEvent(topicId: string, eventId: string, origin: string) {
+const clientRecordId = Effect.fn("Tmf688.clientRecordId")(
+  function* clientRecordId(
+    topicId: string,
+    eventId: string,
+    lookupPending: boolean
+  ) {
     const sql = yield* SqlClient.SqlClient;
 
-    const rows =
+    let rows =
       yield* sql`SELECT record_id::text AS id FROM core.client_event WHERE topic_id = ${topicId}::uuid AND event_id = ${eventId} ORDER BY record_id LIMIT 1`.pipe(
         Effect.flatMap(decodeRows(Schema.Struct({ id: Schema.String })))
       );
+
+    if (rows.length === 0 && lookupPending) {
+      rows =
+        yield* sql`SELECT c.record_id::text AS id FROM core.change c JOIN core.event e ON e.id = c.record_id WHERE c.record_class_id = ${EVENT_CLASS_IDS.event}::uuid AND c.fields->'706416a0-c21d-4346-9dda-283896c78bc9'->'after'->>'eventId' = ${eventId} AND e.topic = ${topicId}::uuid ORDER BY c.record_id LIMIT 1`.pipe(
+          Effect.flatMap(decodeRows(Schema.Struct({ id: Schema.String })))
+        );
+    }
 
     const [row] = rows;
 
@@ -340,17 +390,48 @@ export const findClientEvent = Effect.fn("Tmf688.findClientEvent")(
       return yield* new NotFound();
     }
 
-    const read = yield* getRecord({ id: row.id, table: "core.event" });
-    const { payload } = objectOf(objectOf(read.record).values);
+    return row.id;
+  }
+);
+
+/** Retrieve by the public event ID, under the same authorization as a list. */
+export const findClientEvent = Effect.fn("Tmf688.findClientEvent")(
+  function* findClientEvent(
+    topicId: string,
+    eventId: string,
+    origin: string,
+    lookupPending: boolean
+  ) {
+    const id = yield* clientRecordId(topicId, eventId, lookupPending);
+    const read = yield* getRecord({ id, table: "core.event" });
+    const { payload, topic } = objectOf(objectOf(read.record).values);
 
     if (
       payload === undefined ||
       !isJsonObject(payload) ||
-      payload.eventId !== eventId
+      payload.eventId !== eventId ||
+      topic !== topicId
     ) {
       return yield* new NotFound();
     }
 
     return clientEvent(payload, topicId, origin);
+  }
+);
+
+/** Resolve only a readable client's public event ID to its descending record key. */
+export const clientEventPosition = Effect.fn("Tmf688.clientEventPosition")(
+  function* clientEventPosition(
+    topicId: string,
+    eventId: string,
+    origin: string,
+    lookupPending: boolean
+  ) {
+    yield* findClientEvent(topicId, eventId, origin, lookupPending).pipe(
+      Effect.catchTag("NotFound", () => Effect.fail(invalidAfter()))
+    );
+    const id = yield* clientRecordId(topicId, eventId, lookupPending);
+
+    return { id };
   }
 );

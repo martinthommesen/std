@@ -368,11 +368,13 @@ const notificationOf = (
  * Authorize existence and render source-safe attributes on the saved images.
  * @param delivery - The worker's prepared change.
  * @param context - Current identity and historical images.
+ * @param options - Optional identity-only resource payload after the request budget.
  * @returns Authorized notifications, or none for notAuthorized.
  */
 export const renderHubEvents = (
   delivery: Delivery,
-  context: RenderContext
+  context: RenderContext,
+  options: { readonly identityOnly?: boolean } = {}
 ): readonly JsonObject[] => {
   const { hub } = delivery.subscription;
 
@@ -403,7 +405,10 @@ export const renderHubEvents = (
     return [];
   }
 
-  const fields = delivery.payload.kind === "update" ? changed : [...readable];
+  const payloadFields =
+    delivery.payload.kind === "update" ? changed : [...readable];
+
+  const fields = options.identityOnly === true ? [] : payloadFields;
   const notification = notificationOf(delivery, fields, readable);
 
   if (notification === undefined) {

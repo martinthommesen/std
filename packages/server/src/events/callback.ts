@@ -96,6 +96,15 @@ const alwaysDenied = new BlockList();
 // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved destination ranges are denied, never contacted.
 alwaysDenied.addSubnet("169.254.0.0", 16, "ipv4");
 
+// oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Alibaba metadata remains denied with private callbacks enabled.
+alwaysDenied.addAddress("100.100.100.200", "ipv4");
+
+// IPv4-compatible IPv6 is deprecated and must not bypass IPv4 metadata rules.
+// oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Deny every compatible encoding, including hexadecimal forms.
+const compatibleV6 = new BlockList();
+
+compatibleV6.addSubnet("::", 96, "ipv6");
+
 // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved destination ranges are denied, never contacted.
 alwaysDenied.addSubnet("fe80::", 10, "ipv6");
 
@@ -136,12 +145,20 @@ export const allowedAddress = (
 ): boolean => {
   const family = isIP(address);
 
-  const disallowedV6 =
-    family === 6 && (address.includes("%") || deniedV6.check(address, "ipv6"));
+  if (family === 0 || address.includes("%")) {
+    return false;
+  }
+
+  const compatible =
+    family === 6 &&
+    compatibleV6.check(address, "ipv6") &&
+    new URL(`https://[${address}]/`).hostname !== "[::1]";
+
+  const disallowedV6 = family === 6 && deniedV6.check(address, "ipv6");
 
   if (
-    family === 0 ||
     disallowedV6 ||
+    compatible ||
     alwaysDenied.check(address, family === 4 ? "ipv4" : "ipv6")
   ) {
     return false;

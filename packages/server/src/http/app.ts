@@ -12,6 +12,7 @@ import { StdApi } from "@std/api/api";
 import { Layer } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 
+import { HubSettings } from "../events/hubs.ts";
 import { RecordRuleSaveHooks } from "../hooks/record-rule-hooks.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { ApiNoStoreLayer } from "./api-cache.ts";
@@ -71,4 +72,4 @@ export const HttpAppLayer = Layer.mergeAll(
   SchemaRevisionHeaderLayer,
   ApiNoStoreLayer,
   V1DeprecationLayer
-);
+).pipe(Layer.provide(HubSettings.layer));

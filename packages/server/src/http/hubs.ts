@@ -13,6 +13,7 @@ import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import type { InstanceSettings } from "../config/instance-settings.ts";
+import type { HubSettings } from "../events/hubs.ts";
 import {
   genericTarget,
   hubResource,
@@ -184,7 +185,7 @@ const handleHub = Effect.fn("Http.handleHub")(function* handleHub(
 export const HubRoutes = Layer.unwrap(
   Effect.gen(function* hubRoutesLayer() {
     const services = yield* Effect.context<
-      ChangeSetServices | InstanceSettings
+      ChangeSetServices | InstanceSettings | HubSettings
     >();
 
     const route = (work: HubOperation) => (request: HttpServerRequest) =>

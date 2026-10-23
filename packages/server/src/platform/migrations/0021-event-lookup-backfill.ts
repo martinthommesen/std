@@ -23,6 +23,8 @@ const rowsOf = decodeRows(
   })
 );
 
+const countOf = decodeRows(Schema.Struct({ total: Schema.FiniteFromString }));
+
 /** Backfill derived lookup entries in bounded, restartable UUID keyset batches. */
 export const migration0021: DataMigration = {
   batch: Effect.fn("Platform.backfillEventLookups")(function* batch(
@@ -31,32 +33,58 @@ export const migration0021: DataMigration = {
   ) {
     const sql = yield* SqlClient.SqlClient;
 
-    const rows =
-      yield* sql`SELECT id::text, kind FROM core.change WHERE (${after}::uuid IS NULL OR id > ${after}::uuid) ORDER BY id LIMIT ${size}`.pipe(
-        Effect.flatMap(rowsOf)
+    if (after?.startsWith("client:") !== true) {
+      const rows =
+        yield* sql`SELECT id::text, kind FROM core.change c WHERE (${after}::uuid IS NULL OR id > ${after}::uuid) AND NOT EXISTS (SELECT 1 FROM core.resource_event e WHERE e.change_id = c.id) ORDER BY id LIMIT ${size}`.pipe(
+          Effect.flatMap(rowsOf)
+        );
+
+      for (const row of rows) {
+        yield* sql`INSERT INTO core.resource_event (event_id, change_id) VALUES (${eventIdOf(row.id, recordEventType(row.kind))}::uuid, ${row.id}::uuid) ON CONFLICT DO NOTHING`;
+      }
+
+      return {
+        changed: rows.length,
+        next: rows.length < size ? "client:" : (rows.at(-1)?.id ?? "client:"),
+      };
+    }
+
+    const snapshot = yield* (yield* Catalog).current;
+
+    if (snapshot.class(EVENT_CLASS_IDS.event) === undefined) {
+      return { changed: 0, next: null };
+    }
+
+    const cursor = after.slice("client:".length) || null;
+
+    const rows = yield* sql
+      .unsafe(
+        `SELECT id::text, topic::text, payload->>'eventId' AS event_id FROM ${tableName(snapshot, EVENT_CLASS_IDS.event)} r WHERE ($1::uuid IS NULL OR id > $1::uuid) AND payload->>'eventId' IS NOT NULL AND NOT EXISTS (SELECT 1 FROM core.client_event e WHERE e.record_id = r.id AND e.topic_id = r.topic AND e.event_id = r.payload->>'eventId') ORDER BY id LIMIT $2`,
+        [cursor, size]
+      )
+      .pipe(
+        Effect.flatMap(
+          decodeRows(
+            Schema.Struct({
+              event_id: Schema.String,
+              id: Schema.String,
+              topic: Schema.String,
+            })
+          )
+        )
       );
 
     for (const row of rows) {
-      yield* sql`INSERT INTO core.resource_event (event_id, change_id) VALUES (${eventIdOf(row.id, recordEventType(row.kind))}::uuid, ${row.id}::uuid) ON CONFLICT DO NOTHING`;
-    }
-
-    if (rows.length < size) {
-      const snapshot = yield* (yield* Catalog).current;
-
-      if (snapshot.class(EVENT_CLASS_IDS.event) !== undefined) {
-        yield* sql.unsafe(
-          `INSERT INTO core.client_event (topic_id, event_id, record_id) SELECT topic, payload->>'eventId', id FROM ${tableName(snapshot, EVENT_CLASS_IDS.event)} WHERE payload->>'eventId' IS NOT NULL ON CONFLICT DO NOTHING`
-        );
-      }
+      yield* sql`INSERT INTO core.client_event (topic_id, event_id, record_id) VALUES (${row.topic}::uuid, ${row.event_id}, ${row.id}::uuid) ON CONFLICT DO NOTHING`;
     }
 
     return {
       changed: rows.length,
-      next: rows.length < size ? null : (rows.at(-1)?.id ?? null),
+      next: rows.length < size ? null : `client:${rows.at(-1)?.id ?? ""}`,
     };
   }, Effect.mapError(failure)),
   description:
-    "Backfills resource_event UUIDv5 change lookups in UUID keyset batches and client_event keys from existing core.event records; derived indexes only, no logical record mutation.",
+    "Backfills missing resource_event and client_event keys in separate bounded, restartable UUID-keyset phases; remaining counts both derived tables, without logical record mutations.",
   id: 21,
   kind: "data",
   name: "event-lookup-backfill",
@@ -64,11 +92,23 @@ export const migration0021: DataMigration = {
   remaining: Effect.gen(function* countMissingLookups() {
     const sql = yield* SqlClient.SqlClient;
 
-    const rows =
-      yield* sql`SELECT c.id::text, c.kind FROM core.change c WHERE NOT EXISTS (SELECT 1 FROM core.resource_event e WHERE e.change_id = c.id) LIMIT 1`.pipe(
-        Effect.flatMap(rowsOf)
+    const [resource] =
+      yield* sql`SELECT count(*)::text AS total FROM core.change c WHERE NOT EXISTS (SELECT 1 FROM core.resource_event e WHERE e.change_id = c.id)`.pipe(
+        Effect.flatMap(countOf)
       );
 
-    return rows.length;
+    const snapshot = yield* (yield* Catalog).current;
+
+    if (snapshot.class(EVENT_CLASS_IDS.event) === undefined) {
+      return resource?.total ?? 0;
+    }
+
+    const [client] = yield* sql
+      .unsafe(
+        `SELECT count(*)::text AS total FROM ${tableName(snapshot, EVENT_CLASS_IDS.event)} r WHERE payload->>'eventId' IS NOT NULL AND NOT EXISTS (SELECT 1 FROM core.client_event e WHERE e.record_id = r.id AND e.topic_id = r.topic AND e.event_id = r.payload->>'eventId')`
+      )
+      .pipe(Effect.flatMap(countOf));
+
+    return (resource?.total ?? 0) + (client?.total ?? 0);
   }).pipe(Effect.mapError(failure)),
 };

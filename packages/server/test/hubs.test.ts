@@ -18,9 +18,15 @@ import {
   allowedAddress,
   resolveCallbackAddress,
 } from "../src/events/callback.ts";
+import { HubSettings } from "../src/events/hubs.ts";
 import { workerPass } from "../src/outbox/worker.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
-import { hubTestLayer, listener, register } from "./hub-support.ts";
+import {
+  hubTestLayer,
+  hubTestLayerWith,
+  listener,
+  register,
+} from "./hub-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
 import { change } from "./schema-support.ts";
 import { asArray, asObject, textOf, v2Callers } from "./v2-support.ts";
@@ -382,6 +388,24 @@ describe("hub-callback-path", () => {
         for (const address of [
           // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Metadata and link-local must remain blocked with the opt-in.
           "169.254.169.254",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Alibaba metadata test vector, never contacted.
+          "100.100.100.200",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Compatible and mapped metadata vectors, never contacted.
+          "::100.100.100.200",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Compatible hexadecimal Alibaba metadata vector.
+          "::6464:64c8",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Mapped hexadecimal metadata vector.
+          "::ffff:6464:64c8",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Mapped hexadecimal link-local vector.
+          "::ffff:a9fe:a9fe",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Scoped IPv6 rejection vector, never contacted.
+          "::1%lo",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Mapped Alibaba metadata vector.
+          "::ffff:100.100.100.200",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Compatible link-local vector.
+          "::169.254.169.254",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Compatible hexadecimal link-local vector.
+          "::a9fe:a9fe",
           // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved address test vector, never contacted.
           "fe80::1",
           // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved address test vector, never contacted.
@@ -624,6 +648,78 @@ describe("hub-callback-path", () => {
 });
 
 describe("hub-unregister", () => {
+  it.effect(
+    "configured caps are captured at startup and trailing-dot hosts share capacity",
+    () =>
+      Effect.gen(function* configuredCaps() {
+        const http = yield* TestHttpClient;
+        const { admin } = yield* v2Callers;
+
+        const create = (address: string) =>
+          http.request("POST", `${GENERIC_API_PREFIX}/hub`, {
+            ...admin,
+            body: {
+              "@type": "Hub",
+              callback: address,
+              query: "resource=acmeAsset",
+            },
+          });
+
+        assert.strictEqual(
+          (yield* create("https://one.example./first")).status,
+          201
+        );
+        assert.strictEqual(
+          (yield* create("https://one.example/second")).status,
+          429
+        );
+        assert.strictEqual(
+          (yield* create("https://two.example/first")).status,
+          201
+        );
+        assert.strictEqual(
+          (yield* create("https://three.example/first")).status,
+          429
+        );
+      }).pipe(
+        Effect.provide(
+          hubTestLayerWith({
+            STD_HUB_MAX_ACTIVE_PER_HOST: "1",
+            STD_HUB_MAX_ACTIVE_PER_IDENTITY: "2",
+          })
+        ),
+        Effect.scoped,
+        TestClock.withLive
+      )
+  );
+
+  it.effect("invalid hub cap settings fail layer startup", () =>
+    Effect.gen(function* invalidStartup() {
+      for (const [name, value] of [
+        ["STD_HUB_MAX_ACTIVE_PER_IDENTITY", "0"],
+        ["STD_HUB_MAX_ACTIVE_PER_HOST", "bad"],
+        ["STD_HUB_MAX_ACTIVE_PER_HOST", "-1"],
+      ]) {
+        const failure = yield* Effect.gen(function* loadSettings() {
+          return yield* HubSettings;
+        }).pipe(
+          Effect.provide(
+            HubSettings.layer.pipe(
+              Layer.provide(
+                ConfigProvider.layer(
+                  ConfigProvider.fromUnknown({ [name ?? ""]: value })
+                )
+              )
+            )
+          ),
+          Effect.flip
+        );
+
+        assert.strictEqual(failure._tag, "ConfigError");
+      }
+    })
+  );
+
   it.effect(
     "active hub caps survive the registration window and unregister frees capacity",
     () =>

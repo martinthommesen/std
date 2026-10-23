@@ -89,6 +89,7 @@ import { AggregateScope, noteAggregateWrite } from "./aggregate-state.ts";
 import { assignNumbers } from "./auto-numbers.ts";
 import { changedFields, writeChangeEntry } from "./change-entry.ts";
 import type { ChangeCause, ChangeEntry, ChangeKind } from "./change-entry.ts";
+import { writeChangeImage } from "./change-image.ts";
 import {
   deriveIndividualName,
   individualOf,
@@ -609,6 +610,8 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
     recordId: change.recordId,
     recordVersion: change.version,
   });
+
+  yield* writeChangeImage(snapshot, entry, change.before, change.after);
 
   const hookInput = {
     after: change.after,

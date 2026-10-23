@@ -110,8 +110,9 @@ export const pageBounds = (params: URLSearchParams) => {
   return validLimit && validOffset ? { limit, offset } : undefined;
 };
 
-const filteredResources = Effect.fn("Tmf688.filterResources")(
-  function* operation1(
+/** Apply validated first-level scalar filters to authorized representations. */
+export const filteredResources = Effect.fn("Tmf688.filterResources")(
+  function* filteredResources(
     resources: readonly JsonObject[],
     params: URLSearchParams,
     allowed: ReadonlySet<string>
@@ -179,7 +180,7 @@ export const selectedResource = Effect.fn("Tmf688.selectedResource")(
 );
 
 /** TMF688's standard offset paging and scalar attribute filters. */
-export const pageAnswer = Effect.fn("Tmf688.page")(function* operation3(
+export const pageAnswer = Effect.fn("Tmf688.page")(function* pageAnswer(
   resources: readonly JsonObject[],
   params: URLSearchParams,
   attributes: readonly string[],

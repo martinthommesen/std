@@ -1,7 +1,7 @@
-import { InvalidRequest } from "@std/api/errors/invalid-request";
 import type { SubscriptionDefinition } from "@std/definitions/definition";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import { DefinitionIdSchema } from "@std/definitions/ids";
+import type { JsonObject } from "@std/values/json-value";
 import { Clock, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -16,13 +16,39 @@ import {
 } from "../outbox/delivery-payload.ts";
 import type { FieldOrigin } from "../outbox/delivery-payload.ts";
 import { decodeRows } from "../sql/rows.ts";
+import { invalidAfter } from "./event-cursor.ts";
+import type { EventPosition } from "./event-cursor.ts";
 import { renderHubEvents } from "./render.ts";
 import type { EventTopic } from "./tmf688-resources.ts";
 
-const MAX_HISTORY_ENTRIES = 1000;
+/** One bounded raw candidate batch with authorized renderings and its seek key. */
+export interface EventBatch {
+  readonly candidates: readonly {
+    readonly events: readonly JsonObject[];
+    readonly position: EventPosition;
+  }[];
+  readonly events: readonly JsonObject[];
+  readonly position: EventPosition | undefined;
+  readonly complete: boolean;
+  readonly scanned: number;
+}
+
+/** Point and keyset options avoid positional placeholder arguments. */
+export interface ResourceEventOptions {
+  readonly limit: number;
+  readonly eventId?: string;
+  readonly position?: EventPosition;
+  readonly lookupPending?: boolean;
+  readonly fullPayloads?: number;
+}
 
 const rowsOf = decodeRows(
-  Schema.Struct({ record_id: Schema.String, version: Schema.FiniteFromString })
+  Schema.Struct({
+    id: Schema.String,
+    occurred_at: Schema.String,
+    record_id: Schema.String,
+    version: Schema.FiniteFromString,
+  })
 );
 
 /** Render resource history under precisely the same policy as callback delivery. */
@@ -30,52 +56,50 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
   function* listResourceEvents(
     topic: EventTopic,
     origin: string,
-    limit: number,
-    eventId?: string,
-    after?: string
+    options: ResourceEventOptions
   ) {
     const snapshot = yield* (yield* Catalog).current;
     const actor = yield* Actor;
     const { timeZone } = yield* InstanceSettings;
     const sql = yield* SqlClient.SqlClient;
-
-    if (
-      (eventId !== undefined && !Schema.is(DefinitionIdSchema)(eventId)) ||
-      (after !== undefined && !Schema.is(DefinitionIdSchema)(after))
-    ) {
-      return [];
-    }
-
+    const { eventId, limit, position: cursor } = options;
     const classIds = snapshot.subtreeIds(topic.target.classId);
 
-    const cursors =
-      after === undefined
-        ? []
-        : yield* sql`SELECT c.id::text AS id, c.occurred_at::text AS occurred_at FROM core.resource_event e JOIN core.change c ON c.id = e.change_id WHERE e.event_id = ${after}::uuid AND c.record_class_id = ANY(${classIds}::uuid[]) LIMIT 1`.pipe(
-            Effect.flatMap(
-              decodeRows(
-                Schema.Struct({ id: Schema.String, occurred_at: Schema.String })
-              )
-            )
-          );
-
-    const [cursor] = cursors;
-
-    if (after !== undefined && cursor === undefined) {
-      return [];
+    if (eventId !== undefined && !Schema.is(DefinitionIdSchema)(eventId)) {
+      return {
+        candidates: [],
+        complete: true,
+        events: [],
+        position: cursor,
+        scanned: 0,
+      } satisfies EventBatch;
     }
 
     const readPage =
       cursor === undefined
-        ? sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version FROM unnest(${classIds}::uuid[]) AS classes(id) CROSS JOIN LATERAL (SELECT c.record_id, c.record_version, c.occurred_at, c.id FROM core.change c WHERE c.record_class_id = classes.id ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit}) c ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit}`
-        : sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version FROM unnest(${classIds}::uuid[]) AS classes(id) CROSS JOIN LATERAL (SELECT c.record_id, c.record_version, c.occurred_at, c.id FROM core.change c WHERE c.record_class_id = classes.id AND (c.occurred_at, c.id) < (${cursor.occurred_at}::timestamptz, ${cursor.id}::uuid) ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit}) c ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit}`;
+        ? sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version, c.id::text AS id, c.occurred_at::text AS occurred_at FROM unnest(${classIds}::uuid[]) AS classes(id) CROSS JOIN LATERAL (SELECT c.record_id, c.record_version, c.occurred_at, c.id FROM core.change c WHERE c.record_class_id = classes.id ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit + 1}) c ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit + 1}`
+        : sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version, c.id::text AS id, c.occurred_at::text AS occurred_at FROM unnest(${classIds}::uuid[]) AS classes(id) CROSS JOIN LATERAL (SELECT c.record_id, c.record_version, c.occurred_at, c.id FROM core.change c WHERE c.record_class_id = classes.id AND (c.occurred_at, c.id) < (${cursor.occurredAt ?? ""}::timestamptz, ${cursor.id}::uuid) ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit + 1}) c ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit + 1}`;
 
-    const rows =
+    let rows =
       eventId === undefined
         ? yield* readPage.pipe(Effect.flatMap(rowsOf))
-        : yield* sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version FROM core.resource_event e JOIN core.change c ON c.id = e.change_id WHERE e.event_id = ${eventId}::uuid AND c.record_class_id = ANY(${classIds}::uuid[]) LIMIT 1`.pipe(
+        : yield* sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version, c.id::text AS id, c.occurred_at::text AS occurred_at FROM core.resource_event e JOIN core.change c ON c.id = e.change_id WHERE e.event_id = ${eventId}::uuid AND c.record_class_id = ANY(${classIds}::uuid[]) LIMIT 1`.pipe(
             Effect.flatMap(rowsOf)
           );
+
+    if (
+      eventId !== undefined &&
+      rows.length === 0 &&
+      options.lookupPending === true
+    ) {
+      rows =
+        yield* sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version, c.id::text AS id, c.occurred_at::text AS occurred_at FROM core.change c WHERE core.record_event_id(c.id, c.kind) = ${eventId}::uuid AND c.record_class_id = ANY(${classIds}::uuid[]) LIMIT 1`.pipe(
+          Effect.flatMap(rowsOf)
+        );
+    }
+
+    const complete = rows.length <= limit;
+    rows = rows.slice(0, limit);
 
     const subscription: SubscriptionDefinition = {
       classId: topic.target.classId,
@@ -104,20 +128,19 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
       version: 1,
     };
 
+    const candidates = [];
     const events = [];
     const originsByClass = new Map<string, ReadonlyMap<string, FieldOrigin>>();
 
-    for (const row of rows) {
-      const entries = yield* readEntries(
-        row.record_id,
-        row.version,
-        MAX_HISTORY_ENTRIES
-      ).pipe(
-        Effect.catchTag(
-          "PayloadUnreadable",
-          (error) =>
-            new InvalidRequest({ message: error.reason, parameter: "event" })
-        )
+    for (const [index, row] of rows.entries()) {
+      const rendered: JsonObject[] = [];
+      candidates.push({
+        events: rendered,
+        position: { id: row.id, occurredAt: row.occurred_at },
+      });
+
+      const entries = yield* readEntries(row.record_id, row.version).pipe(
+        Effect.catchTag("PayloadUnreadable", () => Effect.succeed([]))
       );
 
       const entry = entries.at(-1);
@@ -143,7 +166,7 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
       );
 
       if (!(payload instanceof PayloadUnreadable)) {
-        events.push(
+        rendered.push(
           ...renderHubEvents(
             {
               attempts: 0,
@@ -156,12 +179,70 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
               snapshot,
               subscription,
             },
-            { actor, entries, now, origins, timeZone }
+            { actor, entries, now, origins, timeZone },
+            { identityOnly: index >= (options.fullPayloads ?? limit) }
           )
         );
       }
     }
 
-    return events;
+    for (const candidate of candidates) {
+      events.push(...candidate.events);
+    }
+
+    const last = rows.at(-1);
+
+    return {
+      candidates,
+      complete,
+      events,
+      position:
+        last === undefined
+          ? cursor
+          : { id: last.id, occurredAt: last.occurred_at },
+      scanned: rows.length,
+    } satisfies EventBatch;
+  }
+);
+
+const EventPositionRow = Schema.Struct({
+  id: Schema.String,
+  occurredAt: Schema.String,
+});
+
+/** Resolve the public event-ID extension to a raw keyset position. */
+export const resourceEventPosition = Effect.fn("Tmf688.resourceEventPosition")(
+  function* resourceEventPosition(
+    topic: EventTopic,
+    eventId: string,
+    lookupPending: boolean
+  ) {
+    if (!Schema.is(DefinitionIdSchema)(eventId)) {
+      return yield* invalidAfter();
+    }
+
+    const snapshot = yield* (yield* Catalog).current;
+    const classIds = snapshot.subtreeIds(topic.target.classId);
+    const sql = yield* SqlClient.SqlClient;
+
+    let rows =
+      yield* sql`SELECT c.id::text AS id, c.occurred_at::text AS "occurredAt" FROM core.resource_event e JOIN core.change c ON c.id = e.change_id WHERE e.event_id = ${eventId}::uuid AND c.record_class_id = ANY(${classIds}::uuid[]) LIMIT 1`.pipe(
+        Effect.flatMap(decodeRows(EventPositionRow))
+      );
+
+    if (rows.length === 0 && lookupPending) {
+      rows =
+        yield* sql`SELECT c.id::text AS id, c.occurred_at::text AS "occurredAt" FROM core.change c WHERE core.record_event_id(c.id, c.kind) = ${eventId}::uuid AND c.record_class_id = ANY(${classIds}::uuid[]) LIMIT 1`.pipe(
+          Effect.flatMap(decodeRows(EventPositionRow))
+        );
+    }
+
+    const [row] = rows;
+
+    if (row === undefined) {
+      return yield* invalidAfter();
+    }
+
+    return row;
   }
 );
