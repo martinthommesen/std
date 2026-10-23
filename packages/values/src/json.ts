@@ -528,16 +528,28 @@ const checkNumber = (input: number): number => {
   return input === 0 ? 0 : input;
 };
 
-const canonicalValue = (input: JsonValue, depth: number): JsonValue => {
+const canonicalValue = (
+  input: JsonValue,
+  depth: number,
+  size: { bytes: number }
+): JsonValue => {
   if (isJsonString(input)) {
-    return checkString(input);
+    const value = checkString(input);
+    size.bytes += utf8Length(JSON.stringify(value));
+
+    return value;
   }
 
   if (isJsonNumber(input)) {
-    return checkNumber(input);
+    const value = checkNumber(input);
+    size.bytes += utf8Length(JSON.stringify(value));
+
+    return value;
   }
 
   if (!isJsonArray(input) && !isJsonObject(input)) {
+    size.bytes += utf8Length(JSON.stringify(input));
+
     return input;
   }
 
@@ -546,16 +558,24 @@ const canonicalValue = (input: JsonValue, depth: number): JsonValue => {
   }
 
   if (isJsonArray(input)) {
-    return input.map((item) => canonicalValue(item, depth + 1));
+    // Brackets and the commas between elements in compact canonical JSON.
+    size.bytes += 2 + Math.max(0, input.length - 1);
+
+    return input.map((item) => canonicalValue(item, depth + 1, size));
   }
 
   const result: Record<string, JsonValue> = {};
+  const keys = jsonbKeys(input);
+  // Braces, commas between members and one colon per member.
+  size.bytes += 2 + Math.max(0, keys.length - 1) + keys.length;
 
-  for (const key of jsonbKeys(input)) {
+  for (const key of keys) {
+    const checkedKey = checkString(key);
+    size.bytes += utf8Length(JSON.stringify(checkedKey));
     setProperty(
       result,
-      checkString(key),
-      canonicalValue(input[key] ?? null, depth + 1)
+      checkedKey,
+      canonicalValue(input[key] ?? null, depth + 1, size)
     );
   }
 
@@ -618,9 +638,10 @@ export const stringifyJson = (value: JsonValue): string => {
  */
 export const checkJsonValue = (input: JsonValue): Decoded<JsonValue> =>
   catchRefusal(() => {
-    const value = canonicalValue(input, 0);
+    const size = { bytes: 0 };
+    const value = canonicalValue(input, 0, size);
 
-    return utf8Length(stringifyJson(value)) > JSON_MAX_BYTES
+    return size.bytes > JSON_MAX_BYTES
       ? refuse("tooLarge", "JSON values are limited to 1 MiB.")
       : ok(value);
   });

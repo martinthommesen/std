@@ -29,7 +29,12 @@ import { maxLengthOf } from "./field-type.ts";
 import type { FieldKind, FieldType, FieldTypeOf } from "./field-type.ts";
 import { isBigint, isNumber } from "./field-value.ts";
 import type { DecodedInput, StoredValue } from "./field-value.ts";
-import { checkInteger, formatBigInteger, parseBigInteger } from "./integer.ts";
+import {
+  checkInteger,
+  compareBigIntegers,
+  formatBigInteger,
+  parseBigInteger,
+} from "./integer.ts";
 import {
   isJsonBoolean,
   isJsonNumber,
@@ -86,14 +91,6 @@ const checkBounds = <A>(
 
 const compareNumbers = (left: number, right: number): number => left - right;
 
-const compareBigints = (left: bigint, right: bigint): number => {
-  if (left === right) {
-    return 0;
-  }
-
-  return left < right ? -1 : 1;
-};
-
 const decodeInteger = (
   type: FieldTypeOf<"integer">,
   json: PresentJson
@@ -132,7 +129,7 @@ const decodeBigInteger = (
     ? checkBounds(
         parsed.value,
         { max: bigintBound(type.max), min: bigintBound(type.min) },
-        compareBigints
+        compareBigIntegers
       )
     : parsed;
 };

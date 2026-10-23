@@ -62,21 +62,20 @@ const conditionOf = (rule: AccessRuleDefinition): RuleCondition => {
   return rule.effect === "allow" ? UNREADABLE_CONDITION : undefined;
 };
 
-const holdsRole = (caller: Caller, rule: AccessRuleDefinition): boolean => {
-  const held = new Set(caller.roleIds);
-
-  return rule.roleIds.some((roleId) => held.has(roleId));
-};
-
 /**
  * Whether a rule is in force for the caller at all.
  *
- * @param caller - The caller's roles.
+ * @param held - The caller's roles.
  * @param rule - A rule.
  * @returns True for an active rule naming a role the caller holds.
  */
-const inForce = (caller: Caller, rule: AccessRuleDefinition): boolean =>
-  rule.active && isActive(rule) && holdsRole(caller, rule);
+const inForce = (
+  held: ReadonlySet<DefinitionId>,
+  rule: AccessRuleDefinition
+): boolean =>
+  rule.active &&
+  isActive(rule) &&
+  rule.roleIds.some((roleId) => held.has(roleId));
 
 /**
  * Whether a rule may match a class at all: platform tables (Contracts 1.9,
@@ -101,22 +100,23 @@ const mayMatch = (
 const attachedTo = (
   snapshot: ConfigSnapshot,
   rule: AccessRuleDefinition,
-  classId: DefinitionId
+  classId: DefinitionId,
+  lineageIds: ReadonlySet<DefinitionId>
 ): boolean =>
   mayMatch(snapshot, rule, classId) &&
-  (rule.classId === null ||
-    snapshot.lineage(classId).some((level) => level.id === rule.classId));
+  (rule.classId === null || lineageIds.has(rule.classId));
 
 const appliesTo = (
   snapshot: ConfigSnapshot,
-  caller: Caller,
+  held: ReadonlySet<DefinitionId>,
   rule: AccessRuleDefinition,
   action: AccessAction,
-  classId: DefinitionId
+  classId: DefinitionId,
+  lineageIds: ReadonlySet<DefinitionId>
 ): boolean =>
-  inForce(caller, rule) &&
+  inForce(held, rule) &&
   rule.actions.includes(action) &&
-  attachedTo(snapshot, rule, classId);
+  attachedTo(snapshot, rule, classId, lineageIds);
 
 /**
  * Whether a field rule's target covers a field.
@@ -165,14 +165,21 @@ export const recordRules = (
   caller: Caller,
   action: AccessAction,
   classId: DefinitionId
-): readonly AccessRuleDefinition[] =>
-  snapshot
+): readonly AccessRuleDefinition[] => {
+  const held = new Set(caller.roleIds);
+
+  const lineageIds = new Set(
+    snapshot.lineage(classId).map((level) => level.id)
+  );
+
+  return snapshot
     .accessRules()
     .filter(
       (rule) =>
         rule.target.kind === "records" &&
-        appliesTo(snapshot, caller, rule, action, classId)
+        appliesTo(snapshot, held, rule, action, classId, lineageIds)
     );
+};
 
 /**
  * The field rules that apply to a caller, an action, a concrete class and
@@ -191,14 +198,21 @@ export const fieldRules = (
   action: FieldAction,
   classId: DefinitionId,
   fieldId: DefinitionId
-): readonly AccessRuleDefinition[] =>
-  snapshot
+): readonly AccessRuleDefinition[] => {
+  const held = new Set(caller.roleIds);
+
+  const lineageIds = new Set(
+    snapshot.lineage(classId).map((level) => level.id)
+  );
+
+  return snapshot
     .accessRules()
     .filter(
       (rule) =>
-        appliesTo(snapshot, caller, rule, action, classId) &&
+        appliesTo(snapshot, held, rule, action, classId, lineageIds) &&
         coversField(snapshot, rule, fieldId)
     );
+};
 
 const decide = (rules: readonly AccessRuleDefinition[]): Decision => {
   const allows: RuleCondition[] = [];
@@ -265,6 +279,8 @@ export const knowsTable = (
   caller: Caller,
   classId: DefinitionId
 ): boolean => {
+  const held = new Set(caller.roleIds);
+
   const reach = new Set<DefinitionId>([
     ...snapshot.lineage(classId).map((level) => level.id),
     ...snapshot.subtreeIds(classId),
@@ -278,7 +294,6 @@ export const knowsTable = (
   return snapshot
     .accessRules()
     .some(
-      (rule) =>
-        rule.effect === "allow" && inForce(caller, rule) && reaches(rule)
+      (rule) => rule.effect === "allow" && inForce(held, rule) && reaches(rule)
     );
 };

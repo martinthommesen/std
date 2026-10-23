@@ -12,6 +12,7 @@ import { isJsonValue } from "../src/json-value.ts";
 import {
   checkJsonValue,
   checkNumberLiteral,
+  JSON_MAX_BYTES,
   JSON_MAX_DEPTH,
   JSON_TRANSPORT_MAX_DEPTH,
   parseJson,
@@ -170,6 +171,34 @@ describe(parseJson, () => {
 });
 
 describe("jsonb order and equality", () => {
+  it("measures the canonical UTF-8 byte limit including escapes and punctuation", () => {
+    // Literal canonical text gives an independent byte count for the fixed
+    // prefix; each added ASCII character contributes exactly one byte.
+    const prefix = '{"é\\n":[{},[],true,false,null,0,1.25,"😀\\t\\\\\\\"';
+    const suffix = '"]}';
+
+    const padding =
+      JSON_MAX_BYTES - new TextEncoder().encode(prefix + suffix).length;
+
+    const text = prefix + "x".repeat(padding) + suffix;
+    const value = getOrThrow(parseJson(text));
+
+    assert.strictEqual(new TextEncoder().encode(text).length, JSON_MAX_BYTES);
+    assert.strictEqual(stringifyJson(getOrThrow(checkJsonValue(value))), text);
+    assert.strictEqual(
+      reason(
+        checkJsonValue(
+          getOrThrow(parseJson(prefix + "x".repeat(padding + 1) + suffix))
+        )
+      ),
+      "tooLarge"
+    );
+    assert.strictEqual(
+      reason(checkJsonValue(["x".repeat(JSON_MAX_BYTES), "\0"])),
+      "nulCharacter"
+    );
+  });
+
   it("orders keys by UTF-8 length, then bytes", () => {
     assert.deepStrictEqual(
       jsonbKeys({

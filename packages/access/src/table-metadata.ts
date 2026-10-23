@@ -32,16 +32,11 @@
  * - `tableList` lists exactly the tables `tableMetadata` describes, with
  *   the same name, label and `creatable` (one `summaryOf` for both).
  */
-import type {
-  AccessAction,
-  FieldDefinition,
-  LayoutType,
-} from "@std/definitions/definition";
+import type { FieldDefinition, LayoutType } from "@std/definitions/definition";
 import {
   effectiveChoices,
   effectiveClass,
   effectiveField,
-  effectiveFields,
   effectiveLayout,
 } from "@std/definitions/effective-schema";
 import type { EffectiveField } from "@std/definitions/effective-schema";
@@ -63,7 +58,7 @@ import type { FieldType } from "@std/values/field-type";
 import type { Decision } from "./decision.ts";
 import { formRulesFor } from "./form-rules.ts";
 import { fieldDecision, knowsTable, recordDecision } from "./rules.ts";
-import type { Caller, FieldAction } from "./rules.ts";
+import type { Caller } from "./rules.ts";
 import { savedFiltersFor } from "./saved-filters.ts";
 import { visibleSchema } from "./visible-schema.ts";
 import type { VisibleField, VisibleSchema } from "./visible-schema.ts";
@@ -155,14 +150,17 @@ const combined = (states: readonly AccessState[]): AccessState => {
 const writeState = (
   snapshot: ConfigSnapshot,
   caller: Caller,
-  action: FieldAction & AccessAction,
-  classIds: readonly DefinitionId[],
+  action: "create" | "update",
+  records: readonly {
+    readonly classId: DefinitionId;
+    readonly decision: Decision;
+  }[],
   fieldId: DefinitionId
 ): AccessState =>
   combined(
-    classIds.map((classId) =>
+    records.map(({ classId, decision }) =>
       stateOf(
-        recordDecision(snapshot, caller, action, classId),
+        decision,
         fieldDecision(snapshot, caller, action, classId, fieldId)
       )
     )
@@ -233,7 +231,14 @@ interface FieldContext {
   readonly snapshot: ConfigSnapshot;
   readonly caller: Caller;
   readonly classId: DefinitionId;
-  readonly rowClasses: readonly DefinitionId[];
+  readonly recordCreate: readonly {
+    readonly classId: DefinitionId;
+    readonly decision: Decision;
+  }[];
+  readonly recordUpdate: readonly {
+    readonly classId: DefinitionId;
+    readonly decision: Decision;
+  }[];
   readonly acceptsWrites: boolean;
   readonly limits: WriteLimits;
 }
@@ -288,11 +293,11 @@ const metaFieldOf = (
       : {
           create: lower(
             limit.create,
-            writeState(snapshot, caller, "create", [classId], id)
+            writeState(snapshot, caller, "create", context.recordCreate, id)
           ),
           update: lower(
             limit.update,
-            writeState(snapshot, caller, "update", context.rowClasses, id)
+            writeState(snapshot, caller, "update", context.recordUpdate, id)
           ),
         },
   };
@@ -411,6 +416,15 @@ const relatedListsOf = (
 ): MetaRelatedList[] => {
   const targets = new Set(snapshot.lineage(classId).map((level) => level.id));
   const schemas = new Map<DefinitionId, VisibleSchema>();
+  const names = new Map<DefinitionId, string | null>();
+
+  const nameOf = (tableId: DefinitionId): string | null => {
+    if (!names.has(tableId)) {
+      names.set(tableId, knownName(snapshot, caller, tableId));
+    }
+
+    return names.get(tableId) ?? null;
+  };
 
   const readableAt = (tableId: DefinitionId, fieldId: DefinitionId) => {
     let schema = schemas.get(tableId);
@@ -432,18 +446,17 @@ const relatedListsOf = (
       targets.has(field.type.targetClassId)
     ) {
       const qualifies = (tableId: DefinitionId) =>
-        knownName(snapshot, caller, tableId) !== null &&
-        readableAt(tableId, field.id);
+        nameOf(tableId) !== null && readableAt(tableId, field.id);
 
       for (const table of snapshot.subtree(field.classId)) {
         const lineage = snapshot.lineage(table.id);
         const from = lineage.findIndex((level) => level.id === field.classId);
         const above = lineage.slice(from, -1);
-        const name = knownName(snapshot, caller, table.id);
+        const name = nameOf(table.id);
 
         if (
           name !== null &&
-          qualifies(table.id) &&
+          readableAt(table.id, field.id) &&
           !above.some((level) => qualifies(level.id))
         ) {
           lists.push({
@@ -493,19 +506,28 @@ export const tableMetadata = (
     caller,
     classId,
     limits,
-    rowClasses: view.rows.groups.flatMap((group) => group.classIds),
+    recordCreate: [
+      {
+        classId,
+        decision: recordDecision(snapshot, caller, "create", classId),
+      },
+    ],
+    recordUpdate: view.rows.groups.flatMap((group) =>
+      group.classIds.map((id) => ({
+        classId: id,
+        decision: recordDecision(snapshot, caller, "update", id),
+      }))
+    ),
     snapshot,
   };
 
-  const effective = new Map(
-    effectiveFields(snapshot, classId).map((field) => [field.field.id, field])
+  const fields = view.fields.map((visible) =>
+    metaFieldOf(
+      context,
+      visible,
+      effectiveField(snapshot, classId, visible.field)
+    )
   );
-
-  const fields = view.fields.flatMap((visible) => {
-    const field = effective.get(visible.field.id);
-
-    return field === undefined ? [] : [metaFieldOf(context, visible, field)];
-  });
 
   const byId = new Map(fields.map((field) => [field.id, field]));
 

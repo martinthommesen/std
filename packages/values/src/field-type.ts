@@ -31,6 +31,7 @@ import {
 import {
   BIG_INTEGER_MAX,
   BIG_INTEGER_MIN,
+  compareBigIntegers,
   INTEGER_MAX,
   INTEGER_MIN,
 } from "./integer.ts";
@@ -164,15 +165,8 @@ const boundsInOrder = (
   max === undefined ||
   compare(String(min), String(max)) <= 0;
 
-const compareBigIntegerText = (left: string, right: string): number => {
-  const difference = BigInt(left) - BigInt(right);
-
-  if (difference === 0n) {
-    return 0;
-  }
-
-  return difference < 0n ? -1 : 1;
-};
+const compareBigIntegerText = (left: string, right: string): number =>
+  compareBigIntegers(BigInt(left), BigInt(right));
 
 const compareDecimalText = (left: string, right: string): number => {
   const a = parseDecimal(left);

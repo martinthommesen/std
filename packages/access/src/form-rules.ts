@@ -29,6 +29,10 @@ export const formRulesFor = (
     )
   );
 
+  const ownLineageFieldIds = new Set(
+    snapshot.fields(classId).map((field) => field.id)
+  );
+
   const isHidden = (fieldId: string): boolean => {
     const field = snapshot.field(fieldId);
 
@@ -36,11 +40,7 @@ export const formRulesFor = (
       return true;
     }
 
-    const onClass = snapshot
-      .fields(classId)
-      .some((entry) => entry.id === fieldId)
-      ? classId
-      : field.classId;
+    const onClass = ownLineageFieldIds.has(fieldId) ? classId : field.classId;
 
     return (
       fieldDecision(snapshot, caller, "read", onClass, fieldId).kind === "never"
