@@ -24,6 +24,7 @@ import {
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
+import { definitionVersion } from "./schema-paths-support.ts";
 import { ACME, values } from "./schema-support.ts";
 
 /** The revision, journal entries and change entries. */
@@ -39,12 +40,6 @@ const idOf = (response: TestResponse): string =>
 
 const versionOf = (response: TestResponse): number =>
   Number(objectOf(response.json).revision);
-
-const storedVersion = (table: string, id: string) =>
-  values(
-    `SELECT version::text AS value FROM core."${table}" WHERE id = $1::uuid`,
-    [id]
-  ).pipe(Effect.map(([version]) => Number(version)));
 
 /** One write by the administrator through the generic routes. */
 interface Write {
@@ -246,7 +241,7 @@ describe("admin config editing", () => {
               {
                 method: "DELETE",
                 path: recordPath("core.access_rule", id),
-                version: yield* storedVersion("access_rule", id),
+                version: yield* definitionVersion(id),
               },
               204
             );
@@ -260,7 +255,7 @@ describe("admin config editing", () => {
               body: { state: "retired" },
               method: "PATCH",
               path: recordPath("core.role", roleId),
-              version: yield* storedVersion("role", roleId),
+              version: yield* definitionVersion(roleId),
             },
             200
           );
@@ -272,7 +267,7 @@ describe("admin config editing", () => {
             {
               method: "DELETE",
               path: recordPath("core.role", roleId),
-              version: yield* storedVersion("role", roleId),
+              version: yield* definitionVersion(roleId),
             },
             204
           );

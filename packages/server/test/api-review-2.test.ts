@@ -8,7 +8,7 @@
  * (R3-1), and `latest-version` ignores a history list's filters (R3-2).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
+import type { JsonObject } from "@std/values/json-value";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
@@ -20,6 +20,12 @@ import type {
   TestResponse,
 } from "../../testing/src/http-client.ts";
 import {
+  patchOptions,
+  UNKNOWN_ID,
+  MERGE_PATCH,
+  codeOf,
+  changedFields,
+  withoutDate,
   asArray,
   asObject,
   idsOf,
@@ -33,17 +39,6 @@ import {
 } from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import { ACME, addField, change } from "./schema-support.ts";
-
-const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
-const MERGE_PATCH = "application/merge-patch+json";
-
-const codeOf = (response: TestResponse): JsonValue | undefined =>
-  asObject(response.json).code;
-
-const changedFields = (response: TestResponse): string[] =>
-  asArray(asObject(response.json).changes).map((entry) =>
-    textOf(asObject(entry).field)
-  );
 
 /**
  * A response's `Link` header as relation and URI.
@@ -69,9 +64,6 @@ const linksOf = (response: TestResponse): Map<string, string> => {
 };
 
 const pathOf = (uri: string): string => new URL(uri).pathname;
-
-const withoutDate = (response: TestResponse): [string, string][] =>
-  [...response.headers.entries()].filter(([name]) => name !== "date");
 
 describe("api-review-2", () => {
   it("reads Link headers", () => {
@@ -105,14 +97,16 @@ describe("api-review-2", () => {
           const laptop = `${API.laptop}/${records.L}`;
           const before = yield* http.get(laptop, callers.admin);
 
-          const populated = yield* http.request("PATCH", laptop, {
-            ...callers.admin,
-            headers: {
-              "content-type": MERGE_PATCH,
-              "if-match": before.headers.get("etag") ?? "",
-            },
-            rawBody: JSON.stringify({ childNote: "kept" }),
-          });
+          const populated = yield* http.request(
+            "PATCH",
+            laptop,
+            patchOptions(
+              callers.admin,
+              MERGE_PATCH,
+              { childNote: "kept" },
+              before.headers.get("etag") ?? ""
+            )
+          );
 
           assert.strictEqual(populated.status, 200, populated.text);
 
@@ -158,7 +152,7 @@ describe("api-review-2", () => {
           );
 
           const missing = yield* http.get(
-            `${API.asset}/${RANDOM_ID}`,
+            `${API.asset}/${UNKNOWN_ID}`,
             stale(stated, callers.bob)
           );
 
@@ -346,10 +340,10 @@ describe("api-review-2", () => {
           const [aliceEntry] = asArray(aliceHistory.json);
 
           const probes = [
-            [`${API.laptop}/${records.K}`, `${API.laptop}/${RANDOM_ID}`],
+            [`${API.laptop}/${records.K}`, `${API.laptop}/${UNKNOWN_ID}`],
             [
               pathOf(textOf(asObject(aliceEntry).href)),
-              `${API.laptop}/${RANDOM_ID}/history/${RANDOM_ID}`,
+              `${API.laptop}/${UNKNOWN_ID}/history/${UNKNOWN_ID}`,
             ],
           ] as const;
 
@@ -395,7 +389,7 @@ describe("api-review-2", () => {
           for (const method of ["OPTIONS", "PUT", "PROPFIND"]) {
             const visible = yield* byId(method, records.L);
             const hidden = yield* byId(method, records.K);
-            const missing = yield* byId(method, RANDOM_ID);
+            const missing = yield* byId(method, UNKNOWN_ID);
 
             assert.strictEqual(
               visible.headers.get("allow"),
@@ -442,7 +436,7 @@ describe("api-review-2", () => {
 
           const missingHead = yield* http.request(
             "HEAD",
-            `${API.laptop}/${RANDOM_ID}`,
+            `${API.laptop}/${UNKNOWN_ID}`,
             callers.bob
           );
 
@@ -496,9 +490,9 @@ describe("api-review-2", () => {
           const probes = [
             ["OPTIONS", API.asset],
             ["PUT", API.asset],
-            ["OPTIONS", `${API.asset}/${RANDOM_ID}`],
-            ["PROPFIND", `${API.asset}/${RANDOM_ID}`],
-            ["POST", `${API.asset}/${RANDOM_ID}`],
+            ["OPTIONS", `${API.asset}/${UNKNOWN_ID}`],
+            ["PROPFIND", `${API.asset}/${UNKNOWN_ID}`],
+            ["POST", `${API.asset}/${UNKNOWN_ID}`],
             ["PATCH", "/api/v1/tableMetadata"],
           ] as const;
 
@@ -560,19 +554,21 @@ describe("api-review-2", () => {
           const { bob } = yield* AcmeFixture;
           const path = `${API.user}/${bob.id}`;
 
-          for (const value of [null, { id: RANDOM_ID }]) {
+          for (const value of [null, { id: UNKNOWN_ID }]) {
             const read = yield* http.get(path, callers.admin);
 
             assert.strictEqual(read.status, 200, read.text);
 
-            const refused = yield* http.request("PATCH", path, {
-              ...callers.admin,
-              headers: {
-                "content-type": MERGE_PATCH,
-                "if-match": read.headers.get("etag") ?? "",
-              },
-              rawBody: JSON.stringify({ individual: value }),
-            });
+            const refused = yield* http.request(
+              "PATCH",
+              path,
+              patchOptions(
+                callers.admin,
+                MERGE_PATCH,
+                { individual: value },
+                read.headers.get("etag") ?? ""
+              )
+            );
 
             assert.strictEqual(refused.status, 422, refused.text);
             assert.strictEqual(codeOf(refused), "ValidationFailed");
@@ -608,14 +604,16 @@ describe("api-review-2", () => {
             [1, "in_use"],
             [2, "spare"],
           ] as const) {
-            const patched = yield* http.request("PATCH", path, {
-              ...callers.alice,
-              headers: {
-                "content-type": MERGE_PATCH,
-                "if-match": `"${revision}"`,
-              },
-              rawBody: JSON.stringify({ status }),
-            });
+            const patched = yield* http.request(
+              "PATCH",
+              path,
+              patchOptions(
+                callers.alice,
+                MERGE_PATCH,
+                { status },
+                `"${revision}"`
+              )
+            );
 
             assert.strictEqual(patched.status, 200, patched.text);
           }

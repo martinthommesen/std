@@ -13,7 +13,6 @@
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import { API_PREFIX } from "@std/api/api";
-import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import {
@@ -23,36 +22,23 @@ import {
 } from "../../testing/src/api-contract.ts";
 import { seedDeadLetters } from "../../testing/src/dead-letter-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type {
-  TestRequestOptions,
-  TestResponse,
-} from "../../testing/src/http-client.ts";
-import { asArray, asObject, textOf, API, apiCallers } from "./api-support.ts";
+import type { TestRequestOptions } from "../../testing/src/http-client.ts";
+import {
+  UNKNOWN_ID,
+  MERGE_PATCH,
+  JSON_PATCH,
+  codeOf,
+  patchOptions,
+  asArray,
+  asObject,
+  textOf,
+  API,
+  apiCallers,
+} from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import { ACME, addField } from "./schema-support.ts";
 
-const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
-const MERGE_PATCH = "application/merge-patch+json";
-const JSON_PATCH = "application/json-patch+json";
-
 type Outcome = "success" | "error";
-
-const codeOf = (response: TestResponse): JsonValue | undefined =>
-  asObject(response.json).code;
-
-const patchOptions = (
-  caller: TestRequestOptions,
-  contentType: string,
-  body: JsonValue,
-  ifMatch?: string
-): TestRequestOptions => ({
-  ...caller,
-  headers:
-    ifMatch === undefined
-      ? { "content-type": contentType }
-      : { "content-type": contentType, "if-match": ifMatch },
-  rawBody: JSON.stringify(body),
-});
 
 describe("api-contract", () => {
   it("finds the documented endpoint of a request as the router does", () => {
@@ -65,7 +51,7 @@ describe("api-contract", () => {
       "tableMetadata.get"
     );
     assert.strictEqual(
-      apiEndpointOf("GET", `/api/v1/acmeAsset/${RANDOM_ID}`)?.name,
+      apiEndpointOf("GET", `/api/v1/acmeAsset/${UNKNOWN_ID}`)?.name,
       "records.get"
     );
     assert.isUndefined(apiEndpointOf("PUT", "/api/v1/acmeAsset"));
@@ -240,7 +226,7 @@ describe("api-contract", () => {
           );
           yield* exchange(
             "GET",
-            `/api/v1/applyChangeSet/${RANDOM_ID}`,
+            `/api/v1/applyChangeSet/${UNKNOWN_ID}`,
             callers.admin,
             404
           );
@@ -273,7 +259,7 @@ describe("api-contract", () => {
           yield* exchange("GET", path, callers.alice, 200);
           yield* exchange(
             "GET",
-            `${API.asset}/${RANDOM_ID}`,
+            `${API.asset}/${UNKNOWN_ID}`,
             callers.alice,
             404
           );
@@ -311,7 +297,7 @@ describe("api-contract", () => {
 
           yield* exchange(
             "GET",
-            `${API.asset}/${RANDOM_ID}/history`,
+            `${API.asset}/${UNKNOWN_ID}/history`,
             callers.alice,
             404
           );
@@ -326,7 +312,7 @@ describe("api-contract", () => {
           );
           yield* exchange(
             "GET",
-            `${path}/history/${RANDOM_ID}`,
+            `${path}/history/${UNKNOWN_ID}`,
             callers.alice,
             404
           );
@@ -392,7 +378,12 @@ describe("api-contract", () => {
           yield* exchange("POST", hubPath, {}, 401);
           const registeredHubPath = `${hubPath}/${textOf(asObject(hub.json).id)}`;
           yield* exchange("GET", registeredHubPath, callers.admin, 200);
-          yield* exchange("GET", `${hubPath}/${RANDOM_ID}`, callers.admin, 404);
+          yield* exchange(
+            "GET",
+            `${hubPath}/${UNKNOWN_ID}`,
+            callers.admin,
+            404
+          );
           yield* exchange("DELETE", registeredHubPath, callers.admin, 204);
           yield* exchange("DELETE", registeredHubPath, callers.admin, 404);
 

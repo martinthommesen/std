@@ -16,13 +16,20 @@
  * reuses this path (workstream 3I).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
+import type { JsonObject } from "@std/values/json-value";
 import { Effect } from "effect";
 
+import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { entriesOf, versionOf } from "./aggregates-support.ts";
-import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
+import {
+  asArray,
+  asObject,
+  textOf,
+  patchOptions,
+  MERGE_PATCH,
+} from "./api-support.ts";
 import { itilLayer } from "./itil-support.ts";
 import { FIXTURE_TICKETS, tmfTestLayer } from "./tmf-fixture.ts";
 import {
@@ -36,16 +43,6 @@ import type { Tmf621Client } from "./tmf621-support.ts";
 
 const TICKETS = '"tmffx"."ticket"';
 const RACERS = 6;
-
-const mergeOptions = (
-  caller: TestRequestOptions,
-  body: JsonValue,
-  headers: Readonly<Record<string, string>> = {}
-): TestRequestOptions => ({
-  ...caller,
-  headers: { "content-type": "application/merge-patch+json", ...headers },
-  rawBody: JSON.stringify(body),
-});
 
 const newTicket = (caller: TestRequestOptions) =>
   Effect.gen(function* newTicketWork() {
@@ -82,7 +79,13 @@ describe("aggregate-race-http", () => {
       () =>
         Effect.gen(function* stalePatch() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const { alice: user } = yield* AcmeFixture;
+
+          const alice = {
+            token: yield* http.signIn(user.login, user.password),
+          };
+
           const ticket = yield* newTicket(alice);
 
           const note = yield* addNote(alice, ticket, "before the patch");
@@ -93,7 +96,7 @@ describe("aggregate-race-http", () => {
           const stale = yield* http.request(
             "PATCH",
             `${FIXTURE_TICKETS}/${ticket}`,
-            mergeOptions(alice, { severity: "Major" }, { "if-match": '"1"' })
+            patchOptions(alice, MERGE_PATCH, { severity: "Major" }, '"1"')
           );
 
           assert.strictEqual(stale.status, 409, stale.text);
@@ -104,7 +107,7 @@ describe("aggregate-race-http", () => {
           const current = yield* http.request(
             "PATCH",
             `${FIXTURE_TICKETS}/${ticket}`,
-            mergeOptions(alice, { severity: "Major" }, { "if-match": '"2"' })
+            patchOptions(alice, MERGE_PATCH, { severity: "Major" }, '"2"')
           );
 
           assert.strictEqual(current.status, 200, current.text);
@@ -117,25 +120,27 @@ describe("aggregate-race-http", () => {
       () =>
         Effect.gen(function* race() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const { alice: user } = yield* AcmeFixture;
+
+          const alice = {
+            token: yield* http.signIn(user.login, user.password),
+          };
+
           const ticket = yield* newTicket(alice);
 
-          const notes = Array.from({ length: RACERS }, (_, index) =>
-            addNote(alice, ticket, `note ${index}`)
-          );
-
-          const patches = Array.from({ length: RACERS }, (_, index) =>
+          const requests = Array.from({ length: RACERS }, (_, index) => [
+            addNote(alice, ticket, `note ${index}`),
             http.request(
               "PATCH",
               `${FIXTURE_TICKETS}/${ticket}`,
-              mergeOptions(alice, { severity: `S${index}` })
-            )
-          );
+              patchOptions(alice, MERGE_PATCH, { severity: `S${index}` })
+            ),
+          ]).flat();
 
-          const answers = yield* Effect.all(
-            notes.flatMap((note, index) => [note, patches[index] ?? note]),
-            { concurrency: "unbounded" }
-          );
+          const answers = yield* Effect.all(requests, {
+            concurrency: "unbounded",
+          });
 
           const statuses = answers.map((answer) => answer.status);
 
@@ -174,7 +179,13 @@ describe("aggregate-race-http", () => {
       () =>
         Effect.gen(function* raceIfMatch() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const { alice: user } = yield* AcmeFixture;
+
+          const alice = {
+            token: yield* http.signIn(user.login, user.password),
+          };
+
           const ticket = yield* newTicket(alice);
 
           const answers = yield* Effect.all(
@@ -183,10 +194,11 @@ describe("aggregate-race-http", () => {
                 http.request(
                   "PATCH",
                   `${FIXTURE_TICKETS}/${ticket}`,
-                  mergeOptions(
+                  patchOptions(
                     alice,
+                    MERGE_PATCH,
                     { severity: `S${index}` },
-                    { "if-match": '"1"' }
+                    '"1"'
                   )
                 )
               ),

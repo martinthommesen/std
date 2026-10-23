@@ -26,6 +26,8 @@ import {
   aggregatesTestLayer,
   C,
   count,
+  columnOf,
+  owner,
   create,
   entriesOf,
   setUpAggregates,
@@ -55,18 +57,13 @@ const problemsOf = (operations: Parameters<typeof change>[0]) =>
 /**
  * An owner reference from one class to another.
  * @param part - The part class.
- * @param owner - The owner class.
+ * @param whole - The owner class.
  * @returns The operation.
  */
 const ownedBy = (
   part: { readonly id: string },
-  owner: { readonly id: string }
-) =>
-  addField(part.id, "owner", {
-    aggregate: true,
-    kind: "reference",
-    targetClassId: owner.id,
-  }).op;
+  whole: { readonly id: string }
+) => addField(part.id, "owner", owner(whole.id)).op;
 
 /**
  * The notes of a ticket.
@@ -99,10 +96,7 @@ const move = Effect.fn("Ownership.move")(function* move(
         { classId: C.ticket.id, id: to },
       ]);
 
-      const [body] = yield* values(
-        `SELECT body AS value FROM ${TABLE.note} WHERE id = $1::uuid`,
-        [noteId]
-      );
+      const body = yield* columnOf(TABLE.note, "body", noteId);
 
       yield* deleteRecord({
         endpointClassId: C.note.id,
@@ -111,7 +105,7 @@ const move = Effect.fn("Ownership.move")(function* move(
       });
 
       const created = yield* createRecord({
-        body: { body: body ?? "", ticket: to },
+        body: { body, ticket: to },
         endpointClassId: C.note.id,
       });
 
@@ -183,11 +177,11 @@ describe("aggregate-ownership", () => {
       () =>
         Effect.gen(function* graph() {
           // A second owner reference, own or inherited.
-          const second = addField(C.note.id, "other_ticket", {
-            aggregate: true,
-            kind: "reference",
-            targetClassId: C.ticket.id,
-          });
+          const second = addField(
+            C.note.id,
+            "other_ticket",
+            owner(C.ticket.id)
+          );
 
           assert.deepStrictEqual(yield* problemsOf([second.op]), [
             "aggregateSecondOwner",
@@ -195,11 +189,7 @@ describe("aggregate-ownership", () => {
 
           const child = createClass("ag_note_child", { parentId: C.note.id });
 
-          const inherited = addField(child.id, "request", {
-            aggregate: true,
-            kind: "reference",
-            targetClassId: C.request.id,
-          });
+          const inherited = addField(child.id, "request", owner(C.request.id));
 
           assert.deepStrictEqual(yield* problemsOf([child.op, inherited.op]), [
             "aggregateSecondOwner",
@@ -212,16 +202,8 @@ describe("aggregate-ownership", () => {
           const cycle = yield* problemsOf([
             x.op,
             y.op,
-            addField(x.id, "y", {
-              aggregate: true,
-              kind: "reference",
-              targetClassId: y.id,
-            }).op,
-            addField(y.id, "x", {
-              aggregate: true,
-              kind: "reference",
-              targetClassId: x.id,
-            }).op,
+            addField(x.id, "y", owner(y.id)).op,
+            addField(y.id, "x", owner(x.id)).op,
           ]);
 
           assert.isNotEmpty(cycle);
@@ -232,11 +214,7 @@ describe("aggregate-ownership", () => {
           assert.deepStrictEqual(
             yield* problemsOf([
               self.op,
-              addField(self.id, "parent", {
-                aggregate: true,
-                kind: "reference",
-                targetClassId: self.id,
-              }).op,
+              addField(self.id, "parent", owner(self.id)).op,
             ]),
             ["aggregateCycle"]
           );
@@ -277,11 +255,7 @@ describe("aggregate-ownership", () => {
             yield* problemsOf([
               {
                 changes: {
-                  type: {
-                    aggregate: true,
-                    kind: "reference",
-                    targetClassId: C.request.id,
-                  },
+                  type: owner(C.request.id),
                 },
                 id: related.id,
                 op: "update",

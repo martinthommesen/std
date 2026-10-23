@@ -7,12 +7,15 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import {
+  patchOptions,
+  JSON_PATCH,
+  MERGE_PATCH,
+  codeOf,
   API,
   apiCallers,
   asArray,
@@ -26,10 +29,6 @@ import { ACME, addField, change } from "./schema-support.ts";
 const APPLY = "/api/v1/applyChangeSet";
 const ROLES = "/api/v1/coreRole";
 const ACCESS_RULES = "/api/v1/coreAccessRule";
-const MERGE_PATCH = "application/merge-patch+json";
-
-const codeOf = (response: TestResponse): JsonValue | undefined =>
-  asObject(response.json).code;
 
 // The media types a per-table document offers for a path's PATCH.
 const patchTypes = (document: TestResponse, path: string): string[] =>
@@ -154,36 +153,38 @@ describe("api-definitions", () => {
 
           assert.strictEqual(current.status, 200, current.text);
 
-          const relabelled = yield* http.request("PATCH", rolePath, {
-            ...callers.admin,
-            headers: {
-              "content-type": MERGE_PATCH,
-              "if-match": current.headers.get("etag") ?? "",
-            },
-            rawBody: JSON.stringify({ label: "Auditors" }),
-          });
+          const relabelled = yield* http.request(
+            "PATCH",
+            rolePath,
+            patchOptions(
+              callers.admin,
+              MERGE_PATCH,
+              { label: "Auditors" },
+              current.headers.get("etag") ?? ""
+            )
+          );
 
           assert.strictEqual(relabelled.status, 200, relabelled.text);
           assert.strictEqual(asObject(relabelled.json).label, "Auditors");
 
-          const jsonPatch = yield* http.request("PATCH", rolePath, {
-            ...callers.admin,
-            headers: {
-              "content-type": "application/json-patch+json",
-              "if-match": relabelled.headers.get("etag") ?? "",
-            },
-            rawBody: JSON.stringify([
-              { op: "replace", path: "/label", value: "x" },
-            ]),
-          });
+          const jsonPatch = yield* http.request(
+            "PATCH",
+            rolePath,
+            patchOptions(
+              callers.admin,
+              JSON_PATCH,
+              [{ op: "replace", path: "/label", value: "x" }],
+              relabelled.headers.get("etag") ?? ""
+            )
+          );
 
           assert.strictEqual(jsonPatch.status, 415, jsonPatch.text);
 
-          const stale = yield* http.request("PATCH", rolePath, {
-            ...callers.admin,
-            headers: { "content-type": MERGE_PATCH, "if-match": '"1"' },
-            rawBody: JSON.stringify({ label: "Stale" }),
-          });
+          const stale = yield* http.request(
+            "PATCH",
+            rolePath,
+            patchOptions(callers.admin, MERGE_PATCH, { label: "Stale" }, '"1"')
+          );
 
           assert.strictEqual(stale.status, 412, stale.text);
           assert.strictEqual(codeOf(stale), "VersionConflict");
@@ -306,14 +307,16 @@ describe("api-definitions", () => {
             "allowedRecords"
           );
 
-          const merged = yield* http.request("PATCH", path, {
-            ...callers.admin,
-            headers: {
-              "content-type": MERGE_PATCH,
-              "if-match": before.headers.get("etag") ?? "",
-            },
-            rawBody: JSON.stringify({ fieldType: { allowedRecords: null } }),
-          });
+          const merged = yield* http.request(
+            "PATCH",
+            path,
+            patchOptions(
+              callers.admin,
+              MERGE_PATCH,
+              { fieldType: { allowedRecords: null } },
+              before.headers.get("etag") ?? ""
+            )
+          );
 
           assert.strictEqual(merged.status, 200, merged.text);
 
@@ -354,14 +357,16 @@ describe("api-definitions", () => {
 
             assert.strictEqual(before.status, 200, before.text);
 
-            const merged = yield* http.request("PATCH", path, {
-              ...callers.admin,
-              headers: {
-                "content-type": MERGE_PATCH,
-                "if-match": before.headers.get("etag") ?? "",
-              },
-              rawBody: JSON.stringify({ defaultValue: patch }),
-            });
+            const merged = yield* http.request(
+              "PATCH",
+              path,
+              patchOptions(
+                callers.admin,
+                MERGE_PATCH,
+                { defaultValue: patch },
+                before.headers.get("etag") ?? ""
+              )
+            );
 
             assert.strictEqual(merged.status, 200, merged.text);
             assert.deepStrictEqual(asObject(merged.json).defaultValue, {

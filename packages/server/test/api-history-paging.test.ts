@@ -16,7 +16,8 @@ import { encodeCursor } from "../src/records/read-cursor.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import {
-  apiCallers,
+  UNKNOWN_ID,
+  revisionsOf,
   asArray,
   asObject,
   textOf,
@@ -28,7 +29,6 @@ import { ACME } from "./schema-support.ts";
 // The security regression workload requested in F6: 2,000 versions, far beyond a one-entry page.
 const LARGE_HISTORY = 2000;
 const test = it.effect;
-const UNKNOWN_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 const spans: Tracer.Span[] = [];
 
 const tracer = Tracer.make({
@@ -81,7 +81,9 @@ const createHistory = Effect.fn("HistoryPaging.create")(function* createHistory(
   size: number
 ) {
   const http = yield* TestHttpClient;
-  const { alice } = yield* apiCallers;
+
+  const { alice: user } = yield* AcmeFixture;
+  const alice = { token: yield* http.signIn(user.login, user.password) };
 
   const created = yield* http.request("POST", API.asset, {
     ...alice,
@@ -126,9 +128,6 @@ const measure = Effect.fn("HistoryPaging.measure")(function* measure(
 
   return { candidates, decoded, definitions, elapsedMs, response, statements };
 });
-
-const versions = (response: TestResponse) =>
-  asArray(response.json).map((entry) => Number(asObject(entry).revision));
 
 describe("api-history-paging", () => {
   test("bounds page, filtered, direct-ID and latest work on 2,000 versions", () =>
@@ -230,7 +229,7 @@ describe("api-history-paging", () => {
         caller
       );
 
-      assert.deepStrictEqual(versions(past), []);
+      assert.deepStrictEqual(revisionsOf(past), []);
       assert.strictEqual(
         past.headers.get("x-total-count"),
         String(LARGE_HISTORY)
@@ -241,7 +240,7 @@ describe("api-history-paging", () => {
         caller
       );
 
-      assert.deepStrictEqual(versions(tail), [LARGE_HISTORY]);
+      assert.deepStrictEqual(revisionsOf(tail), [LARGE_HISTORY]);
 
       const requests = Array.from({ length: 4 }, () =>
         http.get(`${path}/history?limit=1&count=false`, caller)
@@ -363,7 +362,7 @@ describe("api-history-paging", () => {
           );
 
           assert.strictEqual(response.status, 200, response.text);
-          assert.deepStrictEqual(versions(response), [LARGE_HISTORY - 1]);
+          assert.deepStrictEqual(revisionsOf(response), [LARGE_HISTORY - 1]);
         })
     );
 
@@ -391,11 +390,11 @@ describe("api-history-paging", () => {
             assert.strictEqual(first.status, 200, first.text);
             assert.strictEqual(last.status, 200, last.text);
             assert.deepStrictEqual(
-              versions(first),
+              revisionsOf(first),
               filter === "" ? [1, 2, 3] : [3, 4, 5]
             );
             assert.deepStrictEqual(
-              versions(last),
+              revisionsOf(last),
               filter === "" ? [7, 8, 9] : [5, 6, 7]
             );
             assert.isUndefined(linkOf(first, "prev"));
@@ -407,8 +406,8 @@ describe("api-history-paging", () => {
               caller
             );
 
-            assert.isNotEmpty(versions(next));
-            assert.isNotEmpty(versions(previous));
+            assert.isNotEmpty(revisionsOf(next));
+            assert.isNotEmpty(revisionsOf(previous));
           }
         })
     );
@@ -457,9 +456,9 @@ describe("api-history-paging", () => {
             assert.strictEqual(page.headers.get("x-total-count"), "11");
           }
 
-          assert.deepStrictEqual(versions(first), [4, 5]);
-          assert.deepStrictEqual(versions(second), [6, 7]);
-          assert.deepStrictEqual(versions(third), [8, 9]);
+          assert.deepStrictEqual(revisionsOf(first), [4, 5]);
+          assert.deepStrictEqual(revisionsOf(second), [6, 7]);
+          assert.deepStrictEqual(revisionsOf(third), [8, 9]);
           assert.deepStrictEqual(backSecond.json, second.json);
           assert.deepStrictEqual(backFirst.json, first.json);
           assert.deepStrictEqual(forwardAgain.json, second.json);
@@ -492,8 +491,8 @@ describe("api-history-paging", () => {
             caller
           );
 
-          assert.deepStrictEqual(versions(narrowed), [6]);
-          assert.deepStrictEqual(versions(narrowedNext), [7]);
+          assert.deepStrictEqual(revisionsOf(narrowed), [6]);
+          assert.deepStrictEqual(revisionsOf(narrowedNext), [7]);
           assert.isUndefined(linkOf(narrowed, "prev"));
           assert.isUndefined(linkOf(narrowedNext, "next"));
 
@@ -587,7 +586,7 @@ describe("api-history-paging", () => {
             caller
           );
 
-          assert.deepStrictEqual(versions(range), [4, 5, 6]);
+          assert.deepStrictEqual(revisionsOf(range), [4, 5, 6]);
 
           const rangedFirst = yield* http.get(
             withQuery(`${path}/history`, [
@@ -603,8 +602,8 @@ describe("api-history-paging", () => {
             caller
           );
 
-          assert.deepStrictEqual(versions(rangedFirst), [4, 5]);
-          assert.deepStrictEqual(versions(rangedSecond), [6]);
+          assert.deepStrictEqual(revisionsOf(rangedFirst), [4, 5]);
+          assert.deepStrictEqual(revisionsOf(rangedSecond), [6]);
           assert.isUndefined(
             linkOf(rangedSecond, "next"),
             "forward continuation must retain the upper range bound"
@@ -616,7 +615,7 @@ describe("api-history-paging", () => {
           );
 
           assert.deepStrictEqual(
-            versions(rangedBack),
+            revisionsOf(rangedBack),
             [4, 5],
             "before navigation selects the nearest preceding page"
           );
@@ -648,10 +647,10 @@ describe("api-history-paging", () => {
             caller
           );
 
-          assert.deepStrictEqual(versions(first), [3, 4]);
+          assert.deepStrictEqual(revisionsOf(first), [3, 4]);
           assert.strictEqual(first.headers.get("x-total-count"), "5");
           const second = yield* http.get(linkOf(first, "next") ?? "", caller);
-          assert.deepStrictEqual(versions(second), [5, 6]);
+          assert.deepStrictEqual(revisionsOf(second), [5, 6]);
           assert.strictEqual(second.headers.get("x-total-count"), "5");
           assert.deepStrictEqual(
             Object.keys(asObject(asArray(second.json)[0])).toSorted(),
@@ -689,7 +688,9 @@ describe("api-history-paging", () => {
         Effect.gen(function* masks() {
           const http = yield* TestHttpClient;
           const fixture = yield* AcmeFixture;
-          const { bob } = yield* apiCallers;
+
+          const { bob: user } = fixture;
+          const bob = { token: yield* http.signIn(user.login, user.password) };
           const path = `${API.asset}/${fixture.records.S}/history`;
           // S is lost: Bob can name purchased_on but cannot read it on this current row.
           yield* seedHistory(fixture.records.S, 5, ACME.purchasedOn);
@@ -719,7 +720,9 @@ describe("api-history-paging", () => {
         Effect.gen(function* hidden() {
           const http = yield* TestHttpClient;
           const fixture = yield* AcmeFixture;
-          const { bob } = yield* apiCallers;
+
+          const { bob: user } = fixture;
+          const bob = { token: yield* http.signIn(user.login, user.password) };
           yield* seedHistory(fixture.records.L, 4, ACME.cost);
           const path = `${API.laptop}/${fixture.records.L}/history`;
           const page = yield* http.get(`${path}?limit=1&offset=1`, bob);

@@ -26,8 +26,10 @@ import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import { owner as ownerReference } from "./aggregates-support.ts";
 import { API, apiCallers, asArray, asObject, textOf } from "./api-support.ts";
 import { codeOf, readsTestLayer } from "./reads-support.ts";
+import { ACME_FIELDS } from "./records-support.ts";
 import { postChangeSet } from "./schema-paths-support.ts";
 import {
   ACME,
@@ -45,11 +47,7 @@ const BOX = createClass("agapi_box", { namespaceId: NAMESPACE.id });
 const ITEM = createClass("agapi_item", { namespaceId: NAMESPACE.id });
 const BOX_COUNT = addField(BOX.id, "count", { kind: "integer" });
 
-const ITEM_BOX = addField(ITEM.id, "box", {
-  aggregate: true,
-  kind: "reference",
-  targetClassId: BOX.id,
-});
+const ITEM_BOX = addField(ITEM.id, "box", ownerReference(BOX.id));
 
 const ITEM_COUNT = addField(ITEM.id, "count", { kind: "integer" });
 
@@ -84,9 +82,6 @@ const ACME_ROLES = [
   "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b",
 ];
 
-/** acme.asset's `docked_to`, which Bob cannot read on an asset over 2000. */
-const DOCKED_TO = "83ec3835-6898-46f3-ae2e-afdbc3f5d407";
-
 /** An asset ID no record has. */
 const ABSENT_ASSET = "00000000-0000-4000-8000-0000000000ab";
 
@@ -94,11 +89,7 @@ const ABSENT_ASSET = "00000000-0000-4000-8000-0000000000ab";
 const PART_NAMESPACE = createNamespace("agapi_parts");
 const PART = createClass("agapi_part", { namespaceId: PART_NAMESPACE.id });
 
-const PART_ASSET = addField(PART.id, "asset", {
-  aggregate: true,
-  kind: "reference",
-  targetClassId: ACME.asset,
-});
+const PART_ASSET = addField(PART.id, "asset", ownerReference(ACME.asset));
 
 const PART_NOTE = addField(PART.id, "note", { kind: "text", maxLength: 40 });
 
@@ -122,12 +113,7 @@ const partsClass = (name: string) =>
 const ownedBy = (
   part: { readonly id: string },
   whole: { readonly id: string }
-): Operation =>
-  addField(part.id, "owner", {
-    aggregate: true,
-    kind: "reference",
-    targetClassId: whole.id,
-  }).op;
+): Operation => addField(part.id, "owner", ownerReference(whole.id)).op;
 
 /**
  * An access rule letting acme's roles read, create and update parts.
@@ -159,7 +145,9 @@ const BAD_DOCK = addRecordRule(ACME.asset, {
   actions: [
     {
       type: "set",
-      values: [{ fieldId: DOCKED_TO, value: { value: ABSENT_ASSET } }],
+      values: [
+        { fieldId: ACME_FIELDS.dockedTo, value: { value: ABSENT_ASSET } },
+      ],
     },
   ],
   condition: {
@@ -236,7 +224,12 @@ describe("aggregate-api", () => {
           yield* change([LOOP.op]);
 
           const http = yield* TestHttpClient;
-          const { admin } = yield* apiCallers;
+
+          const { admin: user } = yield* AcmeFixture;
+
+          const admin = {
+            token: yield* http.signIn(user.login, user.password),
+          };
 
           const listed = yield* http.get("/api/v1/tableMetadata", admin);
 
@@ -307,7 +300,12 @@ describe("aggregate-api", () => {
           ]);
 
           const fixture = yield* AcmeFixture;
-          const { admin } = yield* apiCallers;
+          const http = yield* TestHttpClient;
+          const { admin: user } = fixture;
+
+          const admin = {
+            token: yield* http.signIn(user.login, user.password),
+          };
 
           const created = yield* savedOf(
             yield* create(admin.token, PARTS, {
@@ -360,11 +358,8 @@ describe("aggregate-api", () => {
             [
               [
                 [
-                  addField(PART.id, "other_asset", {
-                    aggregate: true,
-                    kind: "reference",
-                    targetClassId: ACME.asset,
-                  }).op,
+                  addField(PART.id, "other_asset", ownerReference(ACME.asset))
+                    .op,
                 ],
                 "aggregateSecondOwner",
               ],

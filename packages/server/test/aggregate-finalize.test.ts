@@ -12,7 +12,7 @@ import { InvalidReference } from "@std/api/errors/invalid-reference";
 import { RuleRefused } from "@std/api/errors/rule-refused";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import type { JsonObject } from "@std/values/json-value";
-import { Cause, Effect, Exit, Option, Schema } from "effect";
+import { Cause, Effect, Exit, Schema } from "effect";
 
 import { runAfterCommitRule } from "../src/hooks/after-commit-rules.ts";
 import { AggregateScope } from "../src/records/aggregate-state.ts";
@@ -32,12 +32,15 @@ import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
   aggregatesTestLayer,
+  all,
+  at,
   C,
   CHANGE_RULES,
   columnOf,
   count,
   create,
   entriesOf,
+  eq,
   F,
   isSystemOnly,
   NEEDS_PLAN,
@@ -58,24 +61,15 @@ import { refusalOf } from "./support.ts";
 
 const WRITE_STATEMENT = /^\s*(?:insert|update|delete)\b/iu;
 
-const AggregateCause = Schema.Struct({
-  aggregate: Schema.Struct({
-    parts: Schema.Array(Schema.String),
-    reason: Schema.String,
-    rules: Schema.Array(Schema.String),
-  }),
-  kind: Schema.Literal("system"),
-});
-
-const decodeAggregate = Schema.decodeUnknownOption(AggregateCause);
-
 /**
  * The aggregate cause of an entry, if it is one.
  * @param entry - A change entry.
  * @returns `{parts, reason, rules}`, or undefined.
  */
 const aggregateOf = (entry: Entry | undefined) =>
-  Option.getOrUndefined(decodeAggregate(entry?.cause))?.aggregate;
+  entry !== undefined && "aggregate" in entry.cause
+    ? entry.cause.aggregate
+    : undefined;
 
 const lastEntry = (id: string) =>
   entriesOf(id).pipe(Effect.map((entries) => entries.at(-1)));
@@ -101,6 +95,25 @@ const approvalIds = (changeId: string, state: string) =>
 
 const authority = (changeType: string, approver: string) =>
   create(C.authority.id, { approver, change_type: changeType });
+
+/**
+ * A draft request with its draft pen item.
+ * @param name - The request name selecting the fixture's rules.
+ * @returns The request and item saves.
+ */
+const draftRequest = Effect.fn("Finalize.draftRequest")(function* draftRequest(
+  name: string
+) {
+  const request = yield* create(C.request.id, { name, status: "draft" });
+
+  const item = yield* create(C.item.id, {
+    name: "pen",
+    request: request.id,
+    state: "draft",
+  });
+
+  return { item, request };
+});
 
 /**
  * A change moved to `authorize` by a user, which settles its first round.
@@ -208,22 +221,11 @@ const afterCommitCarrierOf = Effect.fn("Finalize.afterCommitCarrier")(
               ],
             },
           ],
-          condition: {
-            args: [
-              {
-                left: { path: [F.ticketName.id] },
-                op: "startsWith",
-                right: prefix,
-              },
-              { arg: { path: [F.ticketStatus.id] }, op: "changed" },
-              {
-                left: { path: [F.ticketStatus.id] },
-                op: "eq",
-                right: { value: "closed" },
-              },
-            ],
-            op: "and",
-          },
+          condition: all(
+            { left: at(F.ticketName), op: "startsWith", right: prefix },
+            { arg: at(F.ticketStatus), op: "changed" },
+            eq(F.ticketStatus, "closed")
+          ),
           operations: ["update"],
           phase: "afterCommit",
           ruleKind: null,
@@ -977,16 +979,7 @@ describe("aggregate-finalize", () => {
       "a save answers with the committed state after finalization, projected with the caller's read rights",
       () =>
         Effect.gen(function* response() {
-          const request = yield* create(C.request.id, {
-            name: "resp-1",
-            status: "draft",
-          });
-
-          yield* create(C.item.id, {
-            name: "pen",
-            request: request.id,
-            state: "draft",
-          });
+          const { request } = yield* draftRequest("resp-1");
 
           // Settling approves the request: the response shows it so.
           const submitted = yield* update(
@@ -1019,16 +1012,7 @@ describe("aggregate-finalize", () => {
                 : access.project(input),
           });
 
-          const other = yield* create(C.request.id, {
-            name: "resp-2",
-            status: "draft",
-          });
-
-          yield* create(C.item.id, {
-            name: "pen",
-            request: other.id,
-            state: "draft",
-          });
+          const { request: other } = yield* draftRequest("resp-2");
 
           const hidden = yield* update(C.request.id, TABLE.request, other.id, {
             status: "submitted",
@@ -1166,16 +1150,7 @@ describe("aggregate-finalize", () => {
         Effect.gen(function* cascade() {
           const target = yield* create(C.ticket.id, { name: "cascade-target" });
 
-          const request = yield* create(C.request.id, {
-            name: "cascade-1",
-            status: "draft",
-          });
-
-          yield* create(C.item.id, {
-            name: "pen",
-            request: request.id,
-            state: "draft",
-          });
+          const { request } = yield* draftRequest("cascade-1");
 
           yield* update(C.request.id, TABLE.request, request.id, {
             status: "submitted",
@@ -1212,16 +1187,7 @@ describe("aggregate-finalize", () => {
       "a write into an owner this transaction already persisted is AggregateNotSettled, and nothing commits",
       () =>
         Effect.gen(function* persistedTwice() {
-          const request = yield* create(C.request.id, {
-            name: "bad-1",
-            status: "draft",
-          });
-
-          const item = yield* create(C.item.id, {
-            name: "pen",
-            request: request.id,
-            state: "draft",
-          });
+          const { request, item } = yield* draftRequest("bad-1");
 
           const refused = yield* update(
             C.request.id,

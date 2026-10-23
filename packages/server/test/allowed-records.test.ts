@@ -31,6 +31,7 @@ import {
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
+import { definitionVersion } from "./schema-paths-support.ts";
 import { ACME, addField, change } from "./schema-support.ts";
 
 const EMPLOYEE = "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b";
@@ -104,8 +105,6 @@ const limitDock = Effect.fn("AllowedRecords.limitDock")(function* limitDock(
   dockId: string,
   condition: JsonValue
 ) {
-  const field = (yield* (yield* Catalog).refresh).field(dockId);
-
   yield* change([
     {
       changes: {
@@ -117,7 +116,7 @@ const limitDock = Effect.fn("AllowedRecords.limitDock")(function* limitDock(
       },
       id: dockId,
       op: "update",
-      version: field?.version ?? 0,
+      version: yield* definitionVersion(dockId),
     },
   ]);
 });

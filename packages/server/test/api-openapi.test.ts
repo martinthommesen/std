@@ -9,13 +9,19 @@ import { Resource, ResourceCreate, ResourcePatch } from "@std/api/resource";
 import { TmfError, TmfErrorSubtypes } from "@std/api/tmf-error";
 import { Effect, Schema } from "effect";
 
+import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { apiOpenApi } from "../src/http/api/openapi.ts";
 import { TMF_ERROR_TAGS } from "../src/http/api/tmf-error.ts";
-import { asObject, textOf, API, apiCallers } from "./api-support.ts";
+import {
+  patchOptions,
+  MERGE_PATCH,
+  UNKNOWN_ID,
+  asObject,
+  textOf,
+  API,
+} from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
-
-const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 
 describe("api-openapi", () => {
   it("has a shared subtype for every error tag the server answers", () => {
@@ -28,12 +34,13 @@ describe("api-openapi", () => {
       () =>
         Effect.gen(function* servedDocument() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const { alice: user } = yield* AcmeFixture;
 
-          const response = yield* http.get(
-            "/api/v1/openapi.json",
-            callers.alice
-          );
+          const alice = {
+            token: yield* http.signIn(user.login, user.password),
+          };
+
+          const response = yield* http.get("/api/v1/openapi.json", alice);
 
           assert.strictEqual(response.status, 200, response.text);
           assert.deepStrictEqual(response.json, apiOpenApi);
@@ -63,7 +70,8 @@ describe("api-openapi", () => {
     dbTest.effect("accepts a request valid against the shared schemas", () =>
       Effect.gen(function* validRequests() {
         const http = yield* TestHttpClient;
-        const callers = yield* apiCallers;
+        const { alice: user } = yield* AcmeFixture;
+        const alice = { token: yield* http.signIn(user.login, user.password) };
 
         const body = yield* Schema.decodeEffect(ResourceCreate)({
           name: "Doc",
@@ -71,7 +79,7 @@ describe("api-openapi", () => {
         });
 
         const created = yield* http.request("POST", API.asset, {
-          ...callers.alice,
+          ...alice,
           body,
         });
 
@@ -88,14 +96,7 @@ describe("api-openapi", () => {
         const patched = yield* http.request(
           "PATCH",
           `${API.asset}/${resource.id}`,
-          {
-            ...callers.alice,
-            headers: {
-              "content-type": "application/merge-patch+json",
-              "if-match": '"1"',
-            },
-            rawBody: JSON.stringify(patchBody),
-          }
+          patchOptions(alice, MERGE_PATCH, patchBody, '"1"')
         );
 
         assert.strictEqual(patched.status, 200, patched.text);
@@ -114,12 +115,13 @@ describe("api-openapi", () => {
       () =>
         Effect.gen(function* errorBodies() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const { alice: user } = yield* AcmeFixture;
 
-          const missing = yield* http.get(
-            `${API.asset}/${RANDOM_ID}`,
-            callers.alice
-          );
+          const alice = {
+            token: yield* http.signIn(user.login, user.password),
+          };
+
+          const missing = yield* http.get(`${API.asset}/${UNKNOWN_ID}`, alice);
 
           assert.strictEqual(missing.status, 404);
 
@@ -130,7 +132,7 @@ describe("api-openapi", () => {
           assert.strictEqual(missingError.code, "NotFound");
 
           const invalid = yield* http.request("POST", API.asset, {
-            ...callers.alice,
+            ...alice,
             body: { status: "no such choice" },
           });
 
