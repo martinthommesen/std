@@ -73,6 +73,11 @@ export const ChangeSetRoutes = Layer.unwrap(
         // A malformed header is refused before anything else (6.4).
         const stated = yield* parseRequestRevision(request);
         const origin = yield* originOf(request);
+        yield* inRequestTransaction(
+          transactions,
+          request,
+          asActor(Effect.void)
+        );
         const { operations } = yield* changeSetOf(yield* jsonBodyOf(request));
 
         const { latest, result } = yield* applyChangeSetRequest(

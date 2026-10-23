@@ -43,6 +43,7 @@ const ERRORS = {
     422,
     "The aggregates this write changed did not settle",
   ],
+  BodyTooLarge: [413, "The request body exceeds the server byte limit"],
   DefinitionInvalid: [422, "The definitions are invalid; nothing was applied"],
   DefinitionProtected: [403, "The definition is protected"],
   DependencyConflict: [409, "Other definitions depend on this one"],
@@ -70,6 +71,7 @@ const ERRORS = {
   SchemaChanged: [409, "The schema changed since the request was built"],
   SchemaLockTimeout: [503, "The schema change could not get its locks"],
   SchemaNeedsAttention: [409, "A schema change needs attention"],
+  SignInThrottled: [429, "Sign-in is temporarily throttled"],
   SubscriptionNotServed: [409, "The subscription is not served by the worker"],
   Unauthenticated: [401, "No valid session"],
   UnknownField: [400, "No such field"],
@@ -92,6 +94,8 @@ const ERROR_TABLE: ReadonlyMap<string, readonly [number, string]> = new Map(
 export const TMF_ERROR_TAGS: readonly string[] = [...ERROR_TABLE.keys()];
 
 /** Members of an error that are never details. */
+const RETRY_AFTER_HEADER = "retry-after";
+
 const NOT_DETAILS: ReadonlySet<string> = new Set([
   "_tag",
   "message",
@@ -166,6 +170,8 @@ const ownDetails = (failure: TaggedFailure): JsonObject =>
  */
 const OWN_MESSAGE: ReadonlySet<string> = new Set([
   "InvalidRequest",
+  "BodyTooLarge",
+  "SignInThrottled",
   "SubscriptionNotServed",
   "InvalidTransition",
   "RuleRefused",
@@ -226,11 +232,20 @@ export const headersOf = (
   const { accepted, allow, currentVersion, retryAfterSeconds } = body;
 
   if (retryAfterSeconds !== undefined && isJsonNumber(retryAfterSeconds)) {
-    headers.set("retry-after", String(retryAfterSeconds));
+    headers.set(RETRY_AFTER_HEADER, String(retryAfterSeconds));
+  }
+
+  // Same one-minute minimum retry as the source window (auth/sign-in-limits).
+  if (tag === "SignInThrottled") {
+    headers.set(RETRY_AFTER_HEADER, "60");
+  }
+
+  if (tag === "BodyTooLarge") {
+    headers.set("connection", "close");
   }
 
   if (tag === "SchemaLockTimeout") {
-    headers.set("retry-after", String(LOCK_TIMEOUT_RETRY_AFTER_SECONDS));
+    headers.set(RETRY_AFTER_HEADER, String(LOCK_TIMEOUT_RETRY_AFTER_SECONDS));
   }
 
   if (allow !== undefined && isJsonString(allow)) {

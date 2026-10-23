@@ -907,8 +907,10 @@ rows:
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
     level: mandatory
     requirement: 413 is used when the server refuses a request body larger than it will process.
-    status: pending
-    note: "gap: Contracts 10 sets no request body limit or status (Contracts 6.5 limits single values only)"
+    status: tested
+    tests:
+      - packages/server/test/http-edge-limits.test.ts#returns 413 for excessive Content-Length and unfinished chunked bodies
+    note: "C6.5; streaming limits, including TMF routes under proposed exclusion E30"
   - id: TMF630@5.0.0/P1/3.3.3/status-414-uri-too-long
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
     level: recommended
@@ -949,8 +951,10 @@ rows:
     source: TMF630 v5.0.0 P1 §3.3.3 p.33
     level: recommended
     requirement: 429 should signal that the client sent too many requests in a period (rate limiting).
-    status: pending
-    note: "gap: STD has no rate limiting"
+    status: tested
+    tests:
+      - packages/server/test/http-edge-limits.test.ts#returns uniform 429 with Retry-After for login and socket-source throttling
+    note: "C3.1; STD's own session API, so no TMF exclusion is needed"
   - id: TMF630@5.0.0/P1/3.3.4/status-500-generic
     source: TMF630 v5.0.0 P1 §3.3.4 p.33
     level: mandatory

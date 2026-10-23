@@ -23,6 +23,7 @@ import { NodeHttpServer } from "@effect/platform-node";
 import { Config, Effect, Layer, Schema } from "effect";
 import { HttpRouter } from "effect/http";
 
+import { SessionRetentionLayer } from "../auth/session-retention.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { checkPlatformMigrations } from "../platform/runner.ts";
@@ -89,6 +90,7 @@ export const ServerLayer = HttpRouter.serve(
   Layer.provide(sessionCookieSecureFromEnv),
   Layer.provide(NodeServerLayer),
   Layer.provide(ResumerLayer),
+  Layer.provide(SessionRetentionLayer),
   Layer.provide(StartupCheckLayer),
   Layer.provide(ServicesLayer)
 );

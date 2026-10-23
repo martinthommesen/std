@@ -14,7 +14,6 @@ import { DeliveryFailed } from "../outbox/delivery-failed.ts";
 const MAX_RESPONSE_BYTES = 65_536;
 const CALLBACK_TIMEOUT_MS = 10_000;
 const BRACKETS = /^\[|\]$/gu;
-const GLOBAL_V6 = /^[23][\da-f]{0,3}:/iu;
 const PRINTABLE_URL = /^[!-~]+$/u;
 
 const requestPath = (urlText: string): string => {
@@ -73,12 +72,42 @@ for (const [address, prefix] of [
 const publicV4 = (address: string): boolean => !deniedV4.check(address, "ipv4");
 
 const deniedV6 = new BlockList();
+const globalV6 = new BlockList();
+const reachableSpecialV6 = new BlockList();
+
+// Numeric global unicast membership (RFC 4291 §2.5.4).
+// oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric global-unicast classification; never contacted.
+globalV6.addSubnet("2000::", 3, "ipv6");
+
+// IANA IPv6 Special-Purpose Address Registry, read 2026-10-23:
+// https://www.iana.org/assignments/iana-ipv6-special-registry/
+// 2001::/23 is non-global except these explicitly globally reachable entries.
+// Ranges outside 2000::/3 already fail globalV6; transition mechanisms below
+// remain forbidden even with private callbacks enabled.
+for (const [address, prefix] of [
+  // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric IANA address-policy entry; never contacted.
+  ["2001:1::1", 128],
+  // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric IANA address-policy entry; never contacted.
+  ["2001:1::2", 128],
+  // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric IANA address-policy entry; never contacted.
+  ["2001:1::3", 128],
+  // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric IANA address-policy entry; never contacted.
+  ["2001:3::", 32],
+  // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric IANA address-policy entry; never contacted.
+  ["2001:4:112::", 48],
+  // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric IANA address-policy entry; never contacted.
+  ["2001:20::", 28],
+  // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Numeric IANA address-policy entry; never contacted.
+  ["2001:30::", 28],
+] as const) {
+  reachableSpecialV6.addSubnet(address, prefix, "ipv6");
+}
 
 for (const [address, prefix] of [
   // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved destination ranges are denied, never contacted.
   ["2002::", 16],
   // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved destination ranges are denied, never contacted.
-  ["2001::", 32],
+  ["2001::", 23],
   // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved destination ranges are denied, never contacted.
   ["2001:db8::", 32],
   // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Reserved destination ranges are denied, never contacted.
@@ -130,7 +159,11 @@ export const publicAddress = (address: string): boolean => {
     ""
   );
 
-  return GLOBAL_V6.test(canonical) && !deniedV6.check(canonical, "ipv6");
+  return (
+    globalV6.check(canonical, "ipv6") &&
+    (!deniedV6.check(canonical, "ipv6") ||
+      reachableSpecialV6.check(canonical, "ipv6"))
+  );
 };
 
 /**
@@ -154,7 +187,10 @@ export const allowedAddress = (
     compatibleV6.check(address, "ipv6") &&
     new URL(`https://[${address}]/`).hostname !== "[::1]";
 
-  const disallowedV6 = family === 6 && deniedV6.check(address, "ipv6");
+  const disallowedV6 =
+    family === 6 &&
+    deniedV6.check(address, "ipv6") &&
+    !reachableSpecialV6.check(address, "ipv6");
 
   if (
     disallowedV6 ||

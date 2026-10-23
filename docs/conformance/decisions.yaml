@@ -207,6 +207,12 @@ entries:
     decidedBy: Martin
     words: "M18: TMF routes answer only statuses the pinned document declares; 429 on hub registration is a recorded deviation (relayed by the coordinator)."
     date: 2026-10-22
+  - id: E30-http-body-413
+    rows: []
+    requirement: "413 on TMF routes whose pinned OpenAPI documents do not declare it (decision 0021, decision 52)"
+    reason: "TMF630 v5.0.0 Part 1 §3.3.3 p.32 makes 413 mandatory when a server refuses an excessive request body. Streaming byte limits protect the process against unauthenticated memory exhaustion, including on TMF routes; a declared-status omission cannot remove that DoS protection (decision 0038)."
+    recommendation: accept
+    state: proposed
   - id: X630-hidden-base-fields
     rows:
       - TMF630@5.0.0/v4.0.0-P2/2.1/extension-schema-includes-base

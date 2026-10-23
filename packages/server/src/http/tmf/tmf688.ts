@@ -127,6 +127,11 @@ const errorResponse = (
     return Effect.succeed(hubRateLimitResponse());
   }
 
+  if (failure._tag === "BodyTooLarge") {
+    // E30 is proposed: preserve the byte receipt required by TMF630's 413.
+    return Effect.succeed(tmfErrorResponse(failure));
+  }
+
   if (!isTmfFailure(failure)) {
     return Effect.die(failure);
   }

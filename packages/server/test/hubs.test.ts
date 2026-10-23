@@ -358,6 +358,17 @@ describe("hub-callback-path", () => {
     () =>
       Effect.gen(function* addressPolicy() {
         const blocked = [
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Address-policy test vector, never contacted.
+          "2::1",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Address-policy test vector, never contacted.
+          "20::1",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Address-policy test vector, never contacted.
+          "200::1",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Address-policy test vector, never contacted.
+          "2001:2::1",
+          "2001:db8::1",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Address-policy test vector, never contacted.
+          "2001:10::1",
           // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Address policy vectors, never contacted.
           "100.64.0.1",
           "0.0.0.0",
@@ -380,6 +391,19 @@ describe("hub-callback-path", () => {
 
         for (const address of blocked) {
           assert.isFalse(publicAddress(address), address);
+        }
+
+        for (const address of [
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Address-policy test vector, never contacted.
+          "2606:4700:4700::1111",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Address-policy test vector, never contacted.
+          "2001:4860:4860::8888",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Address-policy test vector, never contacted.
+          "2001:3::1",
+          // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Address-policy test vector, never contacted.
+          "2620:4f:8000::1",
+        ]) {
+          assert.isTrue(publicAddress(address), address);
         }
 
         // oxlint-disable-next-line sonarjs/no-hardcoded-ip -- Neighbor outside 192.0.0.0/24 is a policy vector.

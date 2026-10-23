@@ -38,6 +38,11 @@ import { quoteIdent } from "../schema/sql-text.ts";
 import { effectiveRoles } from "./actor.ts";
 import type { ActingUser } from "./actor.ts";
 import { verifyPassword } from "./password.ts";
+import {
+  ACTIVE_SESSION_LIMIT,
+  deleteExpiredSessions,
+} from "./session-retention.ts";
+import { admitSignIn, failSignIn, resetSignIn } from "./sign-in-limits.ts";
 import { userTables } from "./user-table.ts";
 
 /** How long a session lasts. [judgment] */
@@ -104,22 +109,28 @@ const tokenHashParameter = (token: string) =>
   );
 
 /**
- * Signs a user in.
+ * Signs a user in, inside a request transaction. Commit credential/throttle
+ * refusals as results so their counters persist; other failures must roll back.
+ * HTTP admission owns native-work completion across caller interruption.
  *
  * @param snapshot - The configuration (where users are stored).
  * @param login - The login as typed.
  * @param password - The password.
+ * @param source - Socket remote address (or the internal caller identity).
  * @returns The new session, or `InvalidCredentials`.
  */
 export const signIn = Effect.fn("Sessions.signIn")(function* signIn(
   snapshot: ConfigSnapshot,
   login: string,
-  password: Plaintext
+  password: Plaintext,
+  source: string
 ) {
+  yield* deleteExpiredSessions();
+  const failures = yield* admitSignIn(login, source);
   const tables = userTables(snapshot);
   const key = textKey(login.normalize("NFC").trim(), false);
 
-  // FOR SHARE conflicts with the UPDATE that deactivates the user: a
+  // FOR UPDATE serializes issuance and conflicts with the UPDATE that deactivates the user: a
   // concurrent deactivation either commits first (the row is re-read and
   // `active` is false) or waits for this sign-in to commit (its trigger then
   // deletes the new session). No session survives a deactivation.
@@ -128,7 +139,7 @@ export const signIn = Effect.fn("Sessions.signIn")(function* signIn(
   "u".${rawSql(quoteIdent(tables.active))}::text AS "active"
 FROM ${tables.user} AS "u"
 WHERE casefold(("u".${rawSql(quoteIdent(tables.login))}) COLLATE pg_unicode_fast) = ${textParameter(key, "text")}
-FOR SHARE OF "u"`
+FOR UPDATE OF "u"`
   );
 
   const verified = yield* verifyPassword(password, user?.password ?? null);
@@ -137,8 +148,17 @@ FOR SHARE OF "u"`
   const mayActOverHttp = userId !== null && !SERVICE_USER_IDS.has(userId);
 
   if (!(mayActOverHttp && user?.active === "true" && verified)) {
+    yield* failSignIn(login, failures);
+
     return yield* new InvalidCredentials();
   }
+
+  yield* resetSignIn(login);
+  // The user row is locked until insertion commits, so concurrent sign-ins
+  // cannot exceed the cap. Equal creation times are ordered by token hash.
+  yield* writeRows(sql`DELETE FROM core.session WHERE token_hash IN (
+    SELECT token_hash FROM core.session WHERE user_id = ${textParameter(userId, "uuid")} AND expires_at > now()
+    ORDER BY created_at DESC, token_hash DESC OFFSET ${textParameter(String(ACTIVE_SESSION_LIMIT - 1), "integer")})`);
 
   const token = newSessionToken();
   const now = yield* Clock.currentTimeMillis;

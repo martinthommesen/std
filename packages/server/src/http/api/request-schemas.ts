@@ -12,8 +12,11 @@ import {
   ResourceCreate,
   ResourcePatch,
 } from "@std/api/resource";
-import { SessionCreate } from "@std/api/session";
+import { SessionCreate, SESSION_LOGIN_MAX_LENGTH } from "@std/api/session";
+import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
+import { checkPasswordLength } from "@std/values/password";
+import { codePointLength } from "@std/values/text";
 import { Effect, Schema } from "effect";
 
 const refused = (schema: string) => () =>
@@ -73,8 +76,41 @@ export const checkedJsonPatch = (body: JsonValue) =>
  * @param body - The parsed body.
  * @returns The body, or `InvalidRequest`.
  */
-export const checkedSessionCreate = (body: JsonValue) =>
-  decodeSession(body).pipe(
+export const checkedSessionCreate = (body: JsonValue) => {
+  if (isJsonObject(body)) {
+    const { login } = body;
+
+    if (
+      login !== undefined &&
+      isJsonString(login) &&
+      codePointLength(login) > SESSION_LOGIN_MAX_LENGTH
+    ) {
+      return Effect.fail(
+        new InvalidRequest({
+          message: `session_login_max_length=${SESSION_LOGIN_MAX_LENGTH} code points; received ${codePointLength(login)}.`,
+          parameter: "login",
+        })
+      );
+    }
+
+    const { password } = body;
+
+    if (password !== undefined && isJsonString(password)) {
+      const checked = checkPasswordLength(password);
+
+      if (!checked.ok) {
+        return Effect.fail(
+          new InvalidRequest({
+            message: checked.error.message,
+            parameter: "password",
+          })
+        );
+      }
+    }
+  }
+
+  return decodeSession(body).pipe(
     Effect.mapError(refused("SessionCreate")),
     Effect.as(body)
   );
+};

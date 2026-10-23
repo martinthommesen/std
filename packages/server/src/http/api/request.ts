@@ -18,6 +18,7 @@ import { parseJson } from "@std/values/json";
 import { Effect, Redacted } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
+import { textBodyOf } from "../body-limits.ts";
 import { cookieMayAuthenticate } from "../session-cookie.ts";
 
 const BEARER = "bearer";
@@ -122,9 +123,7 @@ const invalidBody = (message: string) =>
 export const jsonBodyOf = Effect.fn("Api.jsonBody")(function* jsonBodyOf(
   request: HttpServerRequest
 ) {
-  const text = yield* request.text.pipe(
-    Effect.mapError(() => invalidBody("The body could not be read."))
-  );
+  const text = yield* textBodyOf(request);
 
   const parsed = parseJson(text);
 

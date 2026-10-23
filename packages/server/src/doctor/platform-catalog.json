@@ -10804,9 +10804,188 @@
       },
       {
         "included": [],
+        "keys": ["expires_at", "token_hash"],
+        "method": "btree",
+        "name": "session_expiry",
+        "predicate": null,
+        "unique": false,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["user_id", "created_at", "token_hash"],
+        "method": "btree",
+        "name": "session_issuance",
+        "predicate": null,
+        "unique": false,
+        "valid": true
+      },
+      {
+        "included": [],
         "keys": ["token_hash"],
         "method": "btree",
         "name": "session_pkey",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": []
+  },
+  "core.sign_in_attempt": {
+    "columns": [
+      {
+        "default": null,
+        "name": "kind",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "key",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "failures",
+        "notNull": true,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "next_allowed_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "expires_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "check": null,
+        "columns": ["expires_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "sign_in_attempt_expires_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((failures >= 0))",
+        "columns": ["failures"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "sign_in_attempt_failures_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["failures"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "sign_in_attempt_failures_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["key"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "sign_in_attempt_key_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((kind = ANY (ARRAY['login'::text, 'source'::text])))",
+        "columns": ["kind"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "sign_in_attempt_kind_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["kind"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "sign_in_attempt_kind_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["next_allowed_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "sign_in_attempt_next_allowed_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["kind", "key"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "sign_in_attempt_pkey",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["expires_at"],
+        "method": "btree",
+        "name": "sign_in_attempt_expiry",
+        "predicate": null,
+        "unique": false,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["kind", "key"],
+        "method": "btree",
+        "name": "sign_in_attempt_pkey",
         "predicate": null,
         "unique": true,
         "valid": true

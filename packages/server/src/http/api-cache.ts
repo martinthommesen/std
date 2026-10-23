@@ -20,8 +20,7 @@ import {
 } from "effect/http";
 import { HttpServerRequest } from "effect/http/HttpServerRequest";
 
-/** Where the API's routes start. */
-const API_PATH_PREFIX = "/api/";
+import { apiKindOf } from "./api-path.ts";
 
 /**
  * The server middleware `std serve` passes to `HttpRouter.serve`: the last
@@ -63,7 +62,7 @@ export const answerApiFailures = <R>(
       if (
         Cause.hasInterruptsOnly(cause) ||
         answered ||
-        !request.url.startsWith(API_PATH_PREFIX)
+        apiKindOf(request.url, yield* HttpRouter.RouterConfig) !== "std"
       ) {
         return yield* Effect.failCause(cause);
       }
@@ -82,13 +81,21 @@ export const answerApiFailures = <R>(
 
 /** The global middleware that sets `Cache-Control: no-store` on API responses. */
 export const ApiNoStoreLayer = HttpRouter.middleware(
-  (httpEffect) =>
-    HttpEffect.withPreResponseHandler(httpEffect, (request, response) =>
-      Effect.succeed(
-        request.url.startsWith(API_PATH_PREFIX)
-          ? HttpServerResponse.setHeader(response, "cache-control", "no-store")
-          : response
-      )
-    ),
+  Effect.gen(function* apiNoStore() {
+    const config = yield* HttpRouter.RouterConfig;
+
+    return (httpEffect) =>
+      HttpEffect.withPreResponseHandler(httpEffect, (request, response) =>
+        Effect.succeed(
+          apiKindOf(request.url, config) === "std"
+            ? HttpServerResponse.setHeader(
+                response,
+                "cache-control",
+                "no-store"
+              )
+            : response
+        )
+      );
+  }),
   { global: true }
 );

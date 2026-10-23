@@ -115,7 +115,13 @@ export const tmfRouteErrorResponse = (
   declared: readonly number[]
 ): HttpServerResponse.HttpServerResponse => {
   const { body, status } = tmfErrorOf(failure);
-  const answered = tmfStatusFor(failure._tag, status, declared);
+
+  // E30 is proposed: TMF630 P1 §3.3.3 requires 413 even when the API omits it.
+  const answered =
+    failure._tag === "BodyTooLarge"
+      ? 413
+      : tmfStatusFor(failure._tag, status, declared);
+
   const tmfBody: JsonObject = { ...body, status: String(answered) };
 
   return HttpServerResponse.text(stringifyJson(tmfBody), {

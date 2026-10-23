@@ -41,6 +41,7 @@ import type { ReadScope, ReadView } from "../../records/read-view.ts";
 import { deleteRecord, updateRecord } from "../../records/save-pipeline.ts";
 import type { LockedImage } from "../../records/save-pipeline.ts";
 import { WriteAccess } from "../../records/write-access.ts";
+import { textBodyOf } from "../body-limits.ts";
 import { expectedVersionOf } from "../record-writes.ts";
 import { checkRequestRevision } from "../stale-request.ts";
 import { bodyNames, translateBody, TYPE_MEMBERS } from "./body.ts";
@@ -550,7 +551,7 @@ export const readDelete = Effect.fn("Api.readDelete")(function* readDelete(
     input.request.headers["if-match"]
   );
 
-  const text = yield* input.request.text.pipe(Effect.orElseSucceed(() => ""));
+  const text = yield* textBodyOf(input.request);
 
   return text === ""
     ? expectedVersion

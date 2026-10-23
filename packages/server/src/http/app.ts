@@ -11,12 +11,14 @@
  */
 import { Layer } from "effect";
 
+import { SignInAdmission } from "../auth/sign-in-limits.ts";
 import { HubSettings } from "../events/hubs.ts";
 import { RecordRuleSaveHooks } from "../hooks/record-rule-hooks.ts";
 import { ProductionDeliveryHandlers } from "../outbox/production-handlers.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { ApiNoStoreLayer } from "./api-cache.ts";
 import { ApiRoutesLayer } from "./api/routes.ts";
+import { BodyLimitsLayer } from "./body-limits.ts";
 import { HubRoutes } from "./hubs.ts";
 import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
 import { SHIPPED_TMF_APIS } from "./tmf/apis.ts";
@@ -55,5 +57,6 @@ export const HttpAppLayer = Layer.mergeAll(
   ),
   tmfRoutes(SHIPPED_TMF_APIS),
   SchemaRevisionHeaderLayer,
-  ApiNoStoreLayer
-).pipe(Layer.provide(HubSettings.layer));
+  ApiNoStoreLayer,
+  BodyLimitsLayer
+).pipe(Layer.provide(HubSettings.layer), Layer.provide(SignInAdmission.layer));

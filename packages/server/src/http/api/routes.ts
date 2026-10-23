@@ -163,6 +163,8 @@ const definitionRequest = (
       stated: yield* parseRequestRevision(request),
     };
 
+    yield* inRequestTransaction(transactions, request, asActor(Effect.void));
+
     return yield* definitionWriteIn(
       transactions,
       input,

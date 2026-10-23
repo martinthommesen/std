@@ -1,3 +1,4 @@
+import { tableList, tableMetadata } from "@std/access/table-metadata";
 /**
  * The fixed resources of `/api/v1` (Contracts 10.1):
  *
@@ -17,8 +18,9 @@
  * `/api`. No fixed resource's name is a table's v2 name: definition
  * validation refuses it (`apiNameClash`).
  */
-import { tableList, tableMetadata } from "@std/access/table-metadata";
+import type { InvalidCredentials } from "@std/api/errors/invalid-credentials";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
+import type { SignInThrottled } from "@std/api/errors/sign-in-throttled";
 import { UnknownTable } from "@std/api/errors/unknown-table";
 import { WEB_CLIENT, WEB_CLIENT_HEADER } from "@std/api/session-cookie";
 import { SessionToken } from "@std/api/session-token";
@@ -34,13 +36,14 @@ import { formatDateTime } from "@std/values/date-time";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Plaintext } from "@std/values/write-only";
-import { Effect, Layer, Redacted } from "effect";
+import { Effect, Layer, Option, Redacted, Result } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import { Actor } from "../../auth/actor.ts";
 import type { ActingUser } from "../../auth/actor.ts";
 import { displayName, signIn, signOut } from "../../auth/sessions.ts";
+import { SignInAdmission } from "../../auth/sign-in-limits.ts";
 import { Catalog } from "../../catalog/catalog.ts";
 import type { InstanceSettings } from "../../config/instance-settings.ts";
 import { currentReadScope } from "../../records/read-records.ts";
@@ -75,6 +78,12 @@ import {
   tableOfCollection,
   typeNameOf,
 } from "./table-names.ts";
+
+// Only credential/admission refusals commit their counters. Infrastructure
+// failures must still roll back and reach inRequestTransaction's SQL retries.
+const committedSignInRefusal = (
+  failure: InvalidCredentials | SignInThrottled
+) => Effect.succeed(Result.fail(failure));
 
 const SESSION_PATH = `${API_PREFIX}/session`;
 const CURRENT_SESSION = `${SESSION_PATH}/current`;
@@ -347,6 +356,7 @@ const tableEntries = (
 export const FixedRoutes = Layer.unwrap(
   Effect.gen(function* buildFixedRoutes() {
     const transactions = yield* Transactions;
+    const admission = yield* SignInAdmission;
 
     const services = yield* Effect.context<
       Catalog | InstanceSettings | Transactions
@@ -408,18 +418,34 @@ export const FixedRoutes = Layer.unwrap(
           });
         }
 
-        const session = yield* inRequest(
-          request,
-          Effect.gen(function* signInRequest() {
-            yield* checkUnscopedRevision(stated);
+        const result = yield* admission.run(
+          inRequest(
+            request,
+            Effect.gen(function* signInRequest() {
+              yield* checkUnscopedRevision(stated);
 
-            return yield* signIn(
-              yield* (yield* Catalog).current,
-              body.login,
-              body.password
-            );
-          })
+              return yield* signIn(
+                yield* (yield* Catalog).current,
+                body.login,
+                body.password,
+                Option.getOrUndefined(request.remoteAddress) ?? "unavailable"
+              );
+            }).pipe(
+              Effect.map(Result.succeed),
+              Effect.catchTag(
+                ["InvalidCredentials", "SignInThrottled"],
+                committedSignInRefusal
+              )
+            )
+          )
         );
+
+        // Capture typed authentication refusals inside the transaction so their
+        // counters commit. Fail only after commit; native KDF work is awaited
+        // even if the HTTP caller disconnects (admission owns cancellation).
+        const session = Result.isSuccess(result)
+          ? result.success
+          : yield* Effect.fail(result.failure);
 
         if (body.tokenDelivery === "cookie") {
           yield* setSessionCookie(session.token, session.expiresAt);

@@ -49,7 +49,8 @@ const canSignIn = (login: string, password: string) =>
         return yield* signIn(
           yield* catalog.current,
           login,
-          new Plaintext(password)
+          new Plaintext(password),
+          "bootstrap-test"
         );
       })
     ).pipe(
