@@ -13,7 +13,12 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 import type { Page } from "playwright";
 
-import { assertHiddenValuesAbsent, hiddenValuesIn } from "./app.ts";
+import {
+  assertHiddenValuesAbsent,
+  hiddenValuesIn,
+  recordLeavesOf,
+  sentAttributes,
+} from "./app.ts";
 import type { ReceivedResponse } from "./app.ts";
 import { launchBrowser } from "./support.ts";
 
@@ -107,6 +112,59 @@ const devToolsText = (
     JSON.stringify({ count: 7, model: { key: "ab" } }, null, 2),
     JSON.stringify({ message: { records: [{ values }] } }, null, 2),
   ].join("\n");
+
+describe("reading what a request sent and a record holds", () => {
+  it("reads the form's JSON Patch as the attributes it sets, and refuses one that does more", () => {
+    assert.deepStrictEqual(
+      sentAttributes(
+        '[{"op":"add","path":"/priority","value":"critical"},{"op":"add","path":"/description","value":null}]'
+      ),
+      { description: null, priority: "critical" }
+    );
+    assert.deepStrictEqual(sentAttributes('{"shortDescription":"New"}'), {
+      shortDescription: "New",
+    });
+
+    for (const body of [
+      '[{"op":"add","path":"/priority","value":"critical"},{"op":"remove","path":"/description"}]',
+      '[{"op":"add","path":"/priority","value":"critical"},{"op":"add","path":"/priority","value":"low"}]',
+      '[{"op":"add","path":"/payload/tags","value":[]}]',
+      '[{"op":"add","path":"/priority"}]',
+    ]) {
+      assert.throws(
+        () => {
+          sentAttributes(body);
+        },
+        /patch/u,
+        body
+      );
+    }
+  });
+
+  it("takes every leaf of a json value, whatever its keys, and only an EntityRef's own values", () => {
+    assert.deepStrictEqual(
+      recordLeavesOf(
+        {
+          createdBy: {
+            "@type": "CoreUserRef",
+            href: "https://std/u9",
+            id: "u9",
+          },
+          owner: {
+            "@referredType": "CoreUser",
+            "@type": "CoreUserRef",
+            href: "https://std/api/coreUser/u1",
+            id: "u1",
+            name: "Kim",
+          },
+          payload: { "@secret": "private-token", href: "private-url" },
+        },
+        new Set(["owner"])
+      ),
+      ["u9", "u1", "Kim", "private-token", "private-url"]
+    );
+  });
+});
 
 describe("the hidden-value check", () => {
   it.effect(

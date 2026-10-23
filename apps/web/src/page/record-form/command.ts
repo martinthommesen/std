@@ -28,6 +28,7 @@ import {
   collectionOfType,
   currentRevisionOf,
   errorDetail,
+  fieldsParameterOf,
   historyEntryOf,
   isIdentityOnly,
   jsonPatchOf,
@@ -36,12 +37,13 @@ import {
   recordOfResource,
   resourceBodyOf,
   totalCountOf,
+  typeOf,
   wireFieldOf,
 } from "../../domain/wire.ts";
 import { StdApi, atRevision, responseRevision } from "../../std-client.ts";
 import { fetchTableMetadata } from "../table-list/command.ts";
 import type { RecordPage } from "../table-list/model.ts";
-import { Message, ReadPurpose } from "./message.ts";
+import { Message, ReadPurpose, UnreadSavedRecord } from "./message.ts";
 import { WriteError } from "./model.ts";
 import type { HistoryError, RecordError, RelatedError } from "./model.ts";
 
@@ -171,8 +173,10 @@ const failedRecord =
 
 /**
  * Reads the record (`GET {collection}/{id}`) at the form's revision; its
- * references carry their labels. `selected` are the fields a read without
- * `fields` returns (the endpoint's active ones).
+ * references carry their labels. `selected` are the endpoint's active
+ * fields, named in `fields`, so the answer reports each one, withheld or
+ * not, whatever the record's class (Contracts 10.2: without `fields`, a
+ * record of a child class comes in its own representation).
  */
 export const LoadRecord = Command.define("LoadRecord", {
   args: {
@@ -190,7 +194,7 @@ export const LoadRecord = Command.define("LoadRecord", {
       const [resource, response] = yield* client.records
         .get({
           params: { id: recordId, table: collectionOf(table) },
-          query: {},
+          query: { fields: fieldsParameterOf(selected) },
           responseMode: WITH_RESPONSE,
         })
         .pipe(atRevision(Option.some(revision)));
@@ -468,41 +472,50 @@ export const isDefinitionTable = (table: string): boolean =>
   DEFINITION_TABLES.has(table);
 
 /**
- * What a write returned: the record read back, or, when the answer holds
- * only its identity, the record read again to tell an empty record from
- * one the caller can no longer see (Contracts 3.9): `NotFound` means the
- * latter, which the form shows with its ID and version only.
+ * What a write returned. A record of the endpoint's own class is read
+ * from the answer, which holds the endpoint's default selection. Any
+ * other answer is read again with the endpoint's fields named
+ * (`fields`): a record of a child class (the answer is the child's
+ * representation, in which a field the child denies is absent, not
+ * withheld), and an answer that holds only the record's identity (the
+ * caller can no longer see it, or every field is empty). The read tells
+ * them apart: `NotFound` means the record is no longer visible
+ * (Contracts 3.9); a newer version or any other failure leaves the
+ * record's state unknown (`UnreadSavedRecord`), never an empty record. An
+ * ended session fails the Command, as any request's does.
  */
 const savedRecordOf = Effect.fnUntraced(function* savedRecordOf(
   resource: Parameters<typeof recordOfResource>[0],
   table: string,
   selected: readonly WireField[]
 ) {
-  if (!isIdentityOnly(resource)) {
+  if (resource["@type"] === typeOf(table) && !isIdentityOnly(resource)) {
     return recordOfResource(resource, selected);
   }
 
   const client = yield* StdApi;
   const version = resource.revision ?? 0;
+  const unread = UnreadSavedRecord.make({ id: resource.id, version });
 
-  // NOTE: the write succeeded whatever this read answers: any other
-  // failure keeps the write's own answer.
+  // NOTE: the write succeeded whatever this read answers.
   return yield* client.records
     .get({
       params: { id: resource.id, table: collectionOf(table) },
-      query: {},
+      query: { fields: fieldsParameterOf(selected) },
     })
     .pipe(
       Effect.map((reread) =>
-        recordOfResource(
-          (reread.revision ?? 0) === version ? reread : resource,
-          selected
-        )
+        (reread.revision ?? 0) === version
+          ? recordOfResource(reread, selected)
+          : unread
       ),
       Effect.catchIf(isTmfError("NotFound"), () =>
         Effect.succeed({ id: resource.id, version })
       ),
-      Effect.orElseSucceed(() => recordOfResource(resource, selected))
+      Effect.catchIf(
+        (failure) => !isTmfError("Unauthenticated")(failure),
+        () => Effect.succeed(unread)
+      )
     );
 });
 

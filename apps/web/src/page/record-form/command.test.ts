@@ -4,6 +4,7 @@
  * API names and the password unwrapped only there) and what each answer
  * becomes, read back by field name (`wire.ts`).
  */
+import type { Schema } from "effect";
 import { Effect, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -33,7 +34,7 @@ import {
   SearchTargets,
   UpdateRecord,
 } from "./command.ts";
-import { Message } from "./message.ts";
+import { Message, UnreadSavedRecord } from "./message.ts";
 import { WriteError } from "./model.ts";
 
 const COLLECTION = "/api/v1/helpTicket";
@@ -460,17 +461,21 @@ describe("form Commands against the server", () => {
     ]);
   });
 
-  it("a create whose second read fails is still a success, with what the create answered", async () => {
+  /**
+   * Runs a create whose answer is `created`, with `reread` answering the
+   * read after it.
+   *
+   * @param created - The create's answer body.
+   * @param reread - The read's answer.
+   * @returns The Command's Message and the requests sent.
+   */
+  const createThenRead = async (
+    created: Readonly<Record<string, Schema.Json>>,
+    reread: FakeAnswer
+  ) => {
     const api = fakeStdApi({
-      [`POST ${COLLECTION}`]: {
-        body: {
-          "@type": "HelpTicket",
-          href: `http://std.test${RECORD_PATH}`,
-          id: TICKET_ID,
-          revision: 1,
-        },
-        status: 201,
-      },
+      [`GET ${RECORD_PATH}`]: reread,
+      [`POST ${COLLECTION}`]: { body: created, status: 201 },
     });
 
     const result = await Effect.runPromise(
@@ -485,12 +490,62 @@ describe("form Commands against the server", () => {
       }).effect.pipe(Effect.provide(api.layer))
     );
 
-    expect(result._tag).toBe("SucceededSaveRecord");
+    return { result, seen: api.seen };
+  };
+
+  const identityOnly = {
+    "@type": "HelpTicket",
+    href: `http://std.test${RECORD_PATH}`,
+    id: TICKET_ID,
+    revision: 1,
+  };
+
+  const unread = Message.SucceededSaveRecord({
+    generation: 1,
+    maybeRevision: Option.none(),
+    saved: UnreadSavedRecord.make({ id: TICKET_ID, version: 1 }),
+  });
+
+  it("a save whose record cannot be read back succeeds with its state unknown, never as an empty record", async () => {
+    const failed = await createThenRead(identityOnly, { status: 599 });
+
+    const newer = await createThenRead(identityOnly, {
+      body: { ...ticketResource, revision: 2 },
+      status: 200,
+    });
+
+    expect([failed.result, newer.result]).toStrictEqual([unread, unread]);
+  });
+
+  it("a save whose read back finds the session ended sends the user to sign in", async () => {
+    const ended = await createThenRead(
+      identityOnly,
+      tmfError("Unauthenticated", 401)
+    );
+
+    expect(ended.result).toStrictEqual(Message.FailedAuthentication());
+  });
+
+  it("a save answered with a child class's representation reads the record again with the endpoint's fields named", async () => {
+    const child = await createThenRead(
+      { ...ticketResource, "@type": "HelpIncident", revision: 1 },
+      {
+        body: { ...ticketResource, revision: 1, withheld: ["customerEmail"] },
+        status: 200,
+      }
+    );
+
+    const [, read] = child.seen;
+
+    expect(read?.query).toStrictEqual({
+      fields: TICKET_SELECTION.map((field) => field.apiName).join(","),
+    });
     expect(
-      result._tag === "SucceededSaveRecord" && "class" in result.saved
-        ? result.saved.values.short_description
-        : "not a record"
-    ).toBeNull();
+      child.result._tag === "SucceededSaveRecord" &&
+        "class" in child.result.saved
+        ? child.result.saved.withheld
+        : []
+    ).toStrictEqual(["customer_email"]);
   });
 
   it("a delete sends If-Match; Referenced is its own refusal", async () => {
@@ -661,7 +716,9 @@ describe("form Commands against the server", () => {
       status: 200,
     });
 
-    expect(found.seen[0]?.query).toStrictEqual({});
+    expect(found.seen[0]?.query).toStrictEqual({
+      fields: TICKET_SELECTION.map((field) => field.apiName).join(","),
+    });
     expect(found.result).toStrictEqual(
       Message.SucceededLoadRecord({
         generation: 1,

@@ -49,7 +49,7 @@ import {
   UpdateRecord,
 } from "./command.ts";
 import { checkForm, controlIdOf } from "./form.ts";
-import { Message, OutMessage } from "./message.ts";
+import { Message, OutMessage, UnreadSavedRecord } from "./message.ts";
 import { FormMode, Submission, WriteError } from "./model.ts";
 import type { Model } from "./model.ts";
 import { init, update } from "./update.ts";
@@ -663,6 +663,76 @@ describe("editing and saving", () => {
         expect(page.submission).toStrictEqual(
           Submission.Failed({ error: WriteError.NotAllowed() })
         );
+      })
+    );
+  });
+
+  it("a save whose record could not be read back says so, keeps the record as stale, holds Save back and reads it again on request (review round 1)", () => {
+    const sent = after(
+      ready,
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.description,
+        text: "Mine",
+      }),
+      Message.ClickedSave(),
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.shortDescription,
+        text: "Typed while saving",
+      })
+    );
+
+    const unread = after(
+      sent,
+      Message.SucceededSaveRecord({
+        generation: 2,
+        maybeRevision: Option.none(),
+        saved: UnreadSavedRecord.make({ id: TICKET_ID, version: 4 }),
+      })
+    );
+
+    expect(unread.submission).toStrictEqual(Submission.SavedUnread());
+    expect(AsyncData.isStale(unread.record)).toBeTruthy();
+    expect(Object.keys(unread.edits)).toStrictEqual([
+      TICKET_FIELDS.shortDescription,
+    ]);
+
+    story(
+      update,
+      given(unread),
+      message(Message.ClickedSave()),
+      Command.expectNone(),
+      message(Message.ClickedRetry()),
+      Command.expectExact(
+        LoadRecord({
+          generation: 3,
+          purpose: "Refresh",
+          recordId: TICKET_ID,
+          revision: REVISION_5,
+          selected: TICKET_SELECTION,
+          table: TICKET,
+        })
+      ),
+      Command.resolve(
+        LoadRecord,
+        Message.SucceededLoadRecord({
+          generation: 3,
+          maybeRevision: Option.some(REVISION_5),
+          purpose: "Refresh",
+          record: {
+            ...ticketRecord,
+            values: { ...ticketRecord.values, description: "Mine" },
+            version: 4,
+          },
+        })
+      ),
+      model((page) => {
+        expect(page.submission).toStrictEqual(
+          Submission.Saved({ isVisible: true })
+        );
+        expect(page.maybeEditsFrom).toStrictEqual(Option.none());
+        expect(Object.keys(page.edits)).toStrictEqual([
+          TICKET_FIELDS.shortDescription,
+        ]);
       })
     );
   });

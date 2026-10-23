@@ -84,25 +84,67 @@ const isRecordWrite = (url: string, method: string): boolean =>
   (method === "POST" && isRecordPath(url, 1)) ||
   (method === "PATCH" && isRecordPath(url, 2));
 
+const JsonPatchBody = Schema.Array(
+  Schema.Struct({
+    from: Schema.optionalKey(Schema.String),
+    op: Schema.String,
+    path: Schema.String,
+    value: Schema.optionalKey(Schema.Json),
+  })
+);
+
 const decodeJsonPatch = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Array(
-      Schema.Struct({
-        op: Schema.String,
-        path: Schema.String,
-        value: Schema.optionalKey(Schema.Json),
-      })
-    )
-  )
+  Schema.fromJsonString(JsonPatchBody)
 );
 
 const decodeMergeBody = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))
 );
 
+/** An attribute's path in the form's JSON Patch: `/<attribute>`. */
+const ATTRIBUTE_PATH = /^\/(?<attribute>[^/~]+)$/u;
+
+/**
+ * The attributes a JSON Patch of the form sets.
+ *
+ * @param operations - The operations.
+ * @returns The attributes, by API name.
+ */
+const attributesOfJsonPatch = (
+  operations: readonly (typeof JsonPatchBody.Type)[number][]
+): Record<string, Schema.Json> => {
+  const paths = operations.map((operation) => operation.path);
+
+  if (new Set(paths).size !== paths.length) {
+    throw new Error(`the patch names a path twice: ${paths.join(", ")}`);
+  }
+
+  return Object.fromEntries(
+    operations.map((operation) => {
+      const attribute = ATTRIBUTE_PATH.exec(operation.path)?.groups?.attribute;
+
+      if (
+        operation.op !== "add" ||
+        attribute === undefined ||
+        operation.value === undefined
+      ) {
+        throw new Error(
+          `the patch does more than set an attribute: ${JSON.stringify(operation)}`
+        );
+      }
+
+      return [attribute, operation.value] as const;
+    })
+  );
+};
+
 /**
  * The attributes a write's body sets, by API name: a create's or merge
- * patch's members, or a JSON Patch's `add` and `replace` values.
+ * patch's members, or a JSON Patch's operations. The form's JSON Patch
+ * sets each changed attribute with one `add` at `/<attribute>`; any other
+ * operation, a deeper path, a missing value or a path named twice fails,
+ * so a body that does more than set what the user changed never reads as
+ * if it did only that.
  *
  * @param body - The request body as sent.
  * @returns The attributes.
@@ -114,14 +156,7 @@ export const sentAttributes = (
     decodeJsonPatch(body),
     {
       onNone: () => decodeMergeBody(body),
-      onSome: (operations) =>
-        Object.fromEntries(
-          operations.flatMap((operation) =>
-            operation.op === "add" || operation.op === "replace"
-              ? [[operation.path.slice(1), operation.value ?? null] as const]
-              : []
-          )
-        ),
+      onSome: attributesOfJsonPatch,
     }
   );
 
@@ -1465,7 +1500,9 @@ const everyRecord = async (
 };
 
 /**
- * The text leaves of a JSON value: strings, and numbers as text.
+ * The text leaves of a JSON value, at any depth and under any member name
+ * (a json field's content is a value whatever its keys): strings, and
+ * numbers as text.
  *
  * @param value - The value.
  * @returns Its leaves.
@@ -1487,8 +1524,100 @@ const leavesOf = (value: Schema.Json): readonly string[] => {
     return value.flatMap((item: Schema.Json) => leavesOf(item));
   }
 
-  return Object.entries(value).flatMap(([name, member]) =>
-    name === "href" || name.startsWith("@") ? [] : leavesOf(member)
+  return Object.values(value).flatMap(leavesOf);
+};
+
+/**
+ * The system attributes that hold EntityRefs (Contracts 10.2): who
+ * created and last updated the record.
+ */
+const SYSTEM_REFERENCES: ReadonlySet<string> = new Set([
+  "createdBy",
+  "updatedBy",
+]);
+
+const decodeJsonObject = Schema.decodeUnknownOption(
+  Schema.Record(Schema.String, Schema.Json)
+);
+
+/**
+ * An EntityRef's value leaves: every member but `href` and the `@` ones.
+ *
+ * @param value - The attribute's value.
+ * @returns The leaves.
+ */
+const entityRefLeavesOf = (value: Schema.Json): readonly string[] =>
+  Option.match(decodeJsonObject(value), {
+    onNone: () => leavesOf(value),
+    onSome: (ref) =>
+      Object.entries(ref).flatMap(([member, inner]) =>
+        member === "href" || member.startsWith("@") ? [] : leavesOf(inner)
+      ),
+  });
+
+/**
+ * The leaves of a record's field attributes. An EntityRef's transport
+ * members (`href`, `@type`, `@referredType`) are left out: they say where
+ * the target lives, not what the record holds, and they differ between
+ * callers who may or may not see the target. Its `id`, `name` and one-hop
+ * members are values. Only reference attributes are read as EntityRefs;
+ * every other attribute (a json field's object included) is read whole.
+ *
+ * @param values - The record's attributes by API name.
+ * @param references - The API names of its reference attributes.
+ * @returns The leaves.
+ */
+export const recordLeavesOf = (
+  values: Readonly<Record<string, Schema.Json>>,
+  references: ReadonlySet<string>
+): readonly string[] =>
+  Object.entries(values).flatMap(([name, value]) =>
+    references.has(name) || SYSTEM_REFERENCES.has(name)
+      ? entityRefLeavesOf(value)
+      : leavesOf(value)
+  );
+
+const decodeReferenceFields = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      fields: Schema.Array(
+        Schema.Struct({
+          apiName: Schema.String,
+          type: Schema.Struct({ kind: Schema.String }),
+        })
+      ),
+    })
+  )
+);
+
+/**
+ * The API names of a table's reference fields, from its metadata.
+ *
+ * @param origin - The server.
+ * @param token - A session that may open the table.
+ * @param table - The table.
+ * @returns The names.
+ */
+const referenceNamesOf = async (
+  origin: string,
+  token: string,
+  table: string
+): Promise<ReadonlySet<string>> => {
+  const response = await fetch(
+    `${origin}${API_PREFIX}/tableMetadata/${collectionOf(table)}`,
+    { headers: { authorization: `Bearer ${token}` } }
+  );
+
+  const text = await response.text();
+
+  if (response.status !== 200) {
+    throw new Error(`GET ${table} metadata: ${response.status} ${text}`);
+  }
+
+  return new Set(
+    decodeReferenceFields(text).fields.flatMap((field) =>
+      field.type.kind === "reference" ? [field.apiName] : []
+    )
   );
 };
 
@@ -1522,8 +1651,18 @@ export const valuesHiddenFrom = async (
   const listed = await Promise.all(
     tables.map(async (table) => ({
       read: await everyRecord(origin, sessions.reader, table, null),
+      references: await referenceNamesOf(origin, sessions.reader, table),
       seen: await everyRecord(origin, sessions.viewer, table, null),
     }))
+  );
+
+  const readable = new Set(
+    listed.flatMap(({ references, seen: records }) =>
+      records.flatMap((record) => [
+        record.id,
+        ...recordLeavesOf(record.values, references),
+      ])
+    )
   );
 
   const seen = new Map(
@@ -1532,19 +1671,17 @@ export const valuesHiddenFrom = async (
     )
   );
 
-  const readable = new Set(
-    [...seen.values()].flatMap((record) => [
-      record.id,
-      ...Object.values(record.values).flatMap(leavesOf),
-    ])
-  );
-
-  const unread = listed.flatMap(({ read }) =>
+  const unread = listed.flatMap(({ read, references }) =>
     read.flatMap((record) => {
       const viewed = seen.get(record.id);
 
-      return Object.entries(record.values).flatMap(([name, value]) =>
-        viewed === undefined || !(name in viewed.values) ? leavesOf(value) : []
+      return recordLeavesOf(
+        Object.fromEntries(
+          Object.entries(record.values).filter(
+            ([name]) => viewed === undefined || !(name in viewed.values)
+          )
+        ),
+        references
       );
     })
   );

@@ -302,6 +302,14 @@ const submissionView = (model: Model, h: HtmlBuilder<Message>): Html =>
     Match.tag("Saved", () =>
       h.p([h.Role("status"), h.Class("notice")], ["Saved."])
     ),
+    Match.tag("SavedUnread", () =>
+      h.p(
+        [h.Role("status"), h.Class("notice")],
+        [
+          "Saved. The record could not be read back: reload it to see what it holds before saving again.",
+        ]
+      )
+    ),
     Match.tag("Unchanged", () =>
       h.p(
         [h.Role("status"), h.Class("notice")],
@@ -491,7 +499,10 @@ const isSaving = (model: Model): boolean =>
   Submission.guards.Saving(model.submission);
 
 const isSaveBlocked = (model: Model): boolean =>
-  isSaving(model) || isReloading(model) || isRecordOutdated(model);
+  isSaving(model) ||
+  isReloading(model) ||
+  isRecordOutdated(model) ||
+  Submission.guards.SavedUnread(model.submission);
 
 const saveText = (model: Model): string => {
   if (isSaving(model)) {

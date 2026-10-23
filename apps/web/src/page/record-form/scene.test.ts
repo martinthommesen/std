@@ -39,7 +39,7 @@ import {
   LoadRelatedRecords,
   UpdateRecord,
 } from "./command.ts";
-import { Message, OutMessage } from "./message.ts";
+import { Message, OutMessage, UnreadSavedRecord } from "./message.ts";
 import { FormMode, WriteError } from "./model.ts";
 import type { Model } from "./model.ts";
 import { init, update } from "./update.ts";
@@ -216,6 +216,31 @@ describe("the record form", () => {
       expectOutMessage(OutMessage.SawRevision({ revision: REVISION_5 })),
       expect(text("Saved.")).toExist(),
       expect(text("Ticket · version 4")).toExist()
+    );
+  });
+
+  it("after a save whose record could not be read back, says it saved, holds Save back and offers to reload (review round 1)", () => {
+    scene(
+      { update, view },
+      given(ready),
+      acknowledgePicker,
+      type(label("Short description (required)"), "Black screen"),
+      click(role("button", { name: "Save" })),
+      Command.resolve(
+        UpdateRecord,
+        Message.SucceededSaveRecord({
+          generation: 2,
+          maybeRevision: Option.none(),
+          saved: UnreadSavedRecord.make({ id: TICKET_ID, version: 4 }),
+        })
+      ),
+      expect(
+        text(
+          "Saved. The record could not be read back: reload it to see what it holds before saving again."
+        )
+      ).toExist(),
+      expect(role("button", { name: "Save" })).toBeDisabled(),
+      expect(role("button", { name: "Reload the record" })).toExist()
     );
   });
 
