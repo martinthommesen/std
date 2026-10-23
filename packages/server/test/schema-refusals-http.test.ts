@@ -11,7 +11,6 @@
  * purge refusal runs through the change-set endpoint.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { apiAttributeNameOf } from "@std/definitions/names";
 import type { Operation } from "@std/definitions/operation";
 import {
   CORE_NAMESPACE_ID,
@@ -20,19 +19,21 @@ import {
   USER_ROLE_CLASS_ID,
 } from "@std/definitions/well-known";
 import { isJsonArray, isJsonObject } from "@std/values/json-value";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
+import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
-import { tableOf } from "../src/catalog/definition-tables.ts";
 import { createOperation } from "../src/http/definition-writes.ts";
 import { observe, textOf } from "./authz-support.ts";
+import { committedState } from "./committed-state.ts";
 import { subscribe } from "./outbox-support.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
-  committedState,
+  createBodyOf,
+  definitionTable,
+  inApiNames,
   definitionVersion,
   postChangeSet,
   userWithRoles,
@@ -270,20 +271,6 @@ const retireAt = (id: string) =>
   }));
 
 /**
- * An access rule's creation with the rule inactive.
- *
- * @param built - The creation of an active rule.
- * @returns The same rule, inactive.
- */
-const inactive = (built: BuiltOperation): BuiltOperation => ({
-  id: built.id,
-  op:
-    built.op.op === "createAccessRule"
-      ? { ...built.op, definition: { ...built.op.definition, active: false } }
-      : built.op,
-});
-
-/**
  * A definition's lifecycle state.
  *
  * @param id - The definition.
@@ -311,17 +298,7 @@ const genericCreate = Effect.fn("SchemaRefusals.genericCreate")(
     }
 
     const { definition } = operation;
-    const draft: JsonObject = definition;
-    const entry = tableOf(definition.kind);
-    const body: Record<string, JsonValue> = {};
-
-    for (const spec of entry.columns) {
-      const value = draft[spec.property];
-
-      if (!spec.column.startsWith("enforcement") && value !== undefined) {
-        body[spec.column] = value;
-      }
-    }
+    const body = createBodyOf(operation);
 
     assert.deepStrictEqual(
       yield* createOperation(definition.kind, definition.id, body),
@@ -329,14 +306,7 @@ const genericCreate = Effect.fn("SchemaRefusals.genericCreate")(
       `the generic body routes to ${operation.op}`
     );
 
-    const apiBody: Record<string, JsonValue> = Object.fromEntries(
-      Object.entries(body).map(([column, value]) => [
-        apiAttributeNameOf(column),
-        value,
-      ])
-    );
-
-    return { body: apiBody, table: `core.${entry.table}` };
+    return { body: inApiNames(body), table: definitionTable(definition) };
   }
 );
 
@@ -724,23 +694,16 @@ describe("schema-refusals-http", () => {
             ]);
 
             // With its table, in one change set: accepted.
-            const retired = yield* postChangeSet(token, [
-              {
-                id: caption.id,
+            const retiredSnapshot = yield* (yield* Catalog).refresh;
+
+            const retired = yield* postChangeSet(
+              token,
+              [caption.id, size.id, drawer.id].map((id): Operation => ({
+                id,
                 op: "retire",
-                version: yield* definitionVersion(caption.id),
-              },
-              {
-                id: size.id,
-                op: "retire",
-                version: yield* definitionVersion(size.id),
-              },
-              {
-                id: drawer.id,
-                op: "retire",
-                version: yield* definitionVersion(drawer.id),
-              },
-            ]);
+                version: retiredSnapshot.get(id)?.version ?? 0,
+              }))
+            );
 
             assert.strictEqual(retired.status, 201, retired.text);
 
@@ -763,23 +726,16 @@ describe("schema-refusals-http", () => {
             assert.include(selected.text, '"drawer 1"');
 
             // Reactivated together: the table, its fields and their values.
-            const reactivated = yield* postChangeSet(token, [
-              {
-                id: drawer.id,
+            const reactivatedSnapshot = yield* (yield* Catalog).refresh;
+
+            const reactivated = yield* postChangeSet(
+              token,
+              [drawer.id, caption.id, size.id].map((id): Operation => ({
+                id,
                 op: "reactivate",
-                version: yield* definitionVersion(drawer.id),
-              },
-              {
-                id: caption.id,
-                op: "reactivate",
-                version: yield* definitionVersion(caption.id),
-              },
-              {
-                id: size.id,
-                op: "reactivate",
-                version: yield* definitionVersion(size.id),
-              },
-            ]);
+                version: reactivatedSnapshot.get(id)?.version ?? 0,
+              }))
+            );
 
             assert.strictEqual(reactivated.status, 201, reactivated.text);
 
@@ -827,10 +783,16 @@ describe("schema-refusals-http", () => {
             ]);
 
             // The child first, then the table, in one change set: accepted.
-            const retired = yield* postChangeSet(token, [
-              yield* retireAt(tray.id),
-              yield* retireAt(bin.id),
-            ]);
+            const retiredHierarchy = yield* (yield* Catalog).refresh;
+
+            const retired = yield* postChangeSet(
+              token,
+              [tray.id, bin.id].map((id): Operation => ({
+                id,
+                op: "retire",
+                version: retiredHierarchy.get(id)?.version ?? 0,
+              }))
+            );
 
             assert.strictEqual(retired.status, 201, retired.text);
           })
@@ -927,10 +889,16 @@ describe("schema-refusals-http", () => {
 
             // The self-reference retired first, in the same change set:
             // accepted.
-            const retired = yield* postChangeSet(token, [
-              yield* retireAt(next.id),
-              yield* retireAt(node.id),
-            ]);
+            const retiredReference = yield* (yield* Catalog).refresh;
+
+            const retired = yield* postChangeSet(
+              token,
+              [next.id, node.id].map((id): Operation => ({
+                id,
+                op: "retire",
+                version: retiredReference.get(id)?.version ?? 0,
+              }))
+            );
 
             assert.strictEqual(retired.status, 201, retired.text);
           })
@@ -964,10 +932,13 @@ describe("schema-refusals-http", () => {
               description: "reads bays",
             });
 
-            const dormantBayRule = inactive(
-              addAccessRule(bay.id, [bayReader.id], {
+            const dormantBayRule = addAccessRule(
+              bay.id,
+              [bayReader.id],
+              {
                 description: "dormant bay rule",
-              })
+              },
+              { active: false }
             );
 
             const crane = createClass("crane");
@@ -1002,16 +973,24 @@ describe("schema-refusals-http", () => {
             // every dependent that can be: the child class, the reference
             // field and the condition field. Access rules and subscriptions
             // only report.
-            yield* change([
-              yield* retireAt(skid.id),
-              yield* retireAt(pallet.id),
-              yield* retireAt(atDock.id),
-              yield* retireAt(dock.id),
-              yield* retireAt(bay.id),
-              yield* retireAt(crane.id),
-              yield* retireAt(readsMeter.id),
-              yield* retireAt(meter.id),
-            ]);
+            const retiredDefinitions = yield* (yield* Catalog).refresh;
+
+            yield* change(
+              [
+                skid.id,
+                pallet.id,
+                atDock.id,
+                dock.id,
+                bay.id,
+                crane.id,
+                readsMeter.id,
+                meter.id,
+              ].map((id): Operation => ({
+                id,
+                op: "retire",
+                version: retiredDefinitions.get(id)?.version ?? 0,
+              }))
+            );
 
             yield* expectRefusals([
               {
@@ -1071,10 +1050,13 @@ describe("schema-refusals-http", () => {
             const token = yield* userWithRoles("archivist_admin", ["admin"]);
             const archivist = addRole("archivist");
 
-            const dormant = inactive(
-              addAccessRule(site.ledger, [archivist.id], {
+            const dormant = addAccessRule(
+              site.ledger,
+              [archivist.id],
+              {
                 description: "dormant archivist rule",
-              })
+              },
+              { active: false }
             );
 
             yield* change([archivist.op, dormant.op]);

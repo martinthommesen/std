@@ -31,6 +31,7 @@ import {
 } from "../src/catalog/definition-revisions.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { catalogDrift } from "./catalog-drift.ts";
+import { definitionVersion } from "./schema-paths-support.ts";
 import {
   addAccessRule,
   addField,
@@ -59,16 +60,11 @@ const PURGER: Requester = {
 const as = (requester: Requester, operations: readonly Operation[]) =>
   applyChangeSet({ operations, requester });
 
-const versionOf = (id: string) =>
-  Effect.gen(function* readVersion() {
-    const definition = (yield* (yield* Catalog).refresh).get(id);
-
-    return definition?.version ?? 0;
-  });
-
 const retire = (id: string) =>
   Effect.gen(function* retireDefinition() {
-    return yield* change([{ id, op: "retire", version: yield* versionOf(id) }]);
+    return yield* change([
+      { id, op: "retire", version: yield* definitionVersion(id) },
+    ]);
   });
 
 const purgeOp = (id: string, version: number): Operation => ({
@@ -80,12 +76,14 @@ const purgeOp = (id: string, version: number): Operation => ({
 
 const purge = (id: string, requester: Requester = PURGER) =>
   Effect.gen(function* purgeDefinition() {
-    return yield* as(requester, [purgeOp(id, yield* versionOf(id))]);
+    return yield* as(requester, [purgeOp(id, yield* definitionVersion(id))]);
   });
 
 const remove = (id: string) =>
   Effect.gen(function* deleteDefinition() {
-    return yield* change([{ id, op: "delete", version: yield* versionOf(id) }]);
+    return yield* change([
+      { id, op: "delete", version: yield* definitionVersion(id) },
+    ]);
   });
 
 const tagOf = <A, E extends { readonly _tag: string }, R>(
@@ -327,7 +325,7 @@ describe("schema-lifecycle", () => {
               {
                 id: code.id,
                 op: "reactivate",
-                version: yield* versionOf(code.id),
+                version: yield* definitionVersion(code.id),
               },
             ]);
 

@@ -6,53 +6,27 @@
  * writes nothing; a choice label change is not relevant, so the same write
  * succeeds.
  */
-import { randomUUID } from "node:crypto";
-
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { ChoiceDraft, OverrideDraft } from "@std/definitions/definition";
+import type { OverrideDraft } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { Operation } from "@std/definitions/operation";
 import { Effect } from "effect";
 
+import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
-import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
+import { arrayOf, objectOf, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
+import { definitionVersion } from "./schema-paths-support.ts";
 import {
   ACME,
   addField,
+  addChoice,
   addOverride,
   change,
-  values,
 } from "./schema-support.ts";
-
-const local = { owner: { layer: "local" }, protected: false } as const;
-
-const choiceDraft = (
-  fieldId: string,
-  key: string,
-  order: number
-): ChoiceDraft => ({
-  ...local,
-  fieldId,
-  hidden: false,
-  id: randomUUID(),
-  key,
-  kind: "choice",
-  label: key,
-  order,
-});
-
-const createChoice = (definition: ChoiceDraft): Operation => ({
-  definition,
-  op: "createChoice",
-});
-
-const versionOf = (id: string) =>
-  Effect.gen(function* readVersion() {
-    return (yield* (yield* Catalog).refresh).get(id)?.version ?? 0;
-  });
+import { versionOf } from "./writes-support.ts";
 
 /** Where the test writes: laptop K as the administrator. */
 interface Target {
@@ -79,15 +53,12 @@ const saveTier = Effect.fn("StaleChoices.saveTier")(function* saveTier(
 ) {
   const http = yield* TestHttpClient;
 
-  const [version] = yield* values(
-    "SELECT version::text AS value FROM acme.asset WHERE id = $1::uuid",
-    [target.id]
-  );
+  const version = yield* versionOf(target.id);
 
   return yield* http.request("PATCH", recordPath("acme.laptop", target.id), {
     body: { tier: key },
     headers: {
-      "if-match": `"${version ?? "0"}"`,
+      "if-match": `"${version ?? 0}"`,
       "std-schema-revision": stated,
     },
     token: target.token,
@@ -137,36 +108,42 @@ describe("stale requests and choices", () => {
       "choicesChanged after a choice or a subset changes; a label change is not relevant",
       () =>
         Effect.gen(function* staleChoices() {
-          const { fixture, tokens } = yield* signInAll;
-          const target: Target = { id: fixture.records.K, token: tokens.admin };
+          const fixture = yield* AcmeFixture;
+
+          const token = yield* (yield* TestHttpClient).signIn(
+            fixture.admin.login,
+            "ada-password"
+          );
+
+          const target: Target = { id: fixture.records.K, token };
           const tier = addField(ACME.asset, "tier", { kind: "choice" });
 
           yield* change([tier.op]);
 
-          const gold = choiceDraft(tier.id, "gold", 1);
-          const silver = choiceDraft(tier.id, "silver", 2);
-          const bronze = choiceDraft(tier.id, "bronze", 3);
+          const gold = addChoice(tier.id, "gold", { order: 1 });
+          const silver = addChoice(tier.id, "silver", { order: 2 });
+          const bronze = addChoice(tier.id, "bronze", { order: 3 });
 
           const subset = addOverride(ACME.laptop, tier.id, {
             choices: ["gold", "silver"],
           });
 
-          yield* change([createChoice(gold), createChoice(silver), subset.op]);
+          yield* change([gold.op, silver.op, subset.op]);
 
-          yield* staleAfter(target, "a choice added", [createChoice(bronze)]);
+          yield* staleAfter(target, "a choice added", [bronze.op]);
           yield* staleAfter(target, "a choice hidden", [
             {
               changes: { hidden: true },
               id: silver.id,
               op: "update",
-              version: yield* versionOf(silver.id),
+              version: yield* definitionVersion(silver.id),
             },
           ]);
           yield* staleAfter(target, "a choice deleted", [
             {
               id: bronze.id,
               op: "delete",
-              version: yield* versionOf(bronze.id),
+              version: yield* definitionVersion(bronze.id),
             },
           ]);
 
@@ -214,7 +191,7 @@ describe("stale requests and choices", () => {
               changes: { label: "Gold!" },
               id: gold.id,
               op: "update",
-              version: yield* versionOf(gold.id),
+              version: yield* definitionVersion(gold.id),
             },
           ]);
 
@@ -229,14 +206,20 @@ describe("stale requests and choices", () => {
       () =>
         Effect.gen(function* childSubsetScope() {
           const http = yield* TestHttpClient;
-          const { fixture, tokens } = yield* signInAll;
-          const target: Target = { id: fixture.records.K, token: tokens.admin };
+          const fixture = yield* AcmeFixture;
+
+          const token = yield* (yield* TestHttpClient).signIn(
+            fixture.admin.login,
+            "ada-password"
+          );
+
+          const target: Target = { id: fixture.records.K, token };
           const grade = addField(ACME.asset, "grade", { kind: "choice" });
 
           yield* change([grade.op]);
           yield* change([
-            createChoice(choiceDraft(grade.id, "good", 1)),
-            createChoice(choiceDraft(grade.id, "fair", 2)),
+            addChoice(grade.id, "good", { order: 1 }).op,
+            addChoice(grade.id, "fair", { order: 2 }).op,
           ]);
 
           const stated = yield* revisionNow(target);
@@ -250,7 +233,7 @@ describe("stale requests and choices", () => {
             http.request("POST", listPath(table), {
               body: { grade: "good", name: `stale ${table}` },
               headers: { "std-schema-revision": stated },
-              token: tokens.admin,
+              token,
             });
 
           // A create makes a record of exactly its endpoint's class: the
@@ -269,10 +252,7 @@ describe("stale requests and choices", () => {
             "grade/choicesChanged",
           ]);
 
-          const [version] = yield* values(
-            "SELECT version::text AS value FROM acme.asset WHERE id = $1::uuid",
-            [fixture.records.M]
-          );
+          const version = yield* versionOf(fixture.records.M);
 
           const throughParent = yield* http.request(
             "PATCH",
@@ -280,10 +260,10 @@ describe("stale requests and choices", () => {
             {
               body: { grade: "good" },
               headers: {
-                "if-match": `"${version ?? "0"}"`,
+                "if-match": `"${version ?? 0}"`,
                 "std-schema-revision": stated,
               },
-              token: tokens.admin,
+              token,
             }
           );
 

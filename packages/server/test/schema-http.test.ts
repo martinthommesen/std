@@ -6,6 +6,7 @@
  * and retired fields through the read compiler and the save pipeline.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import { ApplyChangeSet } from "@std/api/change-sets";
 import type { Definition, OverrideDraft } from "@std/definitions/definition";
 import {
   DEPENDENCY_KINDS,
@@ -26,8 +27,6 @@ import {
   USER_ROLE_CLASS_ID,
 } from "@std/definitions/well-known";
 import type { PlatformTable } from "@std/definitions/well-known";
-import { parseJson } from "@std/values/json";
-import { isJsonArray, isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import {
   Context,
@@ -68,6 +67,7 @@ import { applyChangeSet } from "../src/schema/change-set.ts";
 import { StepBoundary } from "../src/schema/recovery-settings.ts";
 import { advisoryObjectId, CONFIG_KEY, SCHEMA_KEY } from "../src/sql/locks.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { arrayOf, objectOf } from "./authz-support.ts";
 import { overridesOf } from "./config-support.ts";
 import {
   codeOf,
@@ -76,13 +76,21 @@ import {
   readsTestLayer,
   recordPath,
   resourceOf,
+  revisionOf,
 } from "./reads-support.ts";
 import { USERS } from "./records-support.ts";
-import { CHANGE_SETS, postChangeSet } from "./schema-paths-support.ts";
+import {
+  CHANGE_SETS,
+  postChangeSet,
+  createBodyOf,
+  inApiNames,
+  definitionVersion,
+} from "./schema-paths-support.ts";
 import {
   ACME,
   ACME_SET_DIRECTORY,
   addAccessRule,
+  addChoice,
   addRecordRule,
   addField,
   addIndex,
@@ -91,6 +99,8 @@ import {
   change,
   createClass,
   createRole,
+  currentRevision,
+  LOCAL,
   ensureSite,
   freshId,
   SITE_NAMESPACE_ID,
@@ -146,27 +156,19 @@ const hideByName = (
   classId: string,
   nameFieldId: string,
   name: string
-): Operation => {
-  const deny = addAccessRule(classId, [BUILT_IN_ROLE_IDS.admin], {
-    condition: {
-      left: { path: [nameFieldId] },
-      op: "eq",
-      right: { value: name },
+): Operation =>
+  addAccessRule(
+    classId,
+    [BUILT_IN_ROLE_IDS.admin],
+    {
+      condition: {
+        left: { path: [nameFieldId] },
+        op: "eq",
+        right: { value: name },
+      },
     },
-  });
-
-  return deny.op.op === "createAccessRule"
-    ? {
-        definition: {
-          ...deny.op.definition,
-          actions: ["read"],
-          effect: "deny",
-          owner: { layer: "core" },
-        },
-        op: "createAccessRule",
-      }
-    : deny.op;
-};
+    { effect: "deny", owner: { layer: "core" } }
+  ).op;
 
 /**
  * Applies operations as the core set would: the only origin whose access
@@ -205,30 +207,10 @@ const UNRESOLVED_HISTORY = `SELECT count(*)::text AS value
   FROM core."change" c CROSS JOIN LATERAL jsonb_each(c.fields) AS f(key, value)
   WHERE NOT EXISTS (${FIELD_AT})`;
 
-const AppliedSchema = Schema.Struct({
-  id: Schema.NullOr(Schema.String),
-  revision: Schema.NullOr(Schema.Int),
-  schemaRevision: Schema.Int,
-  state: Schema.String,
-});
-
-const decodeApplied = Schema.decodeUnknownEffect(AppliedSchema);
+const decodeApplied = Schema.decodeUnknownEffect(ApplyChangeSet);
 
 const appliedOf = (response: TestResponse) =>
   decodeApplied(response.json).pipe(Effect.orDie);
-
-/**
- * The revision number in a response's `STD-Schema-Revision` header.
- * @param response - A response.
- * @returns The number.
- */
-const headerRevision = (response: TestResponse): number =>
-  Number((response.headers.get("std-schema-revision") ?? "").split(".")[0]);
-
-const versionOf = (id: string) =>
-  Effect.gen(function* readVersion() {
-    return (yield* (yield* Catalog).refresh).get(id)?.version ?? 0;
-  });
 
 /**
  * Alice becomes an admin (once) and signs in.
@@ -262,21 +244,6 @@ const adminToken = Effect.gen(function* signInAdmin() {
 
   return yield* http.signIn("alice", "alice-password");
 });
-
-/**
- * A body keyed by column names, keyed by API names (Contracts 10.2).
- * @param body - The body.
- * @returns The same values under their API names.
- */
-const inApiNames = (
-  body: Readonly<Record<string, JsonValue>>
-): Record<string, JsonValue> =>
-  Object.fromEntries(
-    Object.entries(body).map(([column, value]) => [
-      apiAttributeNameOf(column),
-      value,
-    ])
-  );
 
 /**
  * Appends a response to the ones kept.
@@ -467,22 +434,7 @@ const REFERENCE_CASES: Readonly<
   ],
   choice_of: [
     "field",
-    (id) => [
-      {
-        definition: {
-          fieldId: id,
-          hidden: false,
-          id: freshId(),
-          key: "k_choice",
-          kind: "choice",
-          label: "K",
-          order: 1,
-          owner: { layer: "local" },
-          protected: false,
-        },
-        op: "createChoice",
-      },
-    ],
+    (id) => [addChoice(id, "k_choice", { label: "K", order: 1 }).op],
   ],
   condition_on: [
     "class",
@@ -504,18 +456,7 @@ const REFERENCE_CASES: Readonly<
   ],
   display_field: [
     "field",
-    (id) => {
-      const created = createClass("k_display").op;
-
-      return created.op === "createClass"
-        ? [
-            {
-              ...created,
-              definition: { ...created.definition, displayFieldId: id },
-            },
-          ]
-        : [created];
-    },
+    (id) => [createClass("k_display", { displayFieldId: id }).op],
   ],
   extends: ["class", (id) => [createClass("k_ext", { parentId: id }).op]],
   field_of: ["class", (id) => [addField(id, "k_fo", { kind: "text" }).op]],
@@ -625,15 +566,10 @@ const REFERENCE_CASES: Readonly<
  * @param response - The response.
  * @returns The entries.
  */
-const changesOf = (response: TestResponse): readonly string[] => {
-  const { json } = response;
-
-  const body = json !== undefined && isJsonObject(json) ? json : {};
-  const listed = body.changes ?? null;
-  const changes: readonly JsonValue[] = isJsonArray(listed) ? listed : [];
-
-  return changes.map((entry) => JSON.stringify(entry)).toSorted();
-};
+const changesOf = (response: TestResponse): readonly string[] =>
+  arrayOf(objectOf(response.json).changes)
+    .map((entry) => JSON.stringify(entry))
+    .toSorted();
 
 /** Visible local definitions the generic walk patches, by role. */
 interface WalkRecords {
@@ -678,7 +614,6 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
   const choice = freshId();
   const layout = freshId();
   const savedFilter = freshId();
-  const local = { owner: { layer: "local" }, protected: false } as const;
 
   const recordRule = addRecordRule(walkClass.id, {
     actions: [
@@ -697,22 +632,11 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
     override.op,
     role.op,
     choiceField.op,
+    addChoice(choiceField.id, "walk", { id: choice, label: "Walk", order: 1 })
+      .op,
     {
       definition: {
-        ...local,
-        fieldId: choiceField.id,
-        hidden: false,
-        id: choice,
-        key: "walk",
-        kind: "choice",
-        label: "Walk",
-        order: 1,
-      },
-      op: "createChoice",
-    },
-    {
-      definition: {
-        ...local,
+        ...LOCAL,
         classId: walkClass.id,
         elements: [{ fieldId: field.id, kind: "field" }],
         id: layout,
@@ -723,7 +647,7 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
     },
     {
       definition: {
-        ...local,
+        ...LOCAL,
         classId: walkClass.id,
         condition: { arg: { path: [field.id] }, op: "notEmpty" },
         id: savedFilter,
@@ -736,7 +660,7 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
     recordRule.op,
     {
       definition: {
-        ...local,
+        ...LOCAL,
         helpText: null,
         id: permission,
         kind: "permission",
@@ -747,7 +671,7 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
     },
     {
       definition: {
-        ...local,
+        ...LOCAL,
         id: grant,
         kind: "grant",
         permissionId: permission,
@@ -757,7 +681,7 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
     },
     {
       definition: {
-        ...local,
+        ...LOCAL,
         classId: walkClass.id,
         condition: null,
         deadLetter: "block",
@@ -945,8 +869,6 @@ type OperationCase =
   | { readonly create: "none"; readonly target: TargetSpec }
   | { readonly create: CreateSpec; readonly target: TargetSpec };
 
-const LOCAL = { owner: { layer: "local" }, protected: false } as const;
-
 /** The label of the hidden override the matrix replaces. */
 const HIDDEN_OVERRIDE_LABEL = "Matrix hidden override";
 
@@ -1032,50 +954,39 @@ const OPERATION_CASES: Readonly<Record<Operation["op"], OperationCase>> = {
   },
   createAccessRule: {
     create: {
-      build: (id, refs) => {
-        const built = addAccessRule(refs.class, [refs.role], {
-          fields: [refs.field],
-        }).op;
-
-        return built.op === "createAccessRule"
-          ? { ...built, definition: { ...built.definition, id } }
-          : built;
-      },
+      build: (id, refs) =>
+        addAccessRule(
+          refs.class,
+          [refs.role],
+          {
+            fields: [refs.field],
+          },
+          { id }
+        ).op,
       references: true,
     },
     target: "none",
   },
   createChoice: {
     create: {
-      build: (id, refs) => ({
-        definition: {
-          ...LOCAL,
-          fieldId: refs.field,
-          hidden: false,
+      build: (id, refs) =>
+        addChoice(refs.field, "m_choice", {
           id,
-          key: "m_choice",
-          kind: "choice",
           label: "Matrix",
           order: 1,
-        },
-        op: "createChoice",
-      }),
+        }).op,
       references: true,
     },
     target: "none",
   },
   createClass: {
     create: {
-      build: (id, refs) => {
-        const built = createClass("m_cls", {
+      build: (id, refs) =>
+        createClass("m_cls", {
+          id,
           namespaceId: refs.namespace,
           parentId: refs.class,
-        }).op;
-
-        return built.op === "createClass"
-          ? { ...built, definition: { ...built.definition, id } }
-          : built;
-      },
+        }).op,
       references: true,
     },
     target: "none",
@@ -1325,42 +1236,6 @@ const OPERATION_CASES: Readonly<Record<Operation["op"], OperationCase>> = {
 };
 
 /**
- * A generic POST body for a create: the definition table's writable
- * columns from the operation's draft.
- * @param operation - A create.
- * @returns The body.
- */
-const genericBody = (operation: Operation) => {
-  const body: Record<string, JsonValue> = {};
-
-  if (!("definition" in operation)) {
-    return body;
-  }
-
-  const draft: JsonObject = operation.definition;
-
-  for (const spec of tableOf(operation.definition.kind).columns) {
-    const value = draft[spec.property];
-
-    if (!spec.column.startsWith("enforcement") && value !== undefined) {
-      body[spec.column] = value;
-    }
-  }
-
-  if (operation.definition.kind === "accessRule") {
-    const { target } = operation.definition;
-
-    body.target = target.kind;
-    body.fields =
-      target.kind === "fields" && target.fields !== "*"
-        ? [...target.fields]
-        : null;
-  }
-
-  return body;
-};
-
-/**
  * A response body with IDs replaced by placeholders, for comparing the
  * hidden and the missing case.
  * @param response - The response.
@@ -1561,7 +1436,7 @@ const postReach = Effect.fn("Matrix.postReach")(function* postReach(
     assert.notStrictEqual(spec, "none", `no create case for ${entry.kind}`);
 
     if (spec !== "none") {
-      const sample = genericBody(spec.build(freshId(), VISIBLE_REFS));
+      const sample = createBodyOf(spec.build(freshId(), VISIBLE_REFS));
       const created = yield* createOperation(entry.kind, freshId(), sample);
 
       reached.add(created.op);
@@ -1654,15 +1529,12 @@ const matrixRequests = (
     unknown: `${current.revision}.${unknownChangeSet}`,
   };
 
-  const post = (revision: MatrixRevision, operations: Operation[]) => {
-    const parsed = parseJson(JSON.stringify({ operations }));
-
-    return http.request("POST", CHANGE_SETS, {
-      body: parsed.ok ? parsed.value : null,
+  const post = (revision: MatrixRevision, operations: Operation[]) =>
+    http.request("POST", CHANGE_SETS, {
+      body: { operations },
       headers: { "std-schema-revision": headers[revision] },
       token,
     });
-  };
 
   const generic = (
     revision: MatrixRevision,
@@ -1687,11 +1559,6 @@ const matrixRequests = (
   return { generic, post };
 };
 
-/** The committed configuration revision. */
-const committedRevision = values(
-  "SELECT revision::text AS value FROM core.config_state"
-);
-
 /**
  * Compares the two responses of a case: identical after IDs are replaced,
  * never a success, nothing committed; and records the case.
@@ -1706,7 +1573,7 @@ const pairRunner = (coverage: Set<string>) =>
     ids: readonly [readonly string[], readonly string[]]
   ) {
     const label = coverageKey(tuple);
-    const before = yield* committedRevision;
+    const before = yield* currentRevision;
     const hiddenResponse = yield* onHidden;
     const missingResponse = yield* onMissing;
 
@@ -1716,7 +1583,7 @@ const pairRunner = (coverage: Set<string>) =>
       label
     );
     assert.notStrictEqual(hiddenResponse.status, 201, label);
-    assert.deepStrictEqual(yield* committedRevision, before, label);
+    assert.deepStrictEqual(yield* currentRevision, before, label);
     coverage.add(label);
   });
 
@@ -1745,7 +1612,10 @@ describe("schema-http", () => {
             const applied = yield* appliedOf(posted);
 
             assert.strictEqual(applied.state, "completed");
-            assert.strictEqual(headerRevision(posted), applied.schemaRevision);
+            assert.strictEqual(
+              yield* revisionOf(posted),
+              applied.schemaRevision
+            );
 
             const journal = yield* http.get(
               `${CHANGE_SETS}/${applied.id ?? ""}`,
@@ -1779,12 +1649,15 @@ describe("schema-http", () => {
           Effect.gen(function* protectedOverHttp() {
             const admin = yield* adminToken;
             const fingerprint = yield* catalogFingerprint;
-            const userVersion = yield* versionOf(USER_CLASS_ID);
+            const userVersion = yield* definitionVersion(USER_CLASS_ID);
+
             // The built-in rules name `admin`, so its version moved past 1
             // (Contracts 4.6: an access-rule change bumps the roles it names).
-            const adminRoleVersion = yield* versionOf(BUILT_IN_ROLE_IDS.admin);
+            const adminRoleVersion = yield* definitionVersion(
+              BUILT_IN_ROLE_IDS.admin
+            );
 
-            const purgerVersion = yield* versionOf(
+            const purgerVersion = yield* definitionVersion(
               BUILT_IN_ROLE_IDS.schema_purger
             );
 
@@ -1960,7 +1833,10 @@ describe("schema-http", () => {
             );
 
             for (const response of responses) {
-              assert.isAtLeast(headerRevision(response), Number(earlier?.[0]));
+              assert.isAtLeast(
+                yield* revisionOf(response),
+                Number(earlier?.[0])
+              );
             }
           })
       );
@@ -1993,7 +1869,7 @@ describe("schema-http", () => {
               admin,
               "core.field",
               ACME.cost,
-              yield* versionOf(ACME.cost),
+              yield* definitionVersion(ACME.cost),
               { label: "Local cost" }
             );
 
@@ -2020,7 +1896,7 @@ describe("schema-http", () => {
                 changes: { label: "Batch cost" },
                 id: ACME.cost,
                 op: "update",
-                version: yield* versionOf(ACME.cost),
+                version: yield* definitionVersion(ACME.cost),
               },
             ]);
 
@@ -2095,7 +1971,7 @@ describe("schema-http", () => {
             const adopt: Operation = {
               id: ACME.cost,
               op: "adopt",
-              version: yield* versionOf(ACME.cost),
+              version: yield* definitionVersion(ACME.cost),
             };
 
             const refused = yield* postChangeSet(admin, [adopt]);
@@ -2436,12 +2312,7 @@ describe("schema-http", () => {
               return http.request("POST", CHANGE_SETS, {
                 body: {
                   operations: [
-                    created.op === "createRole"
-                      ? {
-                          ...created,
-                          definition: { ...created.definition, id },
-                        }
-                      : created,
+                    { ...created, definition: { ...created.definition, id } },
                   ],
                 },
                 headers: {
@@ -2521,8 +2392,7 @@ describe("schema-http", () => {
             const admin = yield* adminToken;
             const before = (yield* (yield* Catalog).refresh).key;
             const role = addRole("stated_revision");
-            const parsed = parseJson(JSON.stringify({ operations: [role.op] }));
-            const body: JsonValue = parsed.ok ? parsed.value : null;
+            const body = { operations: [role.op] };
 
             const post = (header: string) =>
               http.request("POST", CHANGE_SETS, {
@@ -2666,23 +2536,11 @@ describe("schema-http", () => {
             const deny = addAccessRule(
               PLATFORM_CLASS_IDS.role,
               [BUILT_IN_ROLE_IDS.admin],
-              { fields: [label?.id ?? ""] }
+              { fields: [label?.id ?? ""] },
+              { actions: ["update"], effect: "deny", owner: { layer: "core" } }
             );
 
-            const denyRule: Operation =
-              deny.op.op === "createAccessRule"
-                ? {
-                    definition: {
-                      ...deny.op.definition,
-                      actions: ["update"],
-                      effect: "deny",
-                      owner: { layer: "core" },
-                    },
-                    op: "createAccessRule",
-                  }
-                : deny.op;
-
-            yield* asCoreSet([denyRule]);
+            yield* asCoreSet([deny.op]);
 
             const generic = yield* patch(admin, "core.role", auditor.id, 1, {
               label: "Auditors",
@@ -3008,7 +2866,7 @@ describe("schema-http", () => {
                 response.text
               );
 
-              const revision = headerRevision(response);
+              const revision = yield* revisionOf(response);
 
               const expected = new Set(
                 [...addedAt]
@@ -3434,19 +3292,8 @@ describe("schema-http", () => {
             yield* change([
               rule.op,
               choiceField.op,
-              {
-                definition: {
-                  ...LOCAL,
-                  fieldId: choiceField.id,
-                  hidden: false,
-                  id: freshId(),
-                  key: "stored",
-                  kind: "choice",
-                  label: "Stored",
-                  order: 1,
-                },
-                op: "createChoice",
-              },
+              addChoice(choiceField.id, "stored", { label: "Stored", order: 1 })
+                .op,
               {
                 definition: {
                   ...LOCAL,
@@ -3623,8 +3470,8 @@ describe("schema-http", () => {
                 );
                 yield* pair(
                   [tag, "new", "hidden|missing", revision, "generic"],
-                  generic(revision, "POST", path, genericBody(withHidden)),
-                  generic(revision, "POST", path, genericBody(withMissing)),
+                  generic(revision, "POST", path, createBodyOf(withHidden)),
+                  generic(revision, "POST", path, createBodyOf(withMissing)),
                   refs
                 );
               }
@@ -3813,13 +3660,9 @@ describe("schema-http", () => {
               BUILT_IN_ROLE_IDS.admin,
             ];
 
-            const committed = values(
-              "SELECT revision::text AS value FROM core.config_state"
-            );
-
             for (const revision of ["current", "past"] as const) {
               for (const [form, build] of Object.entries(OCCUPIED_REQUESTS)) {
-                const before = yield* committed;
+                const before = yield* currentRevision;
                 const seen = new Set<string>();
 
                 for (const occupant of occupants) {
@@ -3839,7 +3682,7 @@ describe("schema-http", () => {
                   `${form} ${revision}: ${[...seen].join(" | ")}`
                 );
                 assert.include([...seen][0] ?? "", "idInUse");
-                assert.deepStrictEqual(yield* committed, before);
+                assert.deepStrictEqual(yield* currentRevision, before);
               }
             }
           })

@@ -21,7 +21,7 @@ import type { ChildProcess } from "node:child_process";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Operation } from "@std/definitions/operation";
-import { Deferred, Effect, Schema } from "effect";
+import { Deferred, Effect, Layer, Schema } from "effect";
 import type { Scope } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
@@ -32,11 +32,13 @@ import { resumePass } from "../src/schema/recovery.ts";
 import { schemaStatus } from "../src/schema/status.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { catalogDrift } from "./catalog-drift.ts";
+import { killAndAwait } from "./cli-support.ts";
 import {
   addField,
   addIndex,
   addOverride,
   change,
+  changeSetState,
   createClass,
   insertRecords,
   insertRecordsSql,
@@ -163,10 +165,7 @@ const startCoordinator = (
           stdio: ["pipe", "pipe", "inherit"],
         })
       ),
-      (process) =>
-        Effect.sync(() => {
-          process.kill("SIGKILL");
-        })
+      killAndAwait
     );
 
     let output = "";
@@ -184,34 +183,9 @@ const startCoordinator = (
     return { child, paused };
   });
 
-/**
- * Kills the process with SIGKILL and waits until it is gone.
- * @param child - The process.
- * @returns Completes once it exited.
- */
-const kill = (child: ChildProcess): Effect.Effect<void> =>
-  Effect.callback<string | null>((resume) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resume(Effect.succeed(child.signalCode));
-
-      return;
-    }
-
-    child.once("exit", (_code, signal) => {
-      resume(Effect.succeed(signal));
-    });
-    child.kill("SIGKILL");
-  }).pipe(Effect.asVoid);
-
 const schemaKeyFree = schemaStatus().pipe(
   Effect.map((status) => status.holders.length === 0)
 );
-
-const stateOf = (changeSetId: string) =>
-  values(
-    `SELECT state AS value FROM core."schema_change" WHERE id = $1::uuid`,
-    [changeSetId]
-  ).pipe(Effect.map(([state]) => state));
 
 const openChangeSetId = values(
   `SELECT id::text AS value FROM core."schema_change" WHERE state = 'applying'`
@@ -235,7 +209,7 @@ const assertRecovered = (setup: Scenario) =>
       resumed.map((entry) => [entry.id, entry.outcome.state]),
       [[changeSetId, "completed"]]
     );
-    assert.strictEqual(yield* stateOf(changeSetId ?? ""), "completed");
+    assert.strictEqual(yield* changeSetState(changeSetId ?? ""), "completed");
 
     const snapshot = yield* (yield* Catalog).refresh;
 
@@ -263,18 +237,21 @@ describe("schema-interrupted", () => {
     assert.lengthOf(BOUNDARIES, 10);
   });
 
-  layer(schemaTestLayer({ maxConnections: 8 }), {
-    excludeTestServices: true,
-    timeout: 600_000,
-  })((dbTest) => {
+  layer(
+    Layer.effectDiscard(loadCoreAndAcme).pipe(
+      Layer.provideMerge(schemaTestLayer({ maxConnections: 8 }))
+    ),
+    {
+      excludeTestServices: true,
+      timeout: 600_000,
+    }
+  )((dbTest) => {
     for (const [index, boundary] of BOUNDARIES.entries()) {
       dbTest.effect(
         `SIGKILL of the coordinator at ${boundary} ends completed after resume`,
         () =>
           Effect.scoped(
             Effect.gen(function* killAtBoundary() {
-              yield* loadCoreAndAcme;
-
               const database = yield* TestDatabase;
               const setup = yield* scenario(`kill_${index}`);
 
@@ -288,7 +265,7 @@ describe("schema-interrupted", () => {
                 yield* Deferred.await(coordinator.paused),
                 boundary
               );
-              yield* kill(coordinator.child);
+              yield* killAndAwait(coordinator.child);
               yield* waitUntil(schemaKeyFree);
               yield* assertRecovered(setup);
             })
@@ -301,8 +278,6 @@ describe("schema-interrupted", () => {
       () =>
         Effect.scoped(
           Effect.gen(function* killDuringBuild() {
-            yield* loadCoreAndAcme;
-
             const database = yield* TestDatabase;
             const setup = yield* scenario("kill_build");
 
@@ -342,7 +317,7 @@ describe("schema-interrupted", () => {
 
             const [backend] = yield* building;
 
-            yield* kill(coordinator.child);
+            yield* killAndAwait(coordinator.child);
 
             // The backend lives on and keeps SCHEMA_KEY: no resume can race it.
             const holders = (yield* schemaStatus()).holders.map((holder) =>

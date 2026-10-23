@@ -5,16 +5,7 @@
  * tightened over existing rows.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import {
-  Clock,
-  Deferred,
-  Duration,
-  Effect,
-  Fiber,
-  Ref,
-  Schedule,
-  Schema,
-} from "effect";
+import { Clock, Deferred, Duration, Effect, Fiber, Ref } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { DDL_LOCK_BUDGET_MS } from "../src/schema/lock-budget.ts";
@@ -23,7 +14,6 @@ import {
   advisoryObjectId,
   CONFIG_KEY,
 } from "../src/sql/locks.ts";
-import { decodeRows } from "../src/sql/rows.ts";
 import {
   ACME,
   addField,
@@ -39,13 +29,12 @@ import {
   SITE_NAMESPACE_ID,
   values,
 } from "./schema-support.ts";
+import { waitUntil } from "./support.ts";
 
 const ASSET = '"acme"."asset"';
 const MONITOR = '"acme"."monitor"';
 
 const POLL = Duration.millis(10);
-
-const decodePid = decodeRows(Schema.Struct({ pid: Schema.Int }));
 
 /** Longest time one attempt may hold `CONFIG_KEY`: the budget plus slack. */
 const MAX_HOLD_MS = 2200;
@@ -126,9 +115,7 @@ describe("schema-locks", () => {
             const database = yield* TestDatabase;
             const psql = yield* database.session("psql-like");
 
-            const [pidRow] = yield* decodePid(
-              (yield* psql.query("SELECT pg_backend_pid() AS pid")).rows
-            );
+            const pid = psql.processId;
 
             yield* psql.query("BEGIN");
             yield* psql.query(`SELECT count(*) FROM ${ASSET}`);
@@ -148,7 +135,7 @@ describe("schema-locks", () => {
               assert.strictEqual(failure.attempts, 5);
               assert.include(
                 failure.holders.map((holder) => holder.pid),
-                pidRow?.pid
+                pid
               );
             }
 
@@ -330,16 +317,13 @@ describe("schema-locks", () => {
 
             // The step runs in another fiber's coordinator session; poll
             // its journal row until the build is running.
-            yield* values(
-              `SELECT s.state AS value FROM core."schema_change_step" s
+            yield* waitUntil(
+              values(
+                `SELECT s.state AS value FROM core."schema_change_step" s
                WHERE s.kind = 'create_index_concurrently' AND s.target_id = $1::uuid`,
-              [index.id]
-            ).pipe(
-              Effect.repeat({
-                schedule: Schedule.spaced(POLL),
-                until: ([state]) => state === "running",
-              }),
-              Effect.timeout(Duration.seconds(10))
+                [index.id]
+              ).pipe(Effect.map(([state]) => state === "running")),
+              Duration.seconds(10)
             );
 
             const [changeSetId] = yield* values(

@@ -7,11 +7,9 @@
  * periodic resumer finishes a change set left `applying`; `std schema`
  * runs as a command.
  */
-import { spawn } from "node:child_process";
-
 import { assert, describe, it, layer } from "@effect/vitest";
 import { generatedName } from "@std/definitions/ids";
-import { Deferred, Duration, Effect, Fiber, Layer, Schema } from "effect";
+import { Deferred, Duration, Effect, Fiber, Layer } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -25,15 +23,17 @@ import {
   SchemaResumer,
 } from "../src/schema/recovery.ts";
 import { schemaStatus } from "../src/schema/status.ts";
-import { decodeRows } from "../src/sql/rows.ts";
 import { catalogDrift } from "./catalog-drift.ts";
+import { runCli } from "./cli-support.ts";
 import {
   addField,
   addIndex,
   change,
+  changeSetState,
   createClass,
   currentRevision,
   insertRecords,
+  interruptAt,
   insertRecordsSql,
   loadCoreAndAcme,
   schemaTestLayer,
@@ -46,16 +46,6 @@ const FAST_WATCHDOG = {
   watchdogAfter: Duration.millis(500),
   watchdogPoll: Duration.millis(100),
 };
-
-const CLI_SCRIPT = new URL("../src/cli/main.ts", import.meta.url).pathname;
-
-const decodePid = decodeRows(Schema.Struct({ pid: Schema.Int }));
-
-const changeSetState = (id: string) =>
-  values(
-    `SELECT state AS value FROM core."schema_change" WHERE id = $1::uuid`,
-    [id]
-  ).pipe(Effect.map(([state]) => state));
 
 const indexValidity = (schema: string, name: string) =>
   values(
@@ -108,41 +98,6 @@ const duplicateDuringBuild = (name: string) =>
     return { code, result, stamp, table, unique };
   });
 
-/** The output and exit code of one `std` command. */
-interface CliResult {
-  readonly code: number | null;
-  readonly output: string;
-}
-
-/**
- * Runs `std <args>` against a database.
- * @param url - The database.
- * @param args - The command line.
- * @returns Exit code and combined output.
- */
-const runCli = (url: string, args: readonly string[]) =>
-  Effect.callback<CliResult>((resume) => {
-    const child = spawn(process.execPath, [CLI_SCRIPT, ...args], {
-      env: {
-        ...process.env,
-        STD_DATABASE_DIRECT_URL: url,
-        STD_DATABASE_URL: url,
-      },
-    });
-
-    const chunks: string[] = [];
-
-    const collect = (chunk: Uint8Array) => {
-      chunks.push(String(chunk));
-    };
-
-    child.stdout.on("data", collect);
-    child.stderr.on("data", collect);
-    child.on("close", (code) => {
-      resume(Effect.succeed({ code, output: chunks.join("") }));
-    });
-  });
-
 describe("schema-recovery", () => {
   it("the watchdog reports after 10 minutes by default", () => {
     assert.strictEqual(
@@ -177,9 +132,7 @@ describe("schema-recovery", () => {
             const database = yield* TestDatabase;
             const idle = yield* database.session("idle-writer");
 
-            const [blocker] = yield* decodePid(
-              (yield* idle.query("SELECT pg_backend_pid() AS pid")).rows
-            );
+            const blocker = idle.processId;
 
             yield* idle.query("BEGIN");
             yield* idle.query(
@@ -200,7 +153,7 @@ describe("schema-recovery", () => {
               [index.id]
             ).pipe(
               Effect.map(([error]) =>
-                (error ?? "").includes(`for PIDs ${blocker?.pid ?? -1}`)
+                (error ?? "").includes(`for PIDs ${blocker}`)
               )
             );
 
@@ -214,7 +167,7 @@ describe("schema-recovery", () => {
             );
 
             assert.strictEqual(open?.state, "applying");
-            assert.include(running?.waitingFor ?? [], blocker?.pid ?? -1);
+            assert.include(running?.waitingFor ?? [], blocker);
             assert.include(running?.lastError ?? "", "Watchdog");
             assert.isNotNull(running?.progress);
             assert.lengthOf(status.holders, 1);
@@ -361,11 +314,7 @@ describe("schema-recovery", () => {
           // The coordinator stops right after its main commit, as if its
           // process died there: its scope closes, which releases SCHEMA_KEY.
           const stopped = yield* Effect.exit(
-            change([index.op]).pipe(
-              Effect.provideService(StepBoundary, (label) =>
-                label === "committed" ? Effect.interrupt : Effect.void
-              )
-            )
+            change([index.op]).pipe(interruptAt("committed"))
           );
 
           assert.isTrue(stopped._tag === "Failure");
@@ -415,9 +364,7 @@ describe("schema-recovery", () => {
             // Change set A stops right after its main commit.
             yield* Effect.exit(
               change([addIndex(first.id, [a.id], false).op]).pipe(
-                Effect.provideService(StepBoundary, (label) =>
-                  label === "committed" ? Effect.interrupt : Effect.void
-                )
+                interruptAt("committed")
               )
             );
 
@@ -497,11 +444,7 @@ describe("schema-recovery", () => {
 
           yield* Effect.exit(
             change([{ id: unique.id, op: "delete", version: 1 }]).pipe(
-              Effect.provideService(StepBoundary, (label) =>
-                label === "before:1:drop_index_concurrently"
-                  ? Effect.interrupt
-                  : Effect.void
-              )
+              interruptAt("before:1:drop_index_concurrently")
             )
           );
 

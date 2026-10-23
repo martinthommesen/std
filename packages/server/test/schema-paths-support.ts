@@ -8,7 +8,6 @@
 import type { Definition } from "@std/definitions/definition";
 import { apiAttributeNameOf } from "@std/definitions/names";
 import type { Operation } from "@std/definitions/operation";
-import { parseJson } from "@std/values/json";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
@@ -16,7 +15,10 @@ import { createFixtureUser } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { tableOf } from "../src/catalog/definition-tables.ts";
-import { PATCH_FIELD_OPERATIONS } from "../src/http/definition-writes.ts";
+import {
+  PATCH_FIELD_OPERATIONS,
+  READ_ONLY_COLUMNS,
+} from "../src/http/definition-writes.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { patch, remove } from "./writes-support.ts";
 
@@ -36,10 +38,11 @@ export const postChangeSet = (
 ) =>
   Effect.gen(function* post() {
     const http = yield* TestHttpClient;
-    const parsed = parseJson(JSON.stringify({ operations }));
-    const body: JsonValue = parsed.ok ? parsed.value : null;
 
-    return yield* http.request("POST", CHANGE_SETS, { body, token });
+    return yield* http.request("POST", CHANGE_SETS, {
+      body: { operations },
+      token,
+    });
   });
 
 /** Body fields a generic `PATCH` dispatches to their own operations. */
@@ -57,7 +60,7 @@ export type { CommittedState } from "./committed-state.ts";
  * @param definition - A definition.
  * @returns `core.<table>`.
  */
-export const definitionTable = (definition: Definition): string =>
+export const definitionTable = (definition: Pick<Definition, "kind">): string =>
   `core.${tableOf(definition.kind).table}`;
 
 /** A generic HTTP form of an operation on a stored definition. */
@@ -79,7 +82,9 @@ export type GenericForm =
  * @returns The body, or undefined when no column holds the property.
  */
 export const columnsOf = (
-  definition: Definition,
+  definition:
+    | Definition
+    | Extract<Operation, { definition: unknown }>["definition"],
   property: string,
   value: JsonValue
 ): Readonly<Record<string, JsonValue>> | undefined => {
@@ -101,8 +106,12 @@ export const columnsOf = (
   return spec === undefined ? undefined : { [spec.column]: value };
 };
 
-// A body keyed by column names, keyed by API names (Contracts 10.2).
-const inApiNames = (
+/**
+ * Maps a column-keyed body to API names (Contracts 10.2).
+ * @param body - The column values.
+ * @returns The same values under their API names.
+ */
+export const inApiNames = (
   body: Readonly<Record<string, JsonValue>>
 ): Record<string, JsonValue> =>
   Object.fromEntries(
@@ -111,6 +120,35 @@ const inApiNames = (
       value,
     ])
   );
+
+/**
+ * A create draft as its definition table's writable column values.
+ * @param operation - A create operation.
+ * @returns The column body, or an empty body for other operations.
+ */
+export const createBodyOf = (operation: Operation) => {
+  if (!("definition" in operation)) {
+    return {};
+  }
+
+  const { definition } = operation;
+  const draft: JsonObject = definition;
+  const body: Record<string, JsonValue> = {};
+
+  for (const spec of tableOf(definition.kind).columns) {
+    const value = draft[spec.property];
+
+    if (!READ_ONLY_COLUMNS.has(spec.column) && value !== undefined) {
+      body[spec.column] = value;
+    }
+  }
+
+  if (definition.kind === "accessRule") {
+    Object.assign(body, columnsOf(definition, "target", draft.target ?? null));
+  }
+
+  return body;
+};
 
 /**
  * The generic form of an operation on a stored definition: `DELETE` for

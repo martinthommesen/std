@@ -9,16 +9,18 @@ import type { Condition } from "@std/definitions/condition";
 import type {
   AccessRuleDraft,
   ClassDraft,
+  ChoiceDraft,
   FieldDraft,
   IndexDraft,
   NamespaceDraft,
   OverrideDraft,
   RecordRuleDraft,
+  RoleDraft,
 } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
 import { SYSTEM_USER_ID } from "@std/definitions/well-known";
 import type { FieldType } from "@std/values/field-type";
-import { Duration, Effect, Layer, Schedule, Schema } from "effect";
+import { Duration, Effect, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { testDatabaseLayer } from "../../testing/src/test-database.ts";
@@ -31,7 +33,9 @@ import { runDataMigrations } from "../src/platform/data-migrations.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import type { ChangeSetOptions } from "../src/schema/change-set.ts";
 import { COORDINATOR_APPLICATION_NAME } from "../src/schema/coordinator.ts";
+import { StepBoundary } from "../src/schema/recovery-settings.ts";
 import { decodeRows } from "../src/sql/rows.ts";
+import { waitUntil } from "./support.ts";
 
 /** The acme example set. */
 export const ACME_SET_DIRECTORY = new URL(
@@ -133,39 +137,37 @@ export const loadCoreAndAcme = loadCore.pipe(
 export const freshId = (): string => randomUUID();
 
 /** An operation with the ID of the definition it creates. */
-export interface BuiltOperation {
+export interface BuiltOperation<O extends Operation = Operation> {
   readonly id: string;
-  readonly op: Operation;
+  readonly op: O;
 }
 
-const local = { owner: { layer: "local" }, protected: false } as const;
+/** Local ownership for definition drafts. */
+export const LOCAL = { owner: { layer: "local" }, protected: false } as const;
 
 /**
  * Creates a class.
  * @param name - The table name.
- * @param options - Namespace and parent.
+ * @param options - Properties that differ from the default.
  * @returns The operation and the class ID.
  */
 export const createClass = (
   name: string,
-  options: {
-    readonly namespaceId?: string;
-    readonly parentId?: string;
-    readonly storage?: ClassDraft["storage"];
-  } = {}
-): BuiltOperation => {
+  options: Partial<Omit<ClassDraft, "kind" | "name">> = {}
+): BuiltOperation<Extract<Operation, { op: "createClass" }>> => {
   const definition: ClassDraft = {
-    ...local,
+    ...LOCAL,
     displayFieldId: null,
     extensible: false,
     helpText: null,
     id: freshId(),
-    kind: "class",
     label: name,
     name,
-    namespaceId: options.namespaceId ?? SITE_NAMESPACE_ID,
-    parentId: options.parentId ?? null,
-    storage: options.storage ?? "standard",
+    namespaceId: SITE_NAMESPACE_ID,
+    parentId: null,
+    storage: "standard",
+    ...options,
+    kind: "class",
   };
 
   return { id: definition.id, op: { definition, op: "createClass" } };
@@ -180,9 +182,9 @@ export const createClass = (
 export const createNamespace = (
   name: string,
   storage: NamespaceDraft["storage"] = "standard"
-): BuiltOperation => {
+): BuiltOperation<Extract<Operation, { op: "createNamespace" }>> => {
   const definition: NamespaceDraft = {
-    ...local,
+    ...LOCAL,
     extensible: false,
     helpText: null,
     id: freshId(),
@@ -213,9 +215,9 @@ export const addField = (
       "default" | "id" | "numberPrefix" | "readOnly" | "required"
     >
   > = {}
-): BuiltOperation => {
+): BuiltOperation<Extract<Operation, { op: "addField" }>> => {
   const definition: FieldDraft = {
-    ...local,
+    ...LOCAL,
     classId,
     default: extra.default ?? null,
     helpText: null,
@@ -245,9 +247,9 @@ export const addIndex = (
   fieldIds: readonly string[],
   unique: boolean,
   id: string = freshId()
-): BuiltOperation => {
+): BuiltOperation<Extract<Operation, { op: "addIndex" }>> => {
   const definition: IndexDraft = {
-    ...local,
+    ...LOCAL,
     classId,
     fieldIds,
     id,
@@ -275,9 +277,9 @@ export const addOverride = (
       "choices" | "id" | "maxLength" | "numberPrefix" | "required"
     >
   >
-): BuiltOperation => {
+): BuiltOperation<Extract<Operation, { op: "setOverride" }>> => {
   const definition: OverrideDraft = {
-    ...local,
+    ...LOCAL,
     choices: changes.choices ?? null,
     classId,
     default: null,
@@ -301,34 +303,59 @@ export const addOverride = (
 };
 
 /**
- * Creates a role.
+ * Creates a role and returns its ID.
  * @param name - The role name.
- * @returns The operation.
+ * @returns The operation and the role ID.
  */
-export const createRole = (name: string): Operation => ({
-  definition: {
-    ...local,
+export const addRole = (
+  name: string
+): BuiltOperation<Extract<Operation, { op: "createRole" }>> => {
+  const definition: RoleDraft = {
+    ...LOCAL,
     helpText: null,
     id: freshId(),
     kind: "role",
     label: name,
     name,
-  },
-  op: "createRole",
-});
+  };
+
+  return { id: definition.id, op: { definition, op: "createRole" } };
+};
 
 /**
- * Creates a role and returns its ID.
+ * Creates a role.
  * @param name - The role name.
- * @returns The operation and the role ID.
+ * @returns The operation.
  */
-export const addRole = (name: string): BuiltOperation => {
-  const operation = createRole(name);
+export const createRole = (
+  name: string
+): Extract<Operation, { op: "createRole" }> => addRole(name).op;
 
-  return {
-    id: "definition" in operation ? operation.definition.id : "",
-    op: operation,
+/**
+ * Adds a choice.
+ * @param fieldId - Its choice field.
+ * @param key - Its stored value.
+ * @param options - Properties that differ from the default.
+ * @returns The operation and the choice ID.
+ */
+export const addChoice = (
+  fieldId: string,
+  key: string,
+  options: Partial<Omit<ChoiceDraft, "kind" | "fieldId" | "key">> = {}
+): BuiltOperation<Extract<Operation, { op: "createChoice" }>> => {
+  const definition: ChoiceDraft = {
+    ...LOCAL,
+    hidden: false,
+    id: freshId(),
+    label: key,
+    order: 0,
+    ...options,
+    fieldId,
+    key,
+    kind: "choice",
   };
+
+  return { id: definition.id, op: { definition, op: "createChoice" } };
 };
 
 /**
@@ -336,6 +363,7 @@ export const addRole = (name: string): BuiltOperation => {
  * @param classId - Its class.
  * @param roleIds - The roles it names.
  * @param options - Target fields, a condition and a description.
+ * @param overrides - Properties that differ from the default.
  * @returns The operation and the rule ID.
  */
 export const addAccessRule = (
@@ -345,10 +373,11 @@ export const addAccessRule = (
     readonly fields?: readonly string[];
     readonly condition?: Condition;
     readonly description?: string;
-  } = {}
-): BuiltOperation => {
+  } = {},
+  overrides: Partial<Omit<AccessRuleDraft, "kind">> = {}
+): BuiltOperation<Extract<Operation, { op: "createAccessRule" }>> => {
   const definition: AccessRuleDraft = {
-    ...local,
+    ...LOCAL,
     actions: ["read"],
     active: true,
     classId,
@@ -356,13 +385,14 @@ export const addAccessRule = (
     description: options.description ?? null,
     effect: "allow",
     id: freshId(),
-    kind: "accessRule",
     name: null,
     roleIds,
     target:
       options.fields === undefined
         ? { kind: "records" }
         : { fields: options.fields, kind: "fields" },
+    ...overrides,
+    kind: "accessRule",
   };
 
   return { id: definition.id, op: { definition, op: "createAccessRule" } };
@@ -378,11 +408,11 @@ export const addAccessRule = (
 export const addRecordRule = (
   classId: string,
   rule: Partial<Omit<RecordRuleDraft, "classId" | "kind">> = {}
-): BuiltOperation => {
+): BuiltOperation<Extract<Operation, { op: "createRecordRule" }>> => {
   const id = rule.id ?? freshId();
 
   const definition: RecordRuleDraft = {
-    ...local,
+    ...LOCAL,
     actions: [{ code: "RuleRefused", message: "Refused", type: "refuse" }],
     active: true,
     condition: null,
@@ -403,6 +433,16 @@ export const addRecordRule = (
 
   return { id, op: { definition, op: "createRecordRule" } };
 };
+
+/**
+ * Interrupts the coordinator at a named step boundary.
+ * @param label - The boundary at which to interrupt.
+ * @returns The step-boundary provider.
+ */
+export const interruptAt = (label: string) =>
+  Effect.provideService(StepBoundary, (reached) =>
+    reached === label ? Effect.interrupt : Effect.void
+  );
 
 /**
  * Applies operations as one change set.
@@ -429,6 +469,17 @@ export const values = (text: string, params: readonly unknown[] = []) =>
     Effect.flatMap(decodeText),
     Effect.map((rows) => rows.map((row) => row.value))
   );
+
+/**
+ * The journal state of a change set.
+ * @param id - The change set's ID.
+ * @returns Its state, or undefined when absent.
+ */
+export const changeSetState = (id: string) =>
+  values(
+    `SELECT state AS value FROM core."schema_change" WHERE id = $1::uuid`,
+    [id]
+  ).pipe(Effect.map(([state]) => state));
 
 /**
  * The current revision.
@@ -527,16 +578,13 @@ export const insertRecordsFlushed = (
  * statistics when it exits, so the coordinator's scans are counted after.
  * @returns The effect.
  */
-export const coordinatorGone = values(
-  `SELECT count(*)::text AS value FROM pg_stat_activity
+export const coordinatorGone = waitUntil(
+  values(
+    `SELECT count(*)::text AS value FROM pg_stat_activity
    WHERE datname = current_database() AND application_name = $1`,
-  [COORDINATOR_APPLICATION_NAME]
-).pipe(
-  Effect.repeat({
-    schedule: Schedule.spaced(Duration.millis(10)),
-    until: ([count]) => count === "0",
-  }),
-  Effect.timeout(Duration.seconds(10))
+    [COORDINATOR_APPLICATION_NAME]
+  ).pipe(Effect.map(([count]) => count === "0")),
+  Duration.seconds(10)
 );
 
 /**
