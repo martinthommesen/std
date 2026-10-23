@@ -189,6 +189,21 @@ describe("tmf621-events", () => {
         assert.deepStrictEqual(typesOf(resolvedOnly.calls), [
           "TroubleTicketResolvedEvent",
         ]);
+
+        // The hub's lifecycle: retrieve, unregister, and callback required.
+        const hubPath = `${HUBS}/${textOf(hub.id)}`;
+        const retrieved = yield* admin.get(hubPath);
+
+        assert.deepStrictEqual(
+          [retrieved.status, bodyOf(retrieved).callback],
+          [200, `${all.origin}/listener`]
+        );
+        assert.strictEqual((yield* admin.del(hubPath)).status, 204);
+        assert.strictEqual((yield* admin.get(hubPath)).status, 404);
+        assert.strictEqual(
+          (yield* admin.post(HUBS, { "@type": "Hub" })).status,
+          400
+        );
       }).pipe(Effect.provide(eventsLayer), Effect.scoped, TestClock.withLive)
   );
 

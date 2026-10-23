@@ -115,6 +115,25 @@ const outcome = (response: {
   readonly json: JsonValue | undefined;
 }) => `${response.status} ${textOf(asObject(response.json).code)}`;
 
+/**
+ * The path of a `Link` header relation (`next`, `prev`).
+ *
+ * @param response - A list response.
+ * @param relation - The relation.
+ * @returns The path and query, or empty.
+ */
+const linkOf = (response: TestResponse, relation: string): string => {
+  const header = response.headers.get("link") ?? "";
+
+  const entry = header
+    .split(",")
+    .find((part) => part.includes(`rel="${relation}"`));
+
+  const url = entry?.slice(entry.indexOf("<") + 1, entry.indexOf(">")) ?? "";
+
+  return url === "" ? "" : url.slice(new URL(url).origin.length);
+};
+
 const statuses = (ticket: JsonObject): readonly string[] =>
   arrayOf(ticket, "statusChangeHistory").map((item) => textOf(item.status));
 
@@ -931,14 +950,47 @@ describe("tmf621", () => {
             ]
           );
 
-          const invalid = yield* admin.patch(
-            `${TICKETS}/${textOf(ticket.id)}`,
+          for (const characteristic of [
+            { name: "urgency", value: 9 },
+            { value: "nameless" },
             {
-              troubleTicketCharacteristic: [{ name: "urgency", value: 9 }],
-            }
-          );
+              characteristicRelationship: [{ id: "x" }],
+              name: "region",
+              value: "south",
+            },
+          ]) {
+            const invalid = yield* admin.patch(
+              `${TICKETS}/${textOf(ticket.id)}`,
+              { troubleTicketCharacteristic: [characteristic] }
+            );
 
-          assert.strictEqual(outcome(invalid), "400 ValidationFailed");
+            assert.strictEqual(outcome(invalid), "400 ValidationFailed");
+          }
+
+          const related = yield* patch(admin, ticket, {
+            troubleTicketCharacteristic: [
+              {
+                characteristicRelationship: [
+                  { id: "c-1", relationshipType: "dependsOn" },
+                ],
+                name: "region",
+                value: "south",
+              },
+            ],
+          });
+
+          assert.deepStrictEqual(
+            arrayOf(related, "troubleTicketCharacteristic").find(
+              (item) => item.name === "region"
+            )?.characteristicRelationship,
+            [
+              {
+                "@type": "CharacteristicRelationship",
+                id: "c-1",
+                relationshipType: "dependsOn",
+              },
+            ]
+          );
         })
     );
 
@@ -1056,6 +1108,9 @@ describe("tmf621", () => {
               ],
             },
             { relatedEntity: [{ role: "x" }] },
+            { externalIdentifier: [{ owner: "CRM" }] },
+            { troubleTicketRelationship: [{ id: RANDOM_ID }] },
+            { troubleTicketRelationship: [{ relationshipType: "parent" }] },
           ]) {
             const refused = yield* admin.patch(
               `${TICKETS}/${textOf(ticket.id)}`,
@@ -1262,6 +1317,71 @@ describe("tmf621", () => {
           );
 
           assert.strictEqual(outcome(failed), "409 PatchTestFailed");
+
+          for (const operations of [
+            [{ op: "rename", path: "/name", value: "x" }],
+            [{ op: "replace", value: "x" }],
+            [{ path: "/name", value: "x" }],
+          ]) {
+            const malformed = yield* admin.patch(
+              `${TICKETS}/${textOf(ticket.id)}`,
+              operations,
+              { contentType: "application/json-patch+json" }
+            );
+
+            assert.strictEqual(malformed.status, 400, malformed.text);
+          }
+
+          // application/json is applied as a merge-patch.
+          const plain = yield* admin.patch(
+            `${TICKETS}/${textOf(ticket.id)}`,
+            { name: "plain JSON" },
+            { contentType: "application/json" }
+          );
+
+          assert.strictEqual(bodyOf(plain).name, "plain JSON");
+        })
+    );
+
+    dbTest.effect(
+      "pages with after and before cursors as the Link header names them",
+      () =>
+        Effect.gen(function* cursors() {
+          const admin = yield* tmf621As("admin");
+          const tag = "cursors";
+
+          const opened = [
+            yield* open(admin, { name: tag }),
+            yield* open(admin, { name: tag }),
+            yield* open(admin, { name: tag }),
+          ].map((ticket) => textOf(ticket.id));
+
+          const first = yield* admin.get(
+            `${TICKETS}?name=${tag}&limit=2&sort=creationDate`
+          );
+
+          const next = linkOf(first, "next");
+
+          assert.deepStrictEqual(
+            itemsOf(first).map((item) => item.id),
+            opened.slice(0, 2)
+          );
+          assert.include(next, "after=");
+
+          const second = yield* admin.get(next);
+
+          assert.deepStrictEqual(
+            itemsOf(second).map((item) => item.id),
+            opened.slice(2)
+          );
+
+          const previous = linkOf(second, "prev");
+
+          assert.include(previous, "before=");
+          assert.deepStrictEqual(
+            itemsOf(yield* admin.get(previous)).map((item) => item.id),
+            opened.slice(0, 2)
+          );
         })
     );
 

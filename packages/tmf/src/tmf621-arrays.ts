@@ -288,8 +288,43 @@ const normalizedCharacteristic = (item: JsonObject): JsonObject => {
     defaults.set("id", item.name);
   }
 
-  return { ...Object.fromEntries(defaults), ...item };
+  const relationships = item.characteristicRelationship;
+
+  const typedRelationships =
+    relationships !== undefined &&
+    relationships !== null &&
+    isJsonArray(relationships)
+      ? {
+          characteristicRelationship: relationships.map((relationship) =>
+            relationship !== null && isJsonObject(relationship)
+              ? typed("CharacteristicRelationship")(relationship)
+              : relationship
+          ),
+        }
+      : {};
+
+  return { ...Object.fromEntries(defaults), ...item, ...typedRelationships };
 };
+
+/**
+ * Whether a characteristic's `characteristicRelationship` items each carry
+ * `id` and `relationshipType` (TMF621 CP v5.0.0 pp.3-4; OAS
+ * `CharacteristicRelationship_FVO`).
+ *
+ * @param value - The member, if any.
+ * @returns True when absent or valid.
+ */
+const relationshipsValid = (value: JsonValue | undefined): boolean =>
+  value === undefined ||
+  (value !== null &&
+    isJsonArray(value) &&
+    value.every(
+      (item) =>
+        item !== null &&
+        isJsonObject(item) &&
+        textMember(item, "id") !== undefined &&
+        textMember(item, "relationshipType") !== undefined
+    ));
 
 const writeCharacteristics = (
   value: JsonValue,
@@ -317,16 +352,18 @@ const writeCharacteristics = (
       return invalid("A troubleTicketCharacteristic needs a name.");
     }
 
+    if (!relationshipsValid(item.characteristicRelationship)) {
+      return invalid(
+        "A characteristicRelationship needs an id and a relationshipType."
+      );
+    }
+
     if (mapped !== undefined && written.has(mapped.field)) {
       return invalid(`The characteristic ${name} is given twice.`);
     }
 
     if (mapped === undefined) {
-      kept.push({
-        "@type": characteristicTypeOf(item.value),
-        id: name,
-        ...item,
-      });
+      kept.push(normalizedCharacteristic(item));
     } else {
       const stored = storedValueOf(mapped, item.value);
 
