@@ -19,8 +19,8 @@ import { DEFINITION_KIND_OF_TABLE } from "./change-sets.ts";
  * JSON decoder was removed; the repeated 4 MiB measurements are recorded there. */
 export const BODY_MAX_BYTES = 4_194_304;
 
-/** Definition budget: largest shipped complete change set = 103,713 bytes,
- * 202 operations (http-edge-limits test, 2026-10-23); 1 MiB gives 10.11x
+/** Definition budget: largest shipped complete change set = 106,677 bytes,
+ * 207 operations (http-edge-limits test, 2026-10-23); 1 MiB gives 9.83x
  * headroom and still carries complete large definition sets. */
 export const DEFINITION_BODY_MAX_BYTES = 1_048_576;
 

@@ -19,7 +19,6 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
-import { HelpdeskFixture } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { entriesOf, versionOf } from "./aggregates-support.ts";
@@ -230,23 +229,15 @@ const newTmf621Ticket = Effect.fn("AggregateRace.newTmf621Ticket")(
   }
 );
 
-/** Adds a note through the generic API as the admin. */
-const addHelpdeskNote = Effect.fn("AggregateRace.addHelpdeskNote")(
-  function* addHelpdeskNote(ticket: string, text: string) {
-    const http = yield* TestHttpClient;
-    const fixture = yield* HelpdeskFixture;
-
-    const token = yield* http.signIn(
-      fixture.admin.login,
-      fixture.admin.password
-    );
-
-    return yield* http.request("POST", "/api/v1/helpdeskTicketNote", {
-      body: { text, ticket: { id: ticket } },
-      token,
-    });
-  }
-);
+/**
+ * Adds a generic note with the admin's existing session, outside sign-in admission.
+ * @param client - The signed-in admin.
+ * @param ticket - The ticket ID.
+ * @param text - The note text.
+ * @returns The generic API response.
+ */
+const addHelpdeskNote = (client: Tmf621Client, ticket: string, text: string) =>
+  client.post("/api/v1/helpdeskTicketNote", { text, ticket: { id: ticket } });
 
 describe("aggregate-race-http-tmf621", () => {
   layer(itilLayer, { excludeTestServices: true })((dbTest) => {
@@ -259,7 +250,11 @@ describe("aggregate-race-http-tmf621", () => {
           const path = `${TMF621_TICKETS}/${ticket}`;
           const before = etagOf(yield* admin.get(path));
 
-          const note = yield* addHelpdeskNote(ticket, "before the patch");
+          const note = yield* addHelpdeskNote(
+            admin,
+            ticket,
+            "before the patch"
+          );
 
           assert.strictEqual(note.status, 201, note.text);
 
@@ -293,7 +288,7 @@ describe("aggregate-race-http-tmf621", () => {
           const created = yield* versionOf(HELPDESK_TICKETS, ticket);
 
           const notes = Array.from({ length: RACERS }, (_, index) =>
-            addHelpdeskNote(ticket, `note ${index}`)
+            addHelpdeskNote(admin, ticket, `note ${index}`)
           );
 
           // Racer 0 also sends a note array: own attributes plus parts.

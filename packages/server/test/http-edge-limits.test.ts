@@ -359,8 +359,8 @@ describe("http-edge-limits", () => {
         const resolved = Result.getOrThrow(resolveSet(files, snapshot));
         const planned = Result.getOrThrow(planSet(resolved, snapshot));
         const body = JSON.stringify({ operations: planned });
-        assert.strictEqual(Buffer.byteLength(body), 103_713);
-        assert.strictEqual(planned.length, 202);
+        assert.strictEqual(Buffer.byteLength(body), 106_677);
+        assert.strictEqual(planned.length, 207);
         assert.strictEqual(
           Math.max(
             ...planned.map((operation) =>
