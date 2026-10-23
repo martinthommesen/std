@@ -18,18 +18,16 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { objectOf } from "./authz-support.ts";
 import { codeOf, readsTestLayer, recordPath } from "./reads-support.ts";
+import { rootVersion, changeLog, rowCount } from "./records-support.ts";
 import { ACME, change, values } from "./schema-support.ts";
 import {
   ASSET,
   create,
-  entriesOf,
   history,
   LAPTOP,
   patch,
   remove,
-  rowsOf,
   savedOf,
-  versionOf,
 } from "./writes-support.ts";
 
 const RULE_7 = "71fc933a-24a4-4573-8c96-13eb2650dc10";
@@ -112,7 +110,7 @@ describe("two-user-write", () => {
         const { alice, bob, fixture } = yield* signIn;
         const http = yield* TestHttpClient;
         const { L } = fixture.records;
-        const n = (yield* versionOf(L)) ?? 0;
+        const n = (yield* rootVersion(L)) ?? 0;
 
         const bobRename = yield* patch(bob, LAPTOP, L, n, { name: "L by Bob" });
 
@@ -124,7 +122,7 @@ describe("two-user-write", () => {
         assert.strictEqual(stale.status, 412);
         assert.strictEqual(yield* codeOf(stale), "VersionConflict");
         assert.strictEqual(objectOf(stale.json).currentVersion, n + 1);
-        assert.strictEqual(yield* versionOf(L), n + 1);
+        assert.strictEqual(yield* rootVersion(L), n + 1);
 
         const reread = yield* savedOf(
           yield* http.get(recordPath(ASSET, L), { token: alice })
@@ -135,7 +133,7 @@ describe("two-user-write", () => {
         });
 
         assert.strictEqual(aliceCost.status, 200);
-        assert.strictEqual(yield* versionOf(L), n + 2);
+        assert.strictEqual(yield* rootVersion(L), n + 2);
 
         for (const table of [LAPTOP, ASSET]) {
           const refused = yield* patch(bob, table, L, n + 2, {
@@ -151,7 +149,7 @@ describe("two-user-write", () => {
 
         assert.strictEqual(purchased.status, 422);
         assert.strictEqual(yield* codeOf(purchased), "ValidationFailed");
-        assert.strictEqual(yield* versionOf(L), n + 2);
+        assert.strictEqual(yield* rootVersion(L), n + 2);
 
         for (const [token, isBob] of [
           [alice, false],
@@ -191,9 +189,15 @@ describe("two-user-write", () => {
             const deleted = yield* remove(alice, table, created.id, 1);
 
             assert.strictEqual(deleted.status, 204);
-            assert.strictEqual(yield* rowsOf('"acme"."asset"', created.id), 0);
-            assert.strictEqual(yield* rowsOf('"acme"."laptop"', created.id), 0);
-            assert.deepStrictEqual(yield* entriesOf(created.id), [
+            assert.strictEqual(
+              yield* rowCount('"acme"."asset"', created.id),
+              0
+            );
+            assert.strictEqual(
+              yield* rowCount('"acme"."laptop"', created.id),
+              0
+            );
+            assert.deepStrictEqual(yield* changeLog(created.id), [
               "1:create",
               "2:delete",
             ]);
@@ -237,7 +241,7 @@ describe("two-user-write", () => {
           });
 
           assert.strictEqual(old.status, 412);
-          assert.strictEqual(yield* versionOf(K), before.version + 1);
+          assert.strictEqual(yield* rootVersion(K), before.version + 1);
           assert.isString(bob);
         })
     );
@@ -251,7 +255,7 @@ describe("two-user-write", () => {
         const response = yield* http.request("PATCH", recordPath(LAPTOP, K), {
           body: { name: "K stale" },
           headers: {
-            "if-match": `"${(yield* versionOf(K)) ?? 0}"`,
+            "if-match": `"${(yield* rootVersion(K)) ?? 0}"`,
             "std-schema-revision": `999.${randomUUID()}`,
           },
           token: alice,
@@ -293,7 +297,7 @@ describe("two-user-write", () => {
 
         yield* replaceRule7ForName;
 
-        const version = (yield* versionOf(M)) ?? 0;
+        const version = (yield* rootVersion(M)) ?? 0;
 
         const leaving = yield* patch(bob, ASSET, M, version, {
           name: "M leaving",

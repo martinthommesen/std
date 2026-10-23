@@ -199,7 +199,7 @@ describe("web-app", () => {
         );
         assert.strictEqual(inner.body, "app();");
         assert.strictEqual(clientRoute.body, APP);
-      }).pipe(Effect.scoped)
+      })
   );
 
   it.effect(
@@ -218,7 +218,7 @@ describe("web-app", () => {
         ] as const) {
           assertNotFound(yield* rawGet(port, target, accept), target);
         }
-      }).pipe(Effect.scoped)
+      })
   );
 
   it.effect(
@@ -233,7 +233,7 @@ describe("web-app", () => {
           assertNotFound(received, target);
           assert.notInclude(received.body, OUTSIDE_INDEX, target);
         }
-      }).pipe(Effect.scoped)
+      })
   );
 
   it.effect("refuses traversal however it is spelled", () =>
@@ -260,7 +260,7 @@ describe("web-app", () => {
           assertNotFound(received, `${target} (${accept})`);
         }
       }
-    }).pipe(Effect.scoped)
+    })
   );
 
   it.effect("leaves API paths to the API", () =>
@@ -268,6 +268,6 @@ describe("web-app", () => {
       const port = yield* serving(root);
 
       assertNotFound(yield* rawGet(port, "/api/v1/nothing"), "/api/v1/nothing");
-    }).pipe(Effect.scoped)
+    })
   );
 });
