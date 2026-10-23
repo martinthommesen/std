@@ -39,6 +39,7 @@ import {
 } from "./json-value.ts";
 import type { JsonValue } from "./json-value.ts";
 import { checkJsonValue } from "./json.ts";
+import { checkPasswordLength } from "./password.ts";
 import { checkLength, convertLongText, convertSingleLineText } from "./text.ts";
 import { parseUuid } from "./uuid.ts";
 import { isSecretState, Plaintext } from "./write-only.ts";
@@ -176,7 +177,10 @@ const decodeString = <A>(
   parse: (text: string) => Decoded<A>
 ): Decoded<A> => (isJsonString(json) ? parse(json) : wrongType("a string"));
 
-const decodeWriteOnly = (json: PresentJson): Decoded<Plaintext> => {
+const decodeWriteOnly = (
+  json: PresentJson,
+  password: boolean
+): Decoded<Plaintext> => {
   if (!isJsonString(json)) {
     return wrongType("a string");
   }
@@ -190,6 +194,14 @@ const decodeWriteOnly = (json: PresentJson): Decoded<Plaintext> => {
       "notWellFormed",
       "The value must be well-formed Unicode without U+0000."
     );
+  }
+
+  if (password) {
+    const checked = checkPasswordLength(json);
+
+    if (!checked.ok) {
+      return checked;
+    }
   }
 
   return ok(new Plaintext(json));
@@ -248,7 +260,7 @@ const decodePresent = (
 
     case "password":
     case "secret": {
-      return decodeWriteOnly(json);
+      return decodeWriteOnly(json, type.kind === "password");
     }
 
     case "json": {

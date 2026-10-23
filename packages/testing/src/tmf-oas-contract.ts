@@ -513,13 +513,16 @@ export const tmfExchangeProblem = (
     operationOf(loaded.document, exchange.method, relative) ??
     hubRetrieveOperation(loaded.document, exchange.method, relative);
 
-  // E29 accepts registration throttling on hub POSTs only.
-  if (
+  // E30 (accepted, 2026-10-23): the transport refuses excessive bodies with TMF630's
+  // mandatory 413, even when the pinned API omits that status. Its Error
+  // remains validated, just as the accepted E29 hub-throttling deviation.
+  const hubThrottle =
     exchange.status === 429 &&
     exchange.method === "POST" &&
     operation !== undefined &&
-    /(?:^|\/)hub$/u.test(operation.template)
-  ) {
+    /(?:^|\/)hub$/u.test(operation.template);
+
+  if (operation !== undefined && (exchange.status === 413 || hubThrottle)) {
     return validateResponse(
       loaded,
       contract,

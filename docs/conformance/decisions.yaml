@@ -207,6 +207,26 @@ entries:
     decidedBy: Martin
     words: "M18: TMF routes answer only statuses the pinned document declares; 429 on hub registration is a recorded deviation (relayed by the coordinator)."
     date: 2026-10-22
+  - id: E30-http-body-413
+    rows: []
+    requirement: "413 on TMF routes whose pinned OpenAPI documents do not declare it (decision 0021, decision 52)"
+    reason: "TMF630 v5.0.0 Part 1 §3.3.3 p.32 makes 413 mandatory when a server refuses an excessive request body. Streaming byte limits protect the process against unauthenticated memory exhaustion, including on TMF routes; a declared-status omission cannot remove that DoS protection (decision 0038)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "Accept E30: TMF routes answer 413 for bodies over the limit (TMF630 v5.0.0 Part 1 §3.3.3 p.32), a recorded exception to decision 52 like E29."
+    date: 2026-10-23
+  - id: E31-http-body-capacity-503
+    rows: []
+    requirement: "503 on TMF routes whose pinned OpenAPI documents do not declare it, when the process body budget or the user's share of it is full (decision 0021, decision 52)"
+    reason: "TMF630 v5.0.0 Part 1 §3.3.4 p.33 selects 503 for temporary server overload. The process-wide request-body byte budget and each user's one-record share of it refuse additional reads with an actionable error and Retry-After, and recovers when in-flight work releases capacity (decision 0038)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "Accept E31: TMF routes answer 503 with Retry-After when the process body budget or the user's share of it is full (TMF630 v5.0.0 Part 1 §3.3.4 p.33), a recorded exception to decision 52 like E29."
+    date: 2026-10-23
   - id: X630-hidden-base-fields
     rows:
       - TMF630@5.0.0/v4.0.0-P2/2.1/extension-schema-includes-base

@@ -23,6 +23,7 @@ import { NodeHttpServer } from "@effect/platform-node";
 import { Config, Effect, Layer, Schema } from "effect";
 import { HttpRouter } from "effect/http";
 
+import { SessionRetentionLayer } from "../auth/session-retention.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { checkPlatformMigrations } from "../platform/runner.ts";
@@ -35,6 +36,11 @@ import {
 import { SqlLayer } from "../sql/layer.ts";
 import { answerApiFailures } from "./api-cache.ts";
 import { HttpAppLayer } from "./app.ts";
+import {
+  BODY_MAX_BYTES,
+  BODY_MIN_BYTES_PER_SECOND,
+  BODY_PROGRESS_WINDOW_MS,
+} from "./body-limits.ts";
 import { sessionCookieSecureFromEnv } from "./session-cookie.ts";
 import { WebAppLayer } from "./web-app.ts";
 
@@ -56,7 +62,21 @@ const NodeServerLayer = Layer.unwrap(
       Config.withDefault(DEFAULT_PORT)
     );
 
-    return NodeHttpServer.layer(createServer, { host, port });
+    // Node's documented 60-second header budget protects the HTTP parser before
+    // the application can answer. The request budget also allows one complete
+    // maximum body at our minimum rate, including its first progress window.
+    // https://nodejs.org/api/http.html#serverheaderstimeout (2026-10-23).
+    const headersTimeout = 60_000;
+
+    const requestTimeout =
+      headersTimeout +
+      BODY_PROGRESS_WINDOW_MS +
+      Math.ceil((BODY_MAX_BYTES / BODY_MIN_BYTES_PER_SECOND) * 1000);
+
+    return NodeHttpServer.layer(
+      () => createServer({ headersTimeout, requestTimeout }),
+      { host, port }
+    );
   })
 );
 
@@ -89,6 +109,7 @@ export const ServerLayer = HttpRouter.serve(
   Layer.provide(sessionCookieSecureFromEnv),
   Layer.provide(NodeServerLayer),
   Layer.provide(ResumerLayer),
+  Layer.provide(SessionRetentionLayer),
   Layer.provide(StartupCheckLayer),
   Layer.provide(ServicesLayer)
 );

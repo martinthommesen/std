@@ -18,6 +18,10 @@ import { parseJson } from "@std/values/json";
 import { Effect, Redacted } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
+import { Actor } from "../../auth/actor.ts";
+import type { TransactionsApi } from "../../sql/transactions.ts";
+import { ownBody, textBodyOf } from "../body-limits.ts";
+import { asActor, inRequestTransaction } from "../request-scope.ts";
 import { cookieMayAuthenticate } from "../session-cookie.ts";
 
 const BEARER = "bearer";
@@ -122,11 +126,53 @@ const invalidBody = (message: string) =>
 export const jsonBodyOf = Effect.fn("Api.jsonBody")(function* jsonBodyOf(
   request: HttpServerRequest
 ) {
-  const text = yield* request.text.pipe(
-    Effect.mapError(() => invalidBody("The body could not be read."))
-  );
+  const text = yield* textBodyOf(request);
 
   const parsed = parseJson(text);
 
   return parsed.ok ? parsed.value : yield* invalidBody(parsed.error.message);
 });
+
+/**
+ * The only way to read a protected body: authenticates the session in a
+ * preliminary request transaction (running `admit` there too, for checks that
+ * must precede the body, such as a stated revision), charges the body to the
+ * acting user's share, releases SQL, then reads and caches the bounded body.
+ * The body reader refuses a protected read that skipped this (body-limits.ts).
+ * Execution must authenticate again after this arbitrary network delay.
+ * @param transactions - Request transactions.
+ * @param request - Incoming request.
+ * @param admit - Checks to run as the actor before the body is read.
+ * @returns The bounded body text for this request and its retries.
+ */
+export const readAuthenticatedBody = Effect.fn("Api.readAuthenticatedBody")(
+  function* readAuthenticatedBody<E = never, R = never>(
+    transactions: TransactionsApi,
+    request: HttpServerRequest,
+    admit: Effect.Effect<void, E, R> = Effect.void
+  ) {
+    return yield* withSession(
+      request,
+      Effect.gen(function* authenticatedRead() {
+        const actor = yield* inRequestTransaction(
+          transactions,
+          request,
+          asActor(Effect.andThen(admit, Actor))
+        );
+
+        ownBody(request, actor.userId);
+
+        return yield* textBodyOf(request);
+      })
+    );
+  }
+);
+
+/**
+ * Whether transport headers declare a body, including an unfinished chunked one.
+ * @param request - Incoming request.
+ * @returns Whether a body-less route must check its zero-byte budget.
+ */
+export const declaresBody = (request: HttpServerRequest): boolean =>
+  request.headers["content-length"] !== undefined ||
+  request.headers["transfer-encoding"] !== undefined;

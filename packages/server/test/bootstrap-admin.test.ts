@@ -18,6 +18,7 @@ import {
   bootstrapAdmin,
 } from "../src/auth/bootstrap-admin.ts";
 import { signIn } from "../src/auth/sessions.ts";
+import { SignInAdmission } from "../src/auth/sign-in-limits.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { InstanceSettings } from "../src/config/instance-settings.ts";
 import { Transactions } from "../src/sql/transactions.ts";
@@ -49,7 +50,8 @@ const canSignIn = (login: string, password: string) =>
         return yield* signIn(
           yield* catalog.current,
           login,
-          new Plaintext(password)
+          new Plaintext(password),
+          "bootstrap-test"
         );
       })
     ).pipe(
@@ -71,6 +73,7 @@ const recordEntries = (recordId: string) =>
   ).pipe(Effect.map(([count]) => Number(count)));
 
 const testLayer = InstanceSettings.layer.pipe(
+  Layer.provideMerge(SignInAdmission.layer),
   Layer.provideMerge(schemaTestLayer())
 );
 

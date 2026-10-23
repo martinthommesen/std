@@ -1,3 +1,4 @@
+import { tableList, tableMetadata } from "@std/access/table-metadata";
 /**
  * The fixed resources of `/api/v1` (Contracts 10.1):
  *
@@ -17,8 +18,9 @@
  * `/api`. No fixed resource's name is a table's v2 name: definition
  * validation refuses it (`apiNameClash`).
  */
-import { tableList, tableMetadata } from "@std/access/table-metadata";
+import type { InvalidCredentials } from "@std/api/errors/invalid-credentials";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
+import type { SignInThrottled } from "@std/api/errors/sign-in-throttled";
 import { UnknownTable } from "@std/api/errors/unknown-table";
 import { WEB_CLIENT, WEB_CLIENT_HEADER } from "@std/api/session-cookie";
 import { SessionToken } from "@std/api/session-token";
@@ -34,19 +36,22 @@ import { formatDateTime } from "@std/values/date-time";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Plaintext } from "@std/values/write-only";
-import { Effect, Layer, Redacted } from "effect";
+import { Effect, Layer, Option, Redacted, Result } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import { Actor } from "../../auth/actor.ts";
 import type { ActingUser } from "../../auth/actor.ts";
+import { deleteExpiredSessions } from "../../auth/session-retention.ts";
 import { displayName, signIn, signOut } from "../../auth/sessions.ts";
+import { SignInAdmission, signInSource } from "../../auth/sign-in-limits.ts";
 import { Catalog } from "../../catalog/catalog.ts";
 import type { InstanceSettings } from "../../config/instance-settings.ts";
 import { currentReadScope } from "../../records/read-records.ts";
 import { savedFiltersInApiNames } from "../../records/saved-filter-names.ts";
 import { RequestRevision } from "../../sql/request-revision.ts";
 import { Transactions } from "../../sql/transactions.ts";
+import { textBodyOf } from "../body-limits.ts";
 import { DEFINITION_KIND_OF_TABLE } from "../change-sets.ts";
 import { genericWriteLimits } from "../metadata-limits.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
@@ -62,7 +67,12 @@ import { getAndHead } from "./methods.ts";
 import { apiOpenApi } from "./openapi.ts";
 import { jsonAnswer } from "./records.ts";
 import { checkedSessionCreate } from "./request-schemas.ts";
-import { jsonBodyOf, withSession } from "./request.ts";
+import {
+  jsonBodyOf,
+  withSession,
+  readAuthenticatedBody,
+  declaresBody,
+} from "./request.ts";
 import {
   entityRef,
   originOf,
@@ -75,6 +85,12 @@ import {
   tableOfCollection,
   typeNameOf,
 } from "./table-names.ts";
+
+// Only credential/admission refusals commit their counters. Infrastructure
+// failures must still roll back and reach inRequestTransaction's SQL retries.
+const committedSignInRefusal = (
+  failure: InvalidCredentials | SignInThrottled
+) => Effect.succeed(Result.fail(failure));
 
 const SESSION_PATH = `${API_PREFIX}/session`;
 const CURRENT_SESSION = `${SESSION_PATH}/current`;
@@ -347,6 +363,7 @@ const tableEntries = (
 export const FixedRoutes = Layer.unwrap(
   Effect.gen(function* buildFixedRoutes() {
     const transactions = yield* Transactions;
+    const admission = yield* SignInAdmission;
 
     const services = yield* Effect.context<
       Catalog | InstanceSettings | Transactions
@@ -384,72 +401,113 @@ export const FixedRoutes = Layer.unwrap(
     const inRequest = <A, E, R>(
       request: HttpServerRequest,
       effect: Effect.Effect<A, E, R>
-    ) => inRequestTransaction(transactions, request, effect);
-
-    const createSession = (request: HttpServerRequest) =>
-      Effect.gen(function* createSessionRoute() {
-        const stated = yield* parseRequestRevision(request);
-        const origin = yield* originOf(request);
-
-        const body = yield* sessionRequestOf(
-          yield* checkedSessionCreate(yield* jsonBodyOf(request))
-        );
-
-        // A cookie sign-in is the web app's: without `STD-Client: web` it
-        // is refused before any session exists, so a cross-site form cannot
-        // sign a browser in (login CSRF; decision 0018).
+    ) =>
+      Effect.gen(function* preparedFixedRequest() {
         if (
-          body.tokenDelivery === "cookie" &&
-          request.headers[WEB_CLIENT_HEADER] !== WEB_CLIENT
+          request.method !== "POST" &&
+          (request.method === "DELETE" || declaresBody(request))
         ) {
-          return yield* new InvalidRequest({
-            message: "A cookie sign-in needs the header STD-Client: web.",
-            parameter: "STD-Client",
-          });
+          yield* readAuthenticatedBody(transactions, request);
         }
 
-        const session = yield* inRequest(
-          request,
-          Effect.gen(function* signInRequest() {
-            yield* checkUnscopedRevision(stated);
-
-            return yield* signIn(
-              yield* (yield* Catalog).current,
-              body.login,
-              body.password
-            );
-          })
-        );
-
-        if (body.tokenDelivery === "cookie") {
-          yield* setSessionCookie(session.token, session.expiresAt);
-        }
-
-        const token =
-          body.tokenDelivery === "body"
-            ? { token: Redacted.value(session.token) }
-            : {};
-
-        const href = `${origin}${CURRENT_SESSION}`;
-
-        return jsonAnswer(
-          {
-            "@type": "Session",
-            expiresAt: formatDateTime(session.expiresAt),
-            href,
-            id: "current",
-            tokenDelivery: body.tokenDelivery,
-            user: {
-              "@referredType": "CoreUser",
-              "@type": "EntityRef",
-              id: session.userId,
-            },
-            ...token,
-          },
-          201,
-          { location: href }
-        );
+        return yield* inRequestTransaction(transactions, request, effect);
       });
+
+    const createSession = (request: HttpServerRequest) => {
+      const address =
+        Option.getOrUndefined(request.remoteAddress) ?? "unavailable";
+
+      const source = signInSource(address);
+
+      return admission.run(
+        address,
+        Effect.gen(function* createSessionRoute() {
+          const stated = yield* parseRequestRevision(request);
+          const origin = yield* originOf(request);
+
+          const body = yield* sessionRequestOf(
+            yield* checkedSessionCreate(yield* jsonBodyOf(request))
+          );
+
+          // A cookie sign-in is the web app's: without `STD-Client: web` it
+          // is refused before any session exists, so a cross-site form cannot
+          // sign a browser in (login CSRF; decision 0018).
+          if (
+            body.tokenDelivery === "cookie" &&
+            request.headers[WEB_CLIENT_HEADER] !== WEB_CLIENT
+          ) {
+            return yield* new InvalidRequest({
+              message: "A cookie sign-in needs the header STD-Client: web.",
+              parameter: "STD-Client",
+            });
+          }
+
+          const result = yield* admission.transaction(
+            Effect.uninterruptible(
+              transactions.maintenance(deleteExpiredSessions()).pipe(
+                Effect.andThen(
+                  inRequest(
+                    request,
+                    Effect.gen(function* signInRequest() {
+                      yield* checkUnscopedRevision(stated);
+
+                      return yield* signIn(
+                        yield* (yield* Catalog).current,
+                        body.login,
+                        body.password,
+                        source
+                      ).pipe(Effect.provideService(SignInAdmission, admission));
+                    }).pipe(
+                      Effect.map(Result.succeed),
+                      Effect.catchTag(
+                        ["InvalidCredentials", "SignInThrottled"],
+                        committedSignInRefusal
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          );
+
+          // Capture typed authentication refusals inside the transaction so their
+          // counters commit. Fail only after commit; native KDF work is awaited
+          // even if the HTTP caller disconnects (the transaction owns cancellation).
+          const session = Result.isSuccess(result)
+            ? result.success
+            : yield* Effect.fail(result.failure);
+
+          if (body.tokenDelivery === "cookie") {
+            yield* setSessionCookie(session.token, session.expiresAt);
+          }
+
+          const token =
+            body.tokenDelivery === "body"
+              ? { token: Redacted.value(session.token) }
+              : {};
+
+          const href = `${origin}${CURRENT_SESSION}`;
+
+          return jsonAnswer(
+            {
+              "@type": "Session",
+              expiresAt: formatDateTime(session.expiresAt),
+              href,
+              id: "current",
+              tokenDelivery: body.tokenDelivery,
+              user: {
+                "@referredType": "CoreUser",
+                "@type": "EntityRef",
+                id: session.userId,
+              },
+              ...token,
+            },
+            201,
+            { location: href }
+          );
+        })
+      );
+    };
 
     const currentSession = (request: HttpServerRequest) =>
       withSession(
@@ -644,9 +702,14 @@ export const FixedRoutes = Layer.unwrap(
 
     const openApi = (request: HttpServerRequest) =>
       Effect.gen(function* openApiRoute() {
+        if (declaresBody(request)) {
+          yield* textBodyOf(request);
+        }
+
         const stated = yield* parseRequestRevision(request);
 
-        return yield* inRequest(
+        return yield* inRequestTransaction(
+          transactions,
           request,
           Effect.gen(function* openApiRequest() {
             yield* checkUnscopedRevision(stated);

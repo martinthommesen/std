@@ -11,16 +11,14 @@
  * revision in a request transaction of its own.
  */
 import { SCHEMA_REVISION_HEADER } from "@std/api/api";
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import { HttpEffect, HttpRouter, HttpServerResponse } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import { RequestRevision } from "../sql/request-revision.ts";
 import type { ConfigState } from "../sql/request-revision.ts";
 import { Transactions } from "../sql/transactions.ts";
-
-/** Where the API's routes start; other paths are the web app's files. */
-const API_PATH_PREFIX = "/api/";
+import { apiKindOf } from "./api-path.ts";
 
 /** The revisions served, by the request they were served for. */
 const served = new WeakMap<object, ConfigState>();
@@ -51,20 +49,25 @@ export const recordServedRevision = (
 export const SchemaRevisionHeaderLayer = HttpRouter.middleware(
   Effect.gen(function* schemaRevisionHeader() {
     const { request: inRequest } = yield* Transactions;
+    const classify = apiKindOf(yield* HttpRouter.RouterConfig);
 
-    const current = inRequest(
+    // Share only an in-flight fallback lookup. A zero TTL retains no completed
+    // revision, so later requests still read fresh state. Without coalescing,
+    // every rejected sign-in opens another transaction after its admission gate.
+    // Effect 4.0.5 cachedWithTTL joins the pending run before checking expiry.
+    const current = yield* inRequest(
       Effect.gen(function* currentRevision() {
         return yield* RequestRevision;
       })
-    ).pipe(Effect.orDie);
+    ).pipe(Effect.orDie, Effect.cachedWithTTL(Duration.zero));
 
     return (httpEffect) =>
       HttpEffect.withPreResponseHandler(httpEffect, (request, response) =>
         // The web app's files (`web-app.ts`) are not API responses: no
         // header, and no transaction per file.
-        request.url.startsWith(API_PATH_PREFIX) ||
-        request.url.startsWith("/tmf-api/")
-          ? Effect.map(
+        classify(request.url) === undefined
+          ? Effect.succeed(response)
+          : Effect.map(
               Effect.suspend(() => {
                 const state = served.get(request.source);
 
@@ -77,7 +80,6 @@ export const SchemaRevisionHeaderLayer = HttpRouter.middleware(
                   revisionHeaderValue(state)
                 )
             )
-          : Effect.succeed(response)
       );
   }),
   { global: true }

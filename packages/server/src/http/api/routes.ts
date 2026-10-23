@@ -51,7 +51,12 @@ import { deleteIn, patchIn, readDelete, readPatch } from "./record-changes.ts";
 import { collectionNamed, createIn, getIn, listIn } from "./records.ts";
 import type { RouteInput } from "./records.ts";
 import { checkedCreate } from "./request-schemas.ts";
-import { jsonBodyOf, withSession } from "./request.ts";
+import {
+  jsonBodyOf,
+  withSession,
+  readAuthenticatedBody,
+  declaresBody,
+} from "./request.ts";
 import { originOf, API_PREFIX } from "./resource.ts";
 import { tmfErrorResponse } from "./tmf-error.ts";
 
@@ -121,6 +126,13 @@ const inSession = <E, R>(
       stated,
     };
 
+    if (
+      ["POST", "PATCH", "DELETE"].includes(request.method) ||
+      declaresBody(request)
+    ) {
+      yield* readAuthenticatedBody(transactions, request);
+    }
+
     return yield* inRequestTransaction(
       transactions,
       request,
@@ -163,6 +175,8 @@ const definitionRequest = (
       request,
       stated: yield* parseRequestRevision(request),
     };
+
+    yield* readAuthenticatedBody(transactions, request);
 
     return yield* definitionWriteIn(
       transactions,

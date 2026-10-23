@@ -46,6 +46,8 @@ const tagError = <const Tag extends string>(tag: Tag) =>
 /** The error subtype of each tag, by tag. */
 export const TmfErrorSubtypes = {
   AggregateNotSettled: tagError("AggregateNotSettled"),
+  BodyCapacityExceeded: tagError("BodyCapacityExceeded"),
+  BodyTooLarge: tagError("BodyTooLarge"),
   DefinitionInvalid: tagError("DefinitionInvalid"),
   DefinitionProtected: tagError("DefinitionProtected"),
   DependencyConflict: tagError("DependencyConflict"),
@@ -73,6 +75,7 @@ export const TmfErrorSubtypes = {
   SchemaChanged: tagError("SchemaChanged"),
   SchemaLockTimeout: tagError("SchemaLockTimeout"),
   SchemaNeedsAttention: tagError("SchemaNeedsAttention"),
+  SignInThrottled: tagError("SignInThrottled"),
   SubscriptionNotServed: tagError("SubscriptionNotServed"),
   Unauthenticated: tagError("Unauthenticated"),
   UnknownField: tagError("UnknownField"),
@@ -181,12 +184,24 @@ export const NotImplementedError = subtypes.NotImplemented.pipe(
 
 /** `503`: schema change in progress. */
 export const UnavailableError = Schema.Union([
+  subtypes.BodyCapacityExceeded,
   subtypes.SchemaBusy,
   subtypes.SchemaLockTimeout,
 ]).pipe(HttpApiSchema.status(503));
 
+/** `413`: the transport byte budget, on every route. */
+export const BodyTooLargeError = subtypes.BodyTooLarge.pipe(
+  HttpApiSchema.status(413)
+);
+
+/** `429`: temporary sign-in admission refusal. */
+export const SignInThrottledError = subtypes.SignInThrottled.pipe(
+  HttpApiSchema.status(429)
+);
+
 /** The errors of a read. */
 export const READ_ERRORS = [
+  BodyTooLargeError,
   BadRequestError,
   UnauthorizedError,
   ForbiddenError,
@@ -199,6 +214,7 @@ export const READ_ERRORS = [
 
 /** The errors of a write: every status the routes use. */
 export const WRITE_ERRORS = [
+  BodyTooLargeError,
   BadRequestError,
   UnauthorizedError,
   ForbiddenError,

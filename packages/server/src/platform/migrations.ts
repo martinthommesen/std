@@ -35,6 +35,9 @@ import { migration0027 } from "./migrations/0027-client-event-record.ts";
 import { migration0028 } from "./migrations/0028-change-image-backfill.ts";
 import { migration0029 } from "./migrations/0029-dead-delivery-actions.ts";
 import { migration0030 } from "./migrations/0030-form-rules.ts";
+import { migration0031 } from "./migrations/0031-http-edge.ts";
+import { migration0032 } from "./migrations/0032-session-expiry.ts";
+import { migration0033 } from "./migrations/0033-session-issuance.ts";
 
 /** Every platform migration this version of STD knows. */
 export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
@@ -69,4 +72,7 @@ export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
     migration0028,
     migration0029,
     migration0030,
+    migration0031,
+    migration0032,
+    migration0033,
   ]);

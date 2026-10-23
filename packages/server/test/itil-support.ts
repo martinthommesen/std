@@ -13,7 +13,10 @@ import {
   HELPDESK,
 } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type { TestRequestOptions } from "../../testing/src/http-client.ts";
+import type {
+  TestHttpClientApi,
+  TestRequestOptions,
+} from "../../testing/src/http-client.ts";
 import { Actor } from "../src/auth/actor.ts";
 import { ensureUser } from "../src/auth/bootstrap-admin.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -35,6 +38,37 @@ const account = (login: string, fixture: HelpdeskFixture["Service"]) => {
 
   return login === "agent" ? fixture.agent : fixture.admin;
 };
+
+// Browser-like session reuse keeps record scenarios from repeatedly signing in.
+// Keys are fixture HTTP clients, so independent test databases never share tokens.
+const fixtureSessions = new WeakMap<
+  object,
+  Map<string, ReturnType<TestHttpClientApi["signIn"]>>
+>();
+
+const fixtureToken = Effect.fn("Itil.fixtureToken")(function* fixtureToken(
+  login: string
+) {
+  const http = yield* TestHttpClient;
+  const fixture = yield* HelpdeskFixture;
+
+  const tokens =
+    fixtureSessions.get(http) ??
+    new Map<string, ReturnType<TestHttpClientApi["signIn"]>>();
+
+  fixtureSessions.set(http, tokens);
+  const existing = tokens.get(login);
+
+  if (existing !== undefined) {
+    return yield* existing;
+  }
+
+  const user = account(login, fixture);
+  const token = yield* Effect.cached(http.signIn(user.login, user.password));
+  tokens.set(login, token);
+
+  return yield* token;
+});
 
 /** The shipped set, without a hard-coded transport prefix. */
 export const HELPDESK_V3 = new URL(
@@ -110,9 +144,7 @@ export const clientFor = Effect.fn("Itil.client")(function* clientFor(
   login?: string
 ) {
   const http = yield* TestHttpClient;
-  const fixture = yield* HelpdeskFixture;
-  const user = account(login ?? "admin", fixture);
-  const token = yield* http.signIn(user.login, user.password);
+  const token = yield* fixtureToken(login ?? "admin");
 
   return yield* HttpApiClient.makeWith(StdApi, {
     baseUrl: "http://std.test",
@@ -206,9 +238,7 @@ export const patchResponse = Effect.fn("Itil.patchResponse")(
     contentType?: string
   ) {
     const http = yield* TestHttpClient;
-    const fixture = yield* HelpdeskFixture;
-    const user = account(login ?? "admin", fixture);
-    const token = yield* http.signIn(user.login, user.password);
+    const token = yield* fixtureToken(login ?? "admin");
 
     const path = StdApi.groups.records.endpoints.patch.path
       .replace(":table", table ?? "helpdeskIncident")

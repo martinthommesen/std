@@ -1,6 +1,7 @@
 /** The form-state task resource (Contracts 6.3): HTTP naming and stale checks stay at this edge. */
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { FormStateRequest } from "@std/api/form-state";
+import { isJsonObject } from "@std/values/json-value";
 import { Effect, Predicate, Schema, SchemaIssue } from "effect";
 
 import { formState } from "../../records/form-state.ts";
@@ -22,9 +23,15 @@ const issuePaths = SchemaIssue.makeFormatterStandardSchemaV1();
 export const formStateIn = Effect.fn("Api.formState")(function* formStateIn(
   input: RouteInput
 ) {
-  const body = yield* Schema.decodeUnknownEffect(FormStateRequest)(
-    yield* jsonBodyOf(input.request)
-  ).pipe(
+  const parsed = yield* jsonBodyOf(input.request);
+
+  // JSON syntax is already checked. Leave proposal values to their field types.
+  const envelope = yield* Schema.decodeUnknownEffect(
+    FormStateRequest.mapFields((fields) => ({
+      ...fields,
+      values: Schema.Unknown,
+    }))
+  )(parsed).pipe(
     Effect.mapError(
       (error) =>
         new InvalidRequest({
@@ -44,6 +51,19 @@ export const formStateIn = Effect.fn("Api.formState")(function* formStateIn(
         })
     )
   );
+
+  if (
+    !isJsonObject(parsed) ||
+    parsed.values === undefined ||
+    !isJsonObject(parsed.values)
+  ) {
+    return yield* new InvalidRequest({
+      message: "Invalid form-state request at body.values.",
+      parameter: "body",
+    });
+  }
+
+  const body = { ...envelope, values: parsed.values };
 
   return yield* Effect.gen(function* checkedForm() {
     const table = yield* tableOf(body.table);

@@ -248,3 +248,7 @@ Decision after review round 2 of the spec check:
 Decision after the merge of workstream 3G:
 
 56. **One API: the TMF630 API becomes `/api/v1` (supersedes decision 6 and the strict freeze of `/api/v1`).** Decided by Martin on 2026-10-23. STD is greenfield and nobody uses the old API, so keeping it frozen beside the new one buys nothing. The old `/api/v1` is retired and deleted, and the TMF630 API (Contracts 10, built as `/api/v2`) becomes STD's only API, renamed to `/api/v1`. Every client (the web app, the quickstart and examples, the CLI helpers and the tests) moves to it first. The release-compatibility CI step becomes a database-upgrade check: build a database with `v0.0.2`, upgrade it with the new release, then run the new quickstart against it; clients of the old API are not supported. Recorded in decision 0025, "API consolidation".
+
+Decision on the HTTP edge (decision 0038):
+
+57. **Request-body statuses on TMF routes (E30, E31; amends decision 52).** Decided by Martin on 2026-10-23: TMF routes answer `413` for a body over its byte budget (TMF630 v5.0.0 Part 1 §3.3.3 p.32) and `503` with `Retry-After` when the process body budget or the user's share of it is full (§3.3.4 p.33), even where the pinned document does not declare them. Both are recorded exceptions to decision 52, like E29.

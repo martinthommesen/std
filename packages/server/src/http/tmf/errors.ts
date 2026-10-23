@@ -115,7 +115,15 @@ export const tmfRouteErrorResponse = (
   declared: readonly number[]
 ): HttpServerResponse.HttpServerResponse => {
   const { body, status } = tmfErrorOf(failure);
-  const answered = tmfStatusFor(failure._tag, status, declared);
+
+  // E30/E31 (accepted, 2026-10-23): TMF630 requires 413 for size and 503 for overload.
+  const edgeStatus =
+    failure._tag === "BodyTooLarge" || failure._tag === "BodyCapacityExceeded";
+
+  const answered = edgeStatus
+    ? status
+    : tmfStatusFor(failure._tag, status, declared);
+
   const tmfBody: JsonObject = { ...body, status: String(answered) };
 
   return HttpServerResponse.text(stringifyJson(tmfBody), {

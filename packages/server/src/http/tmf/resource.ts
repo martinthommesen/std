@@ -83,6 +83,7 @@ import {
 import { jsonAnswer, linkHeader, writeFailures } from "../api/records.ts";
 import { jsonBodyOf, mediaTypeOf, queryOf } from "../api/request.ts";
 import { classOfType } from "../api/table-names.ts";
+import { textBodyOf } from "../body-limits.ts";
 import { expectedVersionOf } from "../record-writes.ts";
 import {
   checkRequestRevision,
@@ -1471,7 +1472,7 @@ export const readTmfDelete = Effect.fn("Tmf.readDelete")(
     const expectedVersion =
       header === undefined ? null : yield* expectedVersionOf(header);
 
-    const text = yield* request.text.pipe(Effect.orElseSucceed(() => ""));
+    const text = yield* textBodyOf(request);
 
     return text === ""
       ? expectedVersion

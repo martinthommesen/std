@@ -28,7 +28,12 @@ import type { ChangeSetServices } from "../schema/change-set.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { answered } from "./api/answered.ts";
 import { jsonAnswer } from "./api/records.ts";
-import { jsonBodyOf, withSession } from "./api/request.ts";
+import {
+  jsonBodyOf,
+  withSession,
+  readAuthenticatedBody,
+  declaresBody,
+} from "./api/request.ts";
 import { originOf } from "./api/resource.ts";
 import { asActor, inRequestTransaction } from "./request-scope.ts";
 import { recordServedRevision } from "./schema-revision-header.ts";
@@ -193,6 +198,10 @@ const handleHub = Effect.fn("Http.handleHub")(function* handleHub(
   const origin = yield* originOf(request);
   const transactions = yield* Transactions;
   const id = params.id ?? "";
+
+  if (work === "register" || work === "unregister" || declaresBody(request)) {
+    yield* readAuthenticatedBody(transactions, request);
+  }
 
   const initial = yield* inRequestTransaction(
     transactions,
