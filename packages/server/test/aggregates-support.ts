@@ -19,11 +19,12 @@ import type { RuleAction, RuleValue } from "@std/definitions/rule-definition";
 import type { FieldType } from "@std/values/field-type";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect, Layer, Schedule, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
 
 import { Actor } from "../src/auth/actor.ts";
 import { InstanceSettings } from "../src/config/instance-settings.ts";
 import { RecordRuleSaveHooks } from "../src/hooks/record-rule-hooks.ts";
+import { ChangeCauseSchema } from "../src/records/change-entry.ts";
 import { createRecord, updateRecord } from "../src/records/save-pipeline.ts";
 import type { SaveResult } from "../src/records/save-pipeline.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
@@ -40,6 +41,7 @@ import {
   schemaTestLayer,
   values,
 } from "./schema-support.ts";
+import { waitUntil } from "./support.ts";
 
 /** The fixture's classes. */
 export const C = {
@@ -58,7 +60,12 @@ export const C = {
 const text = (maxLength = 60): FieldType => ({ kind: "text", maxLength });
 const INTEGER: FieldType = { kind: "integer" };
 
-const owner = (targetClassId: string): FieldType => ({
+/**
+ * The reference type identifying a part's aggregate owner.
+ * @param targetClassId - The owner's class.
+ * @returns The owner reference type.
+ */
+export const owner = (targetClassId: string): FieldType => ({
   aggregate: true,
   kind: "reference",
   targetClassId,
@@ -926,7 +933,7 @@ export const update = Effect.fn("Aggregates.update")(function* update(
 /** One change entry of a record. */
 const EntrySchema = Schema.Struct({
   actor: Schema.String,
-  cause: Schema.Json,
+  cause: ChangeCauseSchema,
   changeId: Schema.String,
   /** The changed fields' IDs, sorted, comma separated. */
   fields: Schema.String,
@@ -1002,18 +1009,14 @@ export const columnOf = (table: string, column: string, id: string) =>
  * Waits until another session of this database waits for a lock.
  * @returns Nothing, once one waits.
  */
-export const someoneWaits = values(
-  `SELECT count(*)::text AS value FROM pg_stat_activity
+export const someoneWaits = waitUntil(
+  values(
+    `SELECT count(*)::text AS value FROM pg_stat_activity
    WHERE datname = current_database() AND pid <> pg_backend_pid()
      AND wait_event_type = 'Lock'`
-).pipe(
-  Effect.repeat({
-    schedule: Schedule.spaced("20 millis"),
-    until: ([value]) => value !== "0",
-  }),
-  Effect.timeout("20 seconds"),
-  Effect.orDie
-);
+  ).pipe(Effect.map(([value]) => value !== "0")),
+  "20 seconds"
+).pipe(Effect.orDie);
 
 /**
  * Whether an error is the refusal of a guard on a system transition.

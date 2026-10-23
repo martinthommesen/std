@@ -23,7 +23,7 @@ import { apiAttributeNameOf } from "@std/definitions/names";
 import type { Operation } from "@std/definitions/operation";
 import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
-import { Effect, Exit, Option, Ref } from "effect";
+import { Effect, Exit, Ref } from "effect";
 import type { Layer } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
@@ -70,9 +70,10 @@ import {
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
-import { CHANGE_SETS } from "./schema-paths-support.ts";
+import { CHANGE_SETS, definitionVersion } from "./schema-paths-support.ts";
 import { ACME, createRole, values } from "./schema-support.ts";
-import { versionOf } from "./writes-support.ts";
+import { errorOf } from "./support.ts";
+import { ASSET, LAPTOP, MONITOR, versionOf } from "./writes-support.ts";
 
 /** The services the rows use: the acme fixture and the HTTP client. */
 type Services = Layer.Success<ReturnType<typeof readsTestLayer>>;
@@ -87,10 +88,6 @@ interface PathRow {
   readonly alice: Observation;
   readonly bob: Observation;
 }
-
-const ASSET = "acme.asset";
-const LAPTOP = "acme.laptop";
-const MONITOR = "acme.monitor";
 
 /**
  * A 200 listing these record names.
@@ -409,9 +406,7 @@ const other = (who: Who): Who => (who === "alice" ? "bob" : "alice");
 const outcomeOf = <A, E extends { readonly _tag: string }>(
   exit: Exit.Exit<A, E>
 ): string =>
-  Exit.isSuccess(exit)
-    ? "saved"
-    : (Option.getOrUndefined(Exit.findErrorOption(exit))?._tag ?? "defect");
+  Exit.isSuccess(exit) ? "saved" : (errorOf(exit)?._tag ?? "defect");
 
 /**
  * `actorId` updates `outerId`'s name through the record service; its
@@ -1101,19 +1096,6 @@ const freshRole = (callers: Callers) =>
     return { changeSetId: textOf(objectOf(response.json).id), id };
   });
 
-/**
- * The stored version of a definition, as table owner.
- *
- * @param table - Its definition table.
- * @param id - The definition.
- * @returns The version.
- */
-const definitionVersion = (table: string, id: string) =>
-  values(
-    `SELECT version::text AS value FROM core."${table}" WHERE id = $1::uuid`,
-    [id]
-  ).pipe(Effect.map(([version]) => Number(version ?? "0")));
-
 const DEFINITION_ROWS: readonly DefinitionRow[] = [
   {
     admin: { status: 201 },
@@ -1132,7 +1114,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     path: "POST /applyChangeSet (rename an app table; hidden is missing)",
     run: (callers, who) =>
       Effect.gen(function* renameApp() {
-        const version = yield* definitionVersion("class", ACME.asset);
+        const version = yield* definitionVersion(ACME.asset);
 
         return yield* measuredWrite(
           postChangeSet(callers, who, [
@@ -1232,7 +1214,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     path: "PATCH /core.class/{acme.asset} (label: a local override)",
     run: (callers, who) =>
       Effect.gen(function* relabelApp() {
-        const version = yield* definitionVersion("class", ACME.asset);
+        const version = yield* definitionVersion(ACME.asset);
 
         return yield* measuredWrite(
           send(callers, who, "PATCH", recordPath("core.class", ACME.asset), {
@@ -1249,7 +1231,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     path: "DELETE /core.field/{acme cost}",
     run: (callers, who) =>
       Effect.gen(function* deleteField() {
-        const version = yield* definitionVersion("field", ACME.cost);
+        const version = yield* definitionVersion(ACME.cost);
 
         return yield* measuredWrite(
           send(callers, who, "DELETE", recordPath("core.field", ACME.cost), {

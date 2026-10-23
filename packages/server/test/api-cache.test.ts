@@ -431,16 +431,16 @@ describe("api-cache", () => {
             "error: no session": yield* http.get(`${SESSION}/current`),
             "error: unknown metadata table": yield* http.get(
               "/api/v1/tableMetadata/acmeNothing",
-              { cookie: yield* http.cookieSignIn("bob", "bob-password") }
+              { cookie }
             ),
             // The session is checked before the route is found.
             "error: unknown route": yield* http.get("/api/v1/nothing-here"),
             "error: unknown route, signed in": yield* http.get(
               "/api/v1/nothing-here",
-              { token: yield* http.signIn("bob", "bob-password") }
+              { token: cookie }
             ),
             "error: unknown table": yield* http.get(listPath("acme.nothing"), {
-              token: yield* http.signIn("bob", "bob-password"),
+              token: cookie,
             }),
             "error: wrong password": yield* http.request("POST", SESSION, {
               body: { ...SIGN_IN_BODY, password: "wrong" },

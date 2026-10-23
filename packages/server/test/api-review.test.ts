@@ -9,7 +9,7 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Condition } from "@std/definitions/condition";
 import type { Operation } from "@std/definitions/operation";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
+import type { JsonObject } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
@@ -20,6 +20,13 @@ import type {
 } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import {
+  UNKNOWN_ID,
+  MERGE_PATCH,
+  JSON_PATCH,
+  codeOf,
+  changedFields,
+  withoutDate,
+  patchOptions,
   asArray,
   asObject,
   idsOf,
@@ -34,29 +41,6 @@ import {
 import type { ApiCallers } from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import { ACME, addAccessRule, addField, change } from "./schema-support.ts";
-
-const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
-const MERGE_PATCH = "application/merge-patch+json";
-const JSON_PATCH = "application/json-patch+json";
-
-const codeOf = (response: TestResponse): JsonValue | undefined =>
-  asObject(response.json).code;
-
-const patchOptions = (
-  caller: TestRequestOptions,
-  revision: number,
-  contentType: string,
-  body: JsonValue
-): TestRequestOptions => ({
-  ...caller,
-  headers: { "content-type": contentType, "if-match": `"${revision}"` },
-  rawBody: JSON.stringify(body),
-});
-
-const changedFields = (response: TestResponse): string[] =>
-  asArray(asObject(response.json).changes).map((entry) =>
-    textOf(asObject(entry).field)
-  );
 
 const changedKinds = (response: TestResponse): string[] =>
   asArray(asObject(response.json).changes).map(
@@ -74,9 +58,6 @@ const byId = (response: TestResponse): Map<string, JsonObject> =>
       asObject(item),
     ])
   );
-
-const withoutDate = (response: TestResponse): [string, string][] =>
-  [...response.headers.entries()].filter(([name]) => name !== "date");
 
 const post = (
   caller: TestRequestOptions,
@@ -204,9 +185,14 @@ describe("api-review", () => {
           const stored = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.admin, Number(current.revision), MERGE_PATCH, {
-              cfg: { keep: "retained", remove: "old" },
-            })
+            patchOptions(
+              callers.admin,
+              MERGE_PATCH,
+              {
+                cfg: { keep: "retained", remove: "old" },
+              },
+              `"${Number(current.revision)}"`
+            )
           );
 
           assert.strictEqual(stored.status, 200, stored.text);
@@ -220,11 +206,11 @@ describe("api-review", () => {
             path,
             patchOptions(
               callers.bob,
-              Number(asObject(stored.json).revision),
               MERGE_PATCH,
               {
                 cfg: { added: "new", remove: null },
-              }
+              },
+              `"${Number(asObject(stored.json).revision)}"`
             )
           );
 
@@ -322,10 +308,15 @@ describe("api-review", () => {
           const replaced = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.alice, 1, JSON_PATCH, [
-              { op: "test", path: "/id", value: textOf(asset.id) },
-              { op: "replace", path: "/status", value: "x" },
-            ])
+            patchOptions(
+              callers.alice,
+              JSON_PATCH,
+              [
+                { op: "test", path: "/id", value: textOf(asset.id) },
+                { op: "replace", path: "/status", value: "x" },
+              ],
+              '"1"'
+            )
           );
 
           assert.strictEqual(replaced.status, 200, replaced.text);
@@ -334,9 +325,12 @@ describe("api-review", () => {
           const typed = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.alice, 2, JSON_PATCH, [
-              { op: "test", path: "/@type", value: textOf(asset["@type"]) },
-            ])
+            patchOptions(
+              callers.alice,
+              JSON_PATCH,
+              [{ op: "test", path: "/@type", value: textOf(asset["@type"]) }],
+              '"2"'
+            )
           );
 
           assert.strictEqual(typed.status, 200, typed.text);
@@ -344,9 +338,12 @@ describe("api-review", () => {
           const revision = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.alice, 2, JSON_PATCH, [
-              { op: "replace", path: "/revision", value: 9 },
-            ])
+            patchOptions(
+              callers.alice,
+              JSON_PATCH,
+              [{ op: "replace", path: "/revision", value: 9 }],
+              '"2"'
+            )
           );
 
           assert.strictEqual(revision.status, 422, revision.text);
@@ -378,7 +375,7 @@ describe("api-review", () => {
 
           const random = yield* http.request(
             "POST",
-            `${API.asset}/${RANDOM_ID}`,
+            `${API.asset}/${UNKNOWN_ID}`,
             callers.bob
           );
 

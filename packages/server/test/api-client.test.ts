@@ -10,10 +10,10 @@ import { FetchHttpClient } from "effect/http";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import { UNKNOWN_ID } from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
 
 const BASE_URL = "http://std.test";
-const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 
 /** A revision this database never had. */
 const NEVER_HAD = "999999.019a0000-0000-7000-8000-00000000abcd";
@@ -173,7 +173,7 @@ describe("api-client", () => {
 
         const unknownId = yield* withFetch(
           client.records.get({
-            params: { id: RANDOM_ID, table: "acmeAsset" },
+            params: { id: UNKNOWN_ID, table: "acmeAsset" },
             query: {},
           })
         ).pipe(Effect.flip);

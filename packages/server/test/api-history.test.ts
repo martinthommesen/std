@@ -5,7 +5,7 @@
  * the per-caller filtering of Contracts 3.7.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
+import type { JsonObject } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
@@ -16,6 +16,10 @@ import type {
 } from "../../testing/src/http-client.ts";
 import { recordHref } from "../src/http/api/resource.ts";
 import {
+  MERGE_PATCH,
+  UNKNOWN_ID,
+  revisionsOf,
+  patchOptions,
   asArray,
   asObject,
   textOf,
@@ -24,24 +28,6 @@ import {
   withQuery,
 } from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
-
-const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
-
-const patchOptions = (
-  caller: TestRequestOptions,
-  revision: number,
-  body: JsonValue
-): TestRequestOptions => ({
-  ...caller,
-  headers: {
-    "content-type": "application/merge-patch+json",
-    "if-match": `"${revision}"`,
-  },
-  rawBody: JSON.stringify(body),
-});
-
-const revisionsOf = (response: TestResponse): number[] =>
-  asArray(response.json).map((entry) => Number(asObject(entry).revision));
 
 const revisionsChecked = (response: TestResponse): number[] => {
   assert.strictEqual(response.status, 200, response.text);
@@ -83,7 +69,7 @@ const assetWithHistory = (
       const patched = yield* http.request(
         "PATCH",
         path,
-        patchOptions(alice, revision, { status })
+        patchOptions(alice, MERGE_PATCH, { status }, `"${revision}"`)
       );
 
       assert.strictEqual(patched.status, 200, patched.text);
@@ -104,7 +90,9 @@ describe("api-history", () => {
     dbTest.effect("pages with counts and links", () =>
       Effect.gen(function* paging() {
         const http = yield* TestHttpClient;
-        const { alice } = yield* apiCallers;
+
+        const { alice: user } = yield* AcmeFixture;
+        const alice = { token: yield* http.signIn(user.login, user.password) };
         const path = yield* assetWithHistory(alice);
 
         const all = yield* http.get(`${path}/history`, alice);
@@ -163,7 +151,9 @@ describe("api-history", () => {
     dbTest.effect("filters on ChangeEntry attributes", () =>
       Effect.gen(function* filtering() {
         const http = yield* TestHttpClient;
-        const { alice } = yield* apiCallers;
+
+        const { alice: user } = yield* AcmeFixture;
+        const alice = { token: yield* http.signIn(user.login, user.password) };
         const path = yield* assetWithHistory(alice);
 
         const revisionsFor = (query: readonly (readonly [string, string])[]) =>
@@ -239,7 +229,7 @@ describe("api-history", () => {
           [1, 2, 3]
         );
         assert.deepStrictEqual(
-          yield* revisionsFor([["actor.id", RANDOM_ID]]),
+          yield* revisionsFor([["actor.id", UNKNOWN_ID]]),
           []
         );
 
@@ -258,7 +248,9 @@ describe("api-history", () => {
     dbTest.effect("rejects unknown parameters", () =>
       Effect.gen(function* unknown() {
         const http = yield* TestHttpClient;
-        const { alice } = yield* apiCallers;
+
+        const { alice: user } = yield* AcmeFixture;
+        const alice = { token: yield* http.signIn(user.login, user.password) };
         const { records } = yield* AcmeFixture;
 
         const response = yield* http.get(
@@ -301,7 +293,7 @@ describe("api-history", () => {
         assert.strictEqual(asObject(found.json)["@type"], "ChangeEntry");
 
         const missing = yield* http.get(
-          `${API.laptop}/${records.K}/history/${RANDOM_ID}`,
+          `${API.laptop}/${records.K}/history/${UNKNOWN_ID}`,
           alice
         );
 
