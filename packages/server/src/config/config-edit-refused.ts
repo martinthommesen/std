@@ -38,3 +38,30 @@ export class ConfigEditRefused extends Schema.TaggedError<
     return this.detail;
   }
 }
+
+/**
+ * Constructs a refusal with the definition and actionable detail.
+ *
+ * @param reason - The refused operation's reason.
+ * @param definitionId - The affected definition, if any.
+ * @param detail - What the caller can do.
+ * @returns The refusal.
+ */
+export const refused = (
+  reason: ConfigEditRefused["reason"],
+  definitionId: string | null,
+  detail: string
+): ConfigEditRefused => new ConfigEditRefused({ definitionId, detail, reason });
+
+/**
+ * Refuses an edit of a shipped definition whose base has not been recorded.
+ *
+ * @param id - The shipped definition.
+ * @returns The refusal explaining how to record the base.
+ */
+export const notRecorded = (id: string): ConfigEditRefused =>
+  refused(
+    "notRecorded",
+    id,
+    `The definition ${id} has no shipped base; run std upgrade to record its set.`
+  );

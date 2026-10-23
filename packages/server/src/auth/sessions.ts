@@ -24,17 +24,15 @@ import { createHash, randomBytes } from "node:crypto";
 
 import { InvalidCredentials } from "@std/api/errors/invalid-credentials";
 import { Unauthenticated } from "@std/api/errors/unauthenticated";
-import { rawSql, sql, textParameter } from "@std/conditions/sql-fragment";
+import { sql, textParameter } from "@std/conditions/sql-fragment";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { SERVICE_USER_IDS } from "@std/definitions/well-known";
 import { formatDateTime } from "@std/values/date-time";
-import { textKey } from "@std/values/fold";
 import type { Plaintext } from "@std/values/write-only";
 import { Clock, Duration, Effect, Redacted } from "effect";
 
 import { readRows, writeRows } from "../records/sql-run.ts";
-import { quoteIdent } from "../schema/sql-text.ts";
 import { effectiveRoles } from "./actor.ts";
 import type { ActingUser } from "./actor.ts";
 import { verifyPassword } from "./password.ts";
@@ -45,7 +43,7 @@ import {
   resetSignIn,
   SignInAdmission,
 } from "./sign-in-limits.ts";
-import { userTables } from "./user-table.ts";
+import { loginKey, userTables } from "./user-table.ts";
 
 /** How long a session lasts. [judgment] */
 export const SESSION_LIFETIME = Duration.hours(12);
@@ -129,17 +127,17 @@ export const signIn = Effect.fn("Sessions.signIn")(function* signIn(
 ) {
   const failures = yield* admitSignIn(login, source);
   const tables = userTables(snapshot);
-  const key = textKey(login.normalize("NFC").trim(), false);
+  const key = loginKey(login);
 
   // FOR NO KEY UPDATE serializes issuance and conflicts with the UPDATE that deactivates the user: a
   // concurrent deactivation either commits first (the row is re-read and
   // `active` is false) or waits for this sign-in to commit (its trigger then
   // deletes the new session). No session survives a deactivation.
   const [user] = yield* readRows(
-    sql`SELECT "u"."id"::text AS "id", "u".${rawSql(quoteIdent(tables.password))} AS "password",
-  "u".${rawSql(quoteIdent(tables.active))}::text AS "active"
+    sql`SELECT "u"."id"::text AS "id", "u".${tables.password} AS "password",
+  "u".${tables.active}::text AS "active"
 FROM ${tables.user} AS "u"
-WHERE casefold(("u".${rawSql(quoteIdent(tables.login))}) COLLATE pg_unicode_fast) = ${textParameter(key, "text")}
+WHERE casefold(("u".${tables.login}) COLLATE pg_unicode_fast) = ${textParameter(key, "text")}
 FOR NO KEY UPDATE OF "u"`
   );
 
@@ -201,10 +199,10 @@ export const authenticate = Effect.fn("Sessions.authenticate")(
     const tables = userTables(snapshot);
 
     const rows = yield* readRows(
-      sql`SELECT "s"."user_id"::text AS "user_id", "ur".${rawSql(quoteIdent(tables.userRoleRole))}::text AS "role_id"
+      sql`SELECT "s"."user_id"::text AS "user_id", "ur".${tables.userRoleRole}::text AS "role_id"
 FROM "core"."session" AS "s"
-JOIN ${tables.user} AS "u" ON "u"."id" = "s"."user_id" AND "u".${rawSql(quoteIdent(tables.active))}
-LEFT JOIN ${tables.userRole} AS "ur" ON "ur".${rawSql(quoteIdent(tables.userRoleUser))} = "u"."id"
+JOIN ${tables.user} AS "u" ON "u"."id" = "s"."user_id" AND "u".${tables.active}
+LEFT JOIN ${tables.userRole} AS "ur" ON "ur".${tables.userRoleUser} = "u"."id"
 WHERE "s"."token_hash" = ${tokenHashParameter(text)} AND "s"."expires_at" > now()`
     );
 
@@ -243,7 +241,7 @@ export const displayName = Effect.fn("Sessions.displayName")(
     const tables = userTables(snapshot);
 
     const [user] = yield* readRows(
-      sql`SELECT coalesce("u".${rawSql(quoteIdent(tables.name))}, "u".${rawSql(quoteIdent(tables.login))}) AS "name"
+      sql`SELECT coalesce("u".${tables.name}, "u".${tables.login}) AS "name"
 FROM ${tables.user} AS "u"
 WHERE "u"."id" = ${textParameter(userId, "uuid")}`
     );

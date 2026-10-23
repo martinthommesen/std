@@ -14,6 +14,7 @@ import type { SqlError } from "effect/sql/SqlError";
 
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
+import { liveColumn } from "./catalog-facts.ts";
 import type { CatalogFacts } from "./catalog-facts.ts";
 import { describedColumns, describedTables } from "./described.ts";
 import { finding } from "./finding.ts";
@@ -45,7 +46,9 @@ interface Comparison {
   readonly actual: string;
 }
 
-const decodeEqual = decodeRows(Schema.Struct({ equal: Schema.Boolean }));
+const decodeEqual = decodeRows(
+  Schema.Struct({ equal: Schema.Boolean, ordinal: Schema.Int })
+);
 
 const mismatch = (comparison: Comparison): Finding =>
   finding(
@@ -72,9 +75,7 @@ const comparisonsOf = (
     }
 
     return describedColumns(snapshot, described).flatMap((expected) => {
-      const column = facts.columns.find(
-        (entry) => entry.name === expected.name && !entry.dropped
-      );
+      const column = liveColumn(facts, expected.name);
 
       const comparable =
         column !== undefined &&
@@ -107,24 +108,27 @@ export const checkDefaults = Effect.fn("Doctor.checkDefaults")(
     catalog: CatalogFacts
   ): Effect.fn.Return<readonly Finding[], SqlError, SqlClient.SqlClient> {
     const sql = yield* SqlClient.SqlClient;
-    const found: Finding[] = [];
+    const comparisons = comparisonsOf(snapshot, catalog);
 
-    for (const comparison of comparisonsOf(snapshot, catalog)) {
-      if (isConstant(comparison.actual)) {
-        const [row] = yield* readOnly(
-          sql.unsafe(
-            `SELECT (${comparison.expected})::${comparison.type} IS NOT DISTINCT FROM (${comparison.actual})::${comparison.type} AS equal`
-          )
-        ).pipe(Effect.flatMap(decodeEqual));
+    const statements = comparisons.flatMap((comparison, ordinal) =>
+      isConstant(comparison.actual)
+        ? [
+            `SELECT ${ordinal} AS ordinal, (${comparison.expected})::${comparison.type} IS NOT DISTINCT FROM (${comparison.actual})::${comparison.type} AS equal`,
+          ]
+        : []
+    );
 
-        if (row?.equal !== true) {
-          found.push(mismatch(comparison));
-        }
-      } else {
-        found.push(mismatch(comparison));
-      }
-    }
+    const results =
+      statements.length === 0
+        ? []
+        : yield* readOnly(sql.unsafe(statements.join(" UNION ALL "))).pipe(
+            Effect.flatMap(decodeEqual)
+          );
 
-    return found;
+    const equal = new Map(results.map((row) => [row.ordinal, row.equal]));
+
+    return comparisons.flatMap((comparison, ordinal) =>
+      equal.get(ordinal) === true ? [] : [mismatch(comparison)]
+    );
   }
 );

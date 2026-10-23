@@ -3,7 +3,6 @@ import { isIP } from "node:net";
 
 import { SignInThrottled } from "@std/api/errors/sign-in-throttled";
 import { sql, textParameter } from "@std/conditions/sql-fragment";
-import { textKey } from "@std/values/fold";
 import {
   Config,
   Context,
@@ -16,6 +15,7 @@ import {
 
 import { writeRows } from "../records/sql-run.ts";
 import { DatabaseConfig } from "../sql/database-config.ts";
+import { loginKey } from "./user-table.ts";
 
 /** NIST rev.3 §5.2.2 / rev.4 §3.2.2: 100 failures; quiet-window deviation below. */
 export const SIGN_IN_FAILURE_CEILING = 100;
@@ -66,9 +66,7 @@ const refused = () =>
  * @returns SHA-256 of the NFC, trimmed, case-folded key; bounded index width.
  */
 export const signInKey = (login: string): string =>
-  createHash("sha256")
-    .update(textKey(login.normalize("NFC").trim(), false))
-    .digest("hex");
+  createHash("sha256").update(loginKey(login)).digest("hex");
 
 // A socket address's IPv4 text (also for IPv4-mapped IPv6), or the IPv6
 // prefix of its first `prefixWords` 16-bit words. Socket addresses come from

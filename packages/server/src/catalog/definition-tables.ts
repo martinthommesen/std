@@ -28,7 +28,6 @@ export type ColumnCodec =
   | "uuid"
   | "nullableUuid"
   | "boolean"
-  | "nullableBoolean"
   | "json"
   | "nullableJson"
   | "int4"
@@ -236,17 +235,21 @@ export const tableOf = (kind: DefinitionKind): DefinitionTable => {
 /** A cell as the driver returns it with STD's text reads. */
 export type Cell = string | number | boolean | null;
 
-const CELL_SCHEMAS: Readonly<Record<ColumnCodec, Schema.Codec<Cell>>> = {
-  boolean: Schema.Boolean,
-  int4: Schema.Int,
-  json: Schema.String,
-  nullableBoolean: Schema.NullOr(Schema.Boolean),
-  nullableInt4: Schema.NullOr(Schema.Int),
-  nullableJson: Schema.NullOr(Schema.String),
-  nullableText: Schema.NullOr(Schema.String),
-  nullableUuid: Schema.NullOr(Schema.String),
-  text: Schema.String,
-  uuid: Schema.String,
+const CODECS: Readonly<
+  Record<
+    ColumnCodec,
+    { readonly schema: Schema.Codec<Cell>; readonly cast: string }
+  >
+> = {
+  boolean: { cast: "boolean", schema: Schema.Boolean },
+  int4: { cast: "int4", schema: Schema.Int },
+  json: { cast: "jsonb", schema: Schema.String },
+  nullableInt4: { cast: "int4", schema: Schema.NullOr(Schema.Int) },
+  nullableJson: { cast: "jsonb", schema: Schema.NullOr(Schema.String) },
+  nullableText: { cast: "text", schema: Schema.NullOr(Schema.String) },
+  nullableUuid: { cast: "uuid", schema: Schema.NullOr(Schema.String) },
+  text: { cast: "text", schema: Schema.String },
+  uuid: { cast: "uuid", schema: Schema.String },
 };
 
 /** The columns every definition table has, as read. */
@@ -280,38 +283,36 @@ const columnsOf = (entry: DefinitionTable): readonly PropertyColumn[] => [
 ];
 
 /**
- * The columns that are read: every column, or those the database has.
+ * The columns that the database has.
  *
  * @param entry - The table.
- * @param present - The table's columns in the database; undefined: all.
+ * @param present - The table's columns in the database.
  * @returns The columns read, in table order.
  */
 const readColumns = (
   entry: DefinitionTable,
-  present: ReadonlySet<string> | undefined
+  present: ReadonlySet<string>
 ): readonly PropertyColumn[] =>
-  present === undefined
-    ? columnsOf(entry)
-    : columnsOf(entry).filter((spec) => present.has(spec.column));
+  columnsOf(entry).filter((spec) => present.has(spec.column));
 
 /**
  * The schema of one row of a definition table, for `decodeRows`.
  *
  * @param entry - The table.
  * @param present - The table's columns in the database (a column a pending
- *   migration adds is left out and reads as null); undefined: all.
+ *   migration adds is left out and reads as null).
  * @returns A struct schema of its cells.
  */
 export const rowSchema = (
   entry: DefinitionTable,
-  present?: ReadonlySet<string>
+  present: ReadonlySet<string>
 ): Schema.Codec<Readonly<Record<string, Cell>>> =>
   Schema.Struct({
     ...COMMON_SCHEMAS,
     ...Object.fromEntries(
       readColumns(entry, present).map((spec) => [
         spec.column,
-        CELL_SCHEMAS[spec.codec],
+        CODECS[spec.codec].schema,
       ])
     ),
   });
@@ -320,12 +321,12 @@ export const rowSchema = (
  * The SELECT of a definition table, with its columns listed.
  *
  * @param entry - The table.
- * @param present - The table's columns in the database; undefined: all.
+ * @param present - The table's columns in the database.
  * @returns The statement.
  */
 export const selectStatement = (
   entry: DefinitionTable,
-  present?: ReadonlySet<string>
+  present: ReadonlySet<string>
 ): string =>
   `SELECT ${[
     ...COMMON_COLUMNS,
@@ -430,19 +431,6 @@ export interface BoundValue {
   readonly text: string | null;
 }
 
-const CASTS: Readonly<Record<ColumnCodec, string>> = {
-  boolean: "boolean",
-  int4: "int4",
-  json: "jsonb",
-  nullableBoolean: "boolean",
-  nullableInt4: "int4",
-  nullableJson: "jsonb",
-  nullableText: "text",
-  nullableUuid: "uuid",
-  text: "text",
-  uuid: "uuid",
-};
-
 const textOf = (
   codec: ColumnCodec,
   value: JsonValue | undefined
@@ -451,7 +439,11 @@ const textOf = (
     return null;
   }
 
-  if (CASTS[codec] === "jsonb" || isJsonObject(value) || isJsonArray(value)) {
+  if (
+    CODECS[codec].cast === "jsonb" ||
+    isJsonObject(value) ||
+    isJsonArray(value)
+  ) {
     return stringifyJson(value);
   }
 
@@ -483,7 +475,7 @@ export const boundValues = (definition: Definition): readonly BoundValue[] => {
       text: String(definition.protected),
     },
     ...entry.columns.map((spec) => ({
-      cast: CASTS[spec.codec],
+      cast: CODECS[spec.codec].cast,
       column: spec.column,
       text: textOf(spec.codec, json[spec.property]),
     })),

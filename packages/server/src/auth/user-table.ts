@@ -13,36 +13,40 @@ import {
   USER_ROLE_CLASS_ID,
   USER_ROLE_FIELD_IDS,
 } from "@std/definitions/well-known";
+import { textKey } from "@std/values/fold";
 
 import { tableName } from "../schema/sql-text.ts";
 
 /** The quoted tables and columns of `core.user` and `core.user_role`. */
 export interface UserTables {
   readonly user: SqlFragment;
-  readonly login: string;
-  readonly password: string;
-  readonly active: string;
-  readonly name: string;
+  readonly login: SqlFragment;
+  readonly password: SqlFragment;
+  readonly active: SqlFragment;
+  readonly name: SqlFragment;
   readonly userRole: SqlFragment;
-  readonly userRoleUser: string;
-  readonly userRoleRole: string;
+  readonly userRoleUser: SqlFragment;
+  readonly userRoleRole: SqlFragment;
 }
 
-const columnOf = (snapshot: ConfigSnapshot, fieldId: DefinitionId): string => {
+const columnOf = (
+  snapshot: ConfigSnapshot,
+  fieldId: DefinitionId
+): SqlFragment => {
   const field = snapshot.field(fieldId);
 
   if (field === undefined) {
     throw new RangeError(`The core set is not loaded: no field ${fieldId}`);
   }
 
-  return field.name;
+  return identSql(field.name);
 };
 
 /**
  * The user tables of a snapshot.
  *
  * @param snapshot - A configuration with the core set loaded.
- * @returns Quoted table names and unquoted column names.
+ * @returns Quoted table and column names.
  */
 export const userTables = (snapshot: ConfigSnapshot): UserTables => ({
   active: columnOf(snapshot, USER_FIELD_IDS.active),
@@ -56,11 +60,10 @@ export const userTables = (snapshot: ConfigSnapshot): UserTables => ({
 });
 
 /**
- * A qualified column.
+ * The normalized comparison key shared by login lookup and throttling.
  *
- * @param alias - The table alias.
- * @param name - The column name.
- * @returns `"alias"."column"`.
+ * @param login - The supplied login.
+ * @returns Its trimmed, NFC-normalized, case-folded key.
  */
-export const column = (alias: string, name: string): SqlFragment =>
-  identSql(alias, name);
+export const loginKey = (login: string): string =>
+  textKey(login.normalize("NFC").trim(), false);

@@ -1,5 +1,5 @@
 /** Service records owned by installed sets, repaired through ordinary audited saves. */
-import { renderSql, sql, textParameter } from "@std/conditions/sql-fragment";
+import { sql, textParameter } from "@std/conditions/sql-fragment";
 import {
   HELPDESK_CASCADE_ROLE_ID,
   HELPDESK_CASCADE_LOGIN,
@@ -20,7 +20,7 @@ import {
   helpdeskIdentityRequired,
 } from "../auth/service-identities.ts";
 import { ServiceIdentityProvisioning } from "../auth/service-identity-provisioning.ts";
-import { column, userTables } from "../auth/user-table.ts";
+import { userTables } from "../auth/user-table.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { OutboxSaveHooks } from "../records/outbox-producer.ts";
 import {
@@ -30,10 +30,9 @@ import {
   ensureUserIndividual,
 } from "../records/save-pipeline.ts";
 import { loadRecord } from "../records/save-sql.ts";
-import { TextRowSchema } from "../records/sql-run.ts";
+import { writeRows } from "../records/sql-run.ts";
 import { WriteAccess } from "../records/write-access.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
-import { decodeRows } from "../sql/rows.ts";
 import { Transactions } from "../sql/transactions.ts";
 
 /** Set records could not be provisioned; reloading the set retries the repair. */
@@ -137,14 +136,10 @@ const repair = Effect.gen(function* repairSetIdentity() {
 
   const tables = userTables(snapshot);
 
-  const lockingRead =
-    renderSql(sql`SELECT r.id::text, r.version::text, ${column("r", tables.userRoleUser)}::text AS user, ${column("r", tables.userRoleRole)}::text AS role FROM ${tables.userRole} r
-    WHERE ${column("r", tables.userRoleUser)} = ${textParameter(HELPDESK_CASCADE_USER_ID, "uuid")} OR ${column("r", tables.userRoleRole)} = ${textParameter(HELPDESK_CASCADE_ROLE_ID, "uuid")}
+  const assignments =
+    yield* writeRows(sql`SELECT r.id::text, r.version::text, "r".${tables.userRoleUser}::text AS user, "r".${tables.userRoleRole}::text AS role FROM ${tables.userRole} r
+    WHERE "r".${tables.userRoleUser} = ${textParameter(HELPDESK_CASCADE_USER_ID, "uuid")} OR "r".${tables.userRoleRole} = ${textParameter(HELPDESK_CASCADE_ROLE_ID, "uuid")}
     ORDER BY r.id FOR UPDATE`);
-
-  const assignments = yield* sqlClient
-    .unsafe<object>(lockingRead.text, lockingRead.values)
-    .pipe(Effect.flatMap(decodeRows(TextRowSchema)));
 
   let kept = false;
 

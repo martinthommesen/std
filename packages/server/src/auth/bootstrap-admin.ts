@@ -19,7 +19,7 @@
  * outside the HTTP API: whoever can run it can already change every table.
  */
 import { NotAllowed } from "@std/api/errors/not-allowed";
-import { rawSql, sql, textParameter } from "@std/conditions/sql-fragment";
+import { sql, textParameter } from "@std/conditions/sql-fragment";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
@@ -30,7 +30,6 @@ import {
   USER_CLASS_ID,
   USER_ROLE_CLASS_ID,
 } from "@std/definitions/well-known";
-import { textKey } from "@std/values/fold";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Layer, Redacted, Schema } from "effect";
 
@@ -40,11 +39,10 @@ import { createRecord } from "../records/save-pipeline.ts";
 import { readRows } from "../records/sql-run.ts";
 import { WriteAccess } from "../records/write-access.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
-import { quoteIdent } from "../schema/sql-text.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { Actor } from "./actor.ts";
 import { isReservedServiceLogin } from "./service-identities.ts";
-import { userTables } from "./user-table.ts";
+import { loginKey, userTables } from "./user-table.ts";
 
 /** The administrator to create. */
 export interface AdminAccount {
@@ -96,12 +94,12 @@ const BootstrapSaveServices = Layer.mergeAll(
 const userWithLogin = Effect.fn("BootstrapAdmin.userWithLogin")(
   function* userWithLogin(snapshot: ConfigSnapshot, login: string) {
     const tables = userTables(snapshot);
-    const key = textKey(login.normalize("NFC").trim(), false);
+    const key = loginKey(login);
 
     const [user] = yield* readRows(
       sql`SELECT "u"."id"::text AS "id"
 FROM ${tables.user} AS "u"
-WHERE casefold(("u".${rawSql(quoteIdent(tables.login))}) COLLATE pg_unicode_fast) = ${textParameter(key, "text")}`
+WHERE casefold(("u".${tables.login}) COLLATE pg_unicode_fast) = ${textParameter(key, "text")}`
     );
 
     return user?.id ?? undefined;
@@ -154,11 +152,11 @@ export const ensureUser = Effect.fn("BootstrapAdmin.ensureUser")(
 
         const existing = yield* userWithLogin(snapshot, account.login);
 
-        if (existing !== undefined && SERVICE_USER_IDS.has(existing)) {
-          return yield* new NotAllowed();
-        }
+        if (existing !== undefined) {
+          if (SERVICE_USER_IDS.has(existing)) {
+            return yield* new NotAllowed();
+          }
 
-        if (existing !== undefined && existing !== null) {
           return {
             outcome: "exists",
             userId: existing,

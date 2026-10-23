@@ -272,7 +272,14 @@ const foreignKey = (
   type: "f",
 });
 
-const tableKeyOf = (
+/**
+ * Resolves a class's catalog key through its namespace.
+ *
+ * @param snapshot - The configuration.
+ * @param classId - The class ID.
+ * @returns The key, or undefined when its class or namespace is absent.
+ */
+export const tableKeyOf = (
   snapshot: ConfigSnapshot,
   classId: string
 ): string | undefined => {
