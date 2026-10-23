@@ -14,7 +14,7 @@ import type { SchemaRevision } from "./domain/schema-revision.ts";
  * 6.2, 6.4), sent as `STD-Schema-Revision`: a list request sends the
  * revision of the metadata its filter, sort and columns came from, so
  * the server can refuse it with `SchemaChanged` when a relevant change
- * happened since. A request built from no metadata (start-up's `auth/me`,
+ * happened since. A request built from no metadata (start-up's `session/current`,
  * sign-in) sends none, which the contract allows; that is the default.
  */
 export const RequestRevision = Context.Reference<Option.Option<SchemaRevision>>(

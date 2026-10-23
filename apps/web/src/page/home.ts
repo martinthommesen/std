@@ -69,7 +69,7 @@ const tablesView = <Message>(tables: Tables, h: HtmlBuilder<Message>): Html =>
   );
 
 /**
- * The home page: the tables the user can open (`GET meta/tables`), each
+ * The home page: the tables the user can open (`GET tableMetadata`), each
  * linking to its list.
  *
  * @param user - Who is signed in.

@@ -47,7 +47,7 @@ export type Tables = typeof Tables.schema.Type;
 /**
  * The app: whether there is a session, and the page.
  *
- * - `CheckingSession`: at start-up, while `auth/me` says whether the
+ * - `CheckingSession`: at start-up, while `session/current` says whether the
  *   browser holds a session cookie (scripts cannot read it).
  * - `SessionUnavailable`: the server could not be asked; the user can
  *   retry.
@@ -56,7 +56,7 @@ export type Tables = typeof Tables.schema.Type;
  *   after sign-in.
  * - `SignedIn`: the user, the page and any sign-out in progress; the
  *   tables the user can open; the latest schema revision a response
- *   stated (Contracts 6.2), seeded from `auth/me` or sign-in; the list
+ *   stated (Contracts 6.2), seeded from `session/current` or sign-in; the list
  *   page's state on a list route, the form page's on a record's or the
  *   new-record route, and the number the next page gets. `sessionId`
  *   numbers the session within the app's run: every root request carries

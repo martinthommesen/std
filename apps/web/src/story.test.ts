@@ -1021,7 +1021,7 @@ describe("review fixes: pages and revisions", () => {
     );
   });
 
-  it("a deep link's first requests carry the revision auth/me stated", () => {
+  it("a deep link's first requests carry the revision session/current stated", () => {
     const entered = update(
       init(urlOf("/tables/acme.asset")).model,
       Message.SucceededLoadCurrentUser({

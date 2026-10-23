@@ -543,7 +543,7 @@ const restrictedStaysHidden = async (
 };
 
 /**
- * Each visitor's navigation lists exactly the tables `GET meta/tables`
+ * Each visitor's navigation lists exactly the tables `GET tableMetadata`
  * returns for that visitor.
  *
  * @param browser - The browser.
