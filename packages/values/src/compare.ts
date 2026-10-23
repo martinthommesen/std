@@ -22,7 +22,7 @@ import {
   isDecimal,
 } from "./decimal.ts";
 import type { Decimal } from "./decimal.ts";
-import { isCaseSensitive } from "./field-type.ts";
+import { comparisonClass, isCaseSensitive } from "./field-type.ts";
 import type { FieldKind, FieldType } from "./field-type.ts";
 import { isBigint, isBoolean, isNumber, isString } from "./field-value.ts";
 import type { StoredValue } from "./field-value.ts";
@@ -164,37 +164,6 @@ const asNumeric = (value: ComparableValue): NumericValue | undefined => {
   }
 };
 
-const classOf = (value: ComparableValue): string => {
-  switch (value.kind) {
-    case "integer":
-    case "bigInteger":
-    case "decimal": {
-      return "numeric";
-    }
-
-    case "text":
-    case "longText": {
-      return "text";
-    }
-
-    case "reference":
-    case "uuid": {
-      return "uuid";
-    }
-
-    case "boolean":
-    case "date":
-    case "dateTime":
-    case "choice": {
-      return value.kind;
-    }
-
-    default: {
-      return value satisfies never;
-    }
-  }
-};
-
 const keyOf = (value: ComparableValue): ComparableValue["value"] =>
   value.kind === "text" || value.kind === "longText"
     ? textKey(value.value, value.caseSensitive)
@@ -222,7 +191,10 @@ export const typeEquals = (
     );
   }
 
-  return classOf(left) === classOf(right) && keyOf(left) === keyOf(right);
+  return (
+    comparisonClass(left.kind) === comparisonClass(right.kind) &&
+    keyOf(left) === keyOf(right)
+  );
 };
 
 /**

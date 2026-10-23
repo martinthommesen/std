@@ -10,7 +10,7 @@
  * Booleans are never null: absent on create stores false (or the default),
  * and an explicit null is `InvalidValue`.
  */
-import { decodeIn } from "./codec.ts";
+import { decodeIn, emptyValue } from "./codec.ts";
 import { ok } from "./field-error.ts";
 import type { Decoded } from "./field-error.ts";
 import type { FieldKind, FieldType, FieldTypeOf } from "./field-type.ts";
@@ -101,7 +101,7 @@ export function planCreate(
   return ok({
     action: "set",
     source: "empty",
-    value: type.kind === "boolean" ? false : null,
+    value: emptyValue(type.kind),
   });
 }
 

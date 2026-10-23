@@ -86,7 +86,13 @@ export const compareJsonbKeys = (left: string, right: string): number =>
  * @returns Its own enumerable keys, sorted as jsonb stores them.
  */
 export const jsonbKeys = (object: JsonObject): string[] =>
-  Object.keys(object).toSorted(compareJsonbKeys);
+  Object.keys(object)
+    .map((key) => ({ bytes: utf8Length(key), key }))
+    .toSorted(
+      (left, right) =>
+        left.bytes - right.bytes || compareCodePoints(left.key, right.key)
+    )
+    .map(({ key }) => key);
 
 type Equality = (left: JsonValue, right: JsonValue) => boolean;
 
