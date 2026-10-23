@@ -1776,7 +1776,6 @@ const receiveTarget = (
 
   const waiting = Record.toEntries(model.pickers).flatMap(
     ([fieldId, picker]) =>
-      targetOfField(known, fieldId) === target.name &&
       AsyncData.isPending(picker.results)
         ? [searchTargets(fieldId, picker.query)]
         : []
