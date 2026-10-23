@@ -36,6 +36,18 @@ export const ListQuery = {
 
 const ifMatch = { "if-match": Schema.String } as const;
 
+/** A history list's named query parameters (Contracts 3.7, 10.4). */
+export const HistoryQuery = {
+  actor: Schema.optionalKey(Schema.String),
+  field: Schema.optionalKey(Schema.String),
+  fields: Schema.optionalKey(Schema.String),
+  kind: Schema.optionalKey(Schema.String),
+  limit: Schema.optionalKey(Schema.String),
+  offset: Schema.optionalKey(Schema.String),
+  since: Schema.optionalKey(Schema.String),
+  until: Schema.optionalKey(Schema.String),
+} as const;
+
 /** The collections and their resources. */
 export class RecordsGroup extends HttpApiGroup.make("records").add(
   HttpApiEndpoint.get("list", "/:table", {
@@ -85,11 +97,16 @@ export class RecordsGroup extends HttpApiGroup.make("records").add(
   HttpApiEndpoint.get("history", `${ITEM_PATH}/history`, {
     error: READ_ERRORS,
     params: tableAndId,
+    query: HistoryQuery,
     success: Schema.Array(ChangeEntry),
-  }),
+  }).annotate(
+    OpenApi.Description,
+    "The record's change entries the caller may see (Contracts 3.7, 10.4). Besides the named parameters, ChangeEntry attributes filter with the operator forms of 10.3: `action`, `kind`, `revision` and `creationDate` with `.gt`/`.gte`/`.lt`/`.lte`, `revisedBy.id`."
+  ),
   HttpApiEndpoint.get("historyEntry", `${ITEM_PATH}/history/:changeId`, {
     error: READ_ERRORS,
     params: { ...tableAndId, changeId: Schema.String },
+    query: { fields: Schema.optionalKey(Schema.String) },
     success: ChangeEntry,
   })
 ) {}

@@ -330,6 +330,7 @@ const tableEntries = (
         href: `${origin}${METADATA_PATH}/${collection}`,
         id: collection,
         label: entry.label,
+        name: entry.name,
         resourceType: typeNameOf(snapshot, classId),
       },
     ];
@@ -534,6 +535,7 @@ export const FixedRoutes = Layer.unwrap(
       Effect.gen(function* tableRoute() {
         const { described } = yield* metadataOf(collection);
         const { revision } = yield* RequestRevision;
+        const snapshot = yield* (yield* Catalog).current;
 
         return jsonAnswer(
           {
@@ -546,6 +548,7 @@ export const FixedRoutes = Layer.unwrap(
             })),
             href: `${origin}${METADATA_PATH}/${collection}`,
             id: collection,
+            resourceType: typeNameOf(snapshot, described.id),
             schemaRevision: revision,
           },
           200

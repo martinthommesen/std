@@ -67,6 +67,12 @@ export interface TestHttpClientApi {
     path: string,
     options?: TestRequestOptions
   ) => Effect.Effect<TestResponse>;
+  /**
+   * A `fetch` over the same application, for typed clients built with
+   * `FetchHttpClient` (`FetchHttpClient.Fetch`). Responses are not checked
+   * against the `/api/v2` contract; the typed client decodes them itself.
+   */
+  readonly fetch: typeof globalThis.fetch;
   /** Signs in and returns the session token; dies when sign-in fails. */
   readonly signIn: (login: string, password: string) => Effect.Effect<string>;
   /**
@@ -251,8 +257,12 @@ export class TestHttpClient extends Context.Service<
         }
       );
 
+      const fetchOver: typeof globalThis.fetch = async (input, init) =>
+        await handler(new Request(input, init));
+
       return TestHttpClient.of({
         cookieSignIn,
+        fetch: fetchOver,
         get: (path, options) => request("GET", path, options),
         request,
         signIn,
