@@ -128,10 +128,10 @@ export const recordContextOf = (
 const renderValue = (
   attribute: ValueAttribute,
   record: SourceRecord,
-  context: RenderContext
+  context: RecordContext
 ): JsonValue | undefined =>
   readableOn(attribute, record)
-    ? attribute.render(record.values, recordContextOf(context, record))
+    ? attribute.render(record.values, context)
     : undefined;
 
 /**
@@ -148,6 +148,8 @@ export const renderItem = (
   part: SourceRecord,
   context: RenderContext
 ): JsonObject => {
+  const recordContext = recordContextOf(context, part);
+
   const rendered = new Map<string, JsonValue>([
     ["@type", item.type],
     ["id", part.id],
@@ -166,7 +168,7 @@ export const renderItem = (
     const value =
       attribute.kind === "parts"
         ? itemsOf(attribute)
-        : renderValue(attribute, part, context);
+        : renderValue(attribute, part, recordContext);
 
     if (value !== undefined) {
       rendered.set(attribute.name, value);
@@ -188,11 +190,11 @@ export const renderItem = (
 const renderParts = (
   attribute: PartsAttribute,
   record: SourceRecord,
-  context: RenderContext
+  context: RecordContext
 ): JsonValue | undefined => {
   const owned = (attribute.ownerItems ?? []).flatMap((owner) => {
     const rendered = ownerItemReadable(owner, record)
-      ? owner.render(record.values, recordContextOf(context, record))
+      ? owner.render(record.values, context)
       : undefined;
 
     return rendered === undefined ? [] : [rendered];
@@ -234,6 +236,8 @@ export const renderResource = (
   record: SourceRecord,
   context: ResourceContext
 ): JsonObject => {
+  const recordContext = recordContextOf(context, record);
+
   const rendered = new Map<string, JsonValue>([
     ["id", record.id],
     ["href", context.href],
@@ -247,8 +251,8 @@ export const renderResource = (
     if (selected(attribute.name)) {
       const value =
         attribute.kind === "parts"
-          ? renderParts(attribute, record, context)
-          : renderValue(attribute, record, context);
+          ? renderParts(attribute, record, recordContext)
+          : renderValue(attribute, record, recordContext);
 
       if (value !== undefined) {
         rendered.set(attribute.name, value);
