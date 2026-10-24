@@ -16,6 +16,7 @@ import { constUndefined } from "effect/Function";
 import type { ListQuery } from "../http/api/query.ts";
 import {
   cursorPredicate,
+  cursorRange,
   finishPage,
   keyExpression,
   orderBy,
@@ -264,7 +265,34 @@ export const readDeadPage = Effect.fn("Outbox.readDeadPage")(
       key: { ...key.key, descending: !key.key.descending },
     }));
 
-    const positions = [where];
+    const readingKeys = reversed ? flipped : keys;
+
+    const range = cursorRange(
+      query.cursors.after,
+      query.cursors.before ?? null
+    );
+
+    const bounds =
+      range === undefined
+        ? []
+        : [
+            cursorPredicate(
+              keys,
+              range.after,
+              identSql("r", "id"),
+              false,
+              "int8"
+            ),
+            cursorPredicate(
+              flipped,
+              range.before,
+              identSql("r", "id"),
+              true,
+              "int8"
+            ),
+          ];
+
+    const positions = [where, ...bounds];
 
     if (query.cursors.after !== undefined) {
       positions.push(
@@ -290,6 +318,17 @@ export const readDeadPage = Effect.fn("Outbox.readDeadPage")(
       );
     }
 
+    // Probe the opposite direction in the page's snapshot, including the
+    // moving position but retaining the original interval and masked filters.
+    const position = query.cursors.after ?? query.cursors.before;
+
+    const opposite =
+      position === undefined
+        ? rawSql("FALSE")
+        : sql`EXISTS (SELECT 1 FROM ${relation} AS "r" ${joins}
+          WHERE ${joinSql([where, ...bounds], " AND ")}
+          AND NOT COALESCE(${cursorPredicate(readingKeys, position, identSql("r", "id"), reversed, "int8")}, false))`;
+
     const selected = new Set(query.selection.map((item) => item.field.id));
 
     const columns = [
@@ -299,6 +338,7 @@ export const readDeadPage = Effect.fn("Outbox.readDeadPage")(
           : []
       ),
       rawSql('"r"."restricted"::text AS restricted'),
+      sql`${opposite}::text AS opposite`,
       ...keys.map(
         (key, index) =>
           sql`${key.expression}::text AS ${identSql(["k", String(index)].join(""))}`
@@ -307,34 +347,42 @@ export const readDeadPage = Effect.fn("Outbox.readDeadPage")(
 
     const rows =
       yield* readRows(sql`SELECT ${joinSql(columns, ", ")} FROM ${relation} AS "r" ${joins}
-    WHERE ${joinSql(positions, " AND ")} ORDER BY ${orderBy(reversed ? flipped : keys, identSql("r", "id"), reversed)}
+    WHERE ${joinSql(positions, " AND ")} ORDER BY ${orderBy(readingKeys, identSql("r", "id"), reversed)}
     LIMIT ${textParameter(String(query.limit + 1), "int8")} OFFSET ${textParameter(String(query.offset), "int8")}`);
 
-    const {
-      rows: pageRows,
-      firstCursor,
-      hasMore,
-      nextCursor,
-    } = finishPage(rows, query.limit, reversed, query.sortKeys);
+    const finished = finishPage(
+      rows,
+      query.limit,
+      reversed,
+      query.sortKeys,
+      range
+    );
 
-    const [total] = query.withCount
-      ? yield* readRows(
-          sql`SELECT count(*)::text AS total FROM ${relation} AS "r" ${joins} WHERE ${where}`
-        )
-      : [];
+    const oppositeExists = rows[0]?.opposite === "true";
+    const hasPrevious = reversed ? rows.length > query.limit : oppositeExists;
+    const hasMore = reversed ? oppositeExists : finished.hasMore;
 
     const page: Page = {
-      firstCursor,
+      firstCursor: hasPrevious ? finished.firstCursor : null,
       hasMore,
-      nextCursor,
+      nextCursor: hasMore ? finished.nextCursor : null,
       records: [],
     };
 
+    if (query.withCount) {
+      const [total] = yield* readRows(
+        sql`SELECT count(*)::text AS total FROM ${relation} AS "r" ${joins} WHERE ${where}`
+      );
+
+      return {
+        page: { ...page, count: Number(total?.total ?? "0") },
+        rows: finished.rows,
+      };
+    }
+
     return {
-      page: query.withCount
-        ? { ...page, count: Number(total?.total ?? "0") }
-        : page,
-      rows: pageRows,
+      page,
+      rows: finished.rows,
     };
   }
 );
