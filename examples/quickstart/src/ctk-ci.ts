@@ -3,7 +3,7 @@
  * (Contracts 11.1; CI job "ctk-tmf621").
  *
  * On a disposable empty database from `@std/testing`'s harness it runs
- * `std upgrade --set examples/helpdesk/v3`, creates the administrator
+ * `std upgrade --set examples/helpdesk/v4`, creates the administrator
  * `tmf_ctk` (random password), starts `std serve` on a port the system
  * picks, signs in for a bearer session token and writes the kit's payloads
  * (`ctk-payloads.ts`) to a fresh temporary directory, removed at the end.

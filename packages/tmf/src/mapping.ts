@@ -216,6 +216,20 @@ export interface CustomFilter {
   ) => Result.Result<Expr, AttributeIssue>;
 }
 
+/** A language-independent textual sort value derived from an attribute's sources. */
+export type SortValue =
+  | { readonly source: SourceKey }
+  | { readonly nonBlankSource: SourceKey }
+  | { readonly value: string | null }
+  | { readonly coalesce: readonly SortValue[] }
+  | {
+      readonly cases: readonly {
+        readonly when: Readonly<Record<SourceKey, string>>;
+        readonly result: SortValue;
+      }[];
+      readonly otherwise: SortValue;
+    };
+
 /** Shared by every attribute kind. */
 interface AttributeCommon {
   /** The TMF attribute name (lowerCamelCase). */
@@ -284,7 +298,7 @@ export interface ValueAttribute extends AttributeCommon {
   /** How a TMF filter on it compiles; absent: not filterable (E16). */
   readonly filter?: FieldFilter | CustomFilter;
   /** The field a `sort` on it orders by, if sortable. */
-  readonly sort?: SourceKey;
+  readonly sort?: SourceKey | SortValue;
   /**
    * Whether a merge-patch value is merged into the stored json value (RFC
    * 7396) rather than replacing it: json fields holding objects.
@@ -582,7 +596,13 @@ export const enumAttribute = (
   }
 
   if (options.unsortable !== true) {
-    attribute.sort = source;
+    attribute.sort = {
+      cases: pairs.map(([stored, tmf]) => ({
+        result: { value: tmf },
+        when: { [source]: stored },
+      })),
+      otherwise: { source },
+    };
   }
 
   return attribute;
@@ -713,7 +733,7 @@ export interface DerivedSpec {
   readonly history?: readonly SourceKey[];
   readonly softWrites?: (value: JsonValue) => readonly SourceKey[];
   /** The field a `sort` on it orders by, if sortable. */
-  readonly sort?: SourceKey;
+  readonly sort?: SourceKey | SortValue;
 }
 
 /**

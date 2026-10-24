@@ -64,10 +64,16 @@ const decodeText = (
   }
 
   const converted =
-    type.kind === "text" ? convertSingleLineText(json) : convertLongText(json);
+    type.kind === "text"
+      ? convertSingleLineText(json, type.textPolicy)
+      : convertLongText(json, type.textPolicy);
 
   if (!converted.ok || converted.value === null) {
     return converted;
+  }
+
+  if (type.nonBlank === true && converted.value.trim() === "") {
+    return refuse("emptyNotAllowed", "This field requires non-blank text.");
   }
 
   return checkLength(converted.value, maxLengthOf(type));

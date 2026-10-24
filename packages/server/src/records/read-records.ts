@@ -755,8 +755,8 @@ export interface Page {
 }
 
 const flip = (key: SortKey): SortKey => ({
+  ...key,
   descending: !key.descending,
-  field: key.field,
 });
 
 /**
@@ -782,7 +782,7 @@ export const readPage = Effect.fn("Records.readPage")(function* readPage(
     sortKeys.map((key) => ({
       expression: keyExpression(
         key.field.type,
-        view.value(BASE_ALIAS, key.field)
+        key.expression ?? view.value(BASE_ALIAS, key.field)
       ),
       key,
     }));

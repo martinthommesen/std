@@ -1,6 +1,8 @@
 # 0003 Values: field type representation
 
-Status: accepted, 2026-10-20. Workstream 1D (values half). Contracts 4.3, 5.1 to 5.7, 6.5 to 6.7.
+Status: accepted, 2026-10-20; text conversion superseded by decision 0042 (2026-10-24). Workstream 1D (values half). Contracts 4.3, 5.1 to 5.7, 6.5 to 6.7.
+
+The original normalization policy is retained only for identifier/unclassified fields and historical definitions; explicitly classified free text now preserves accepted scalars under Contracts 5.5.
 
 ## Decisions
 

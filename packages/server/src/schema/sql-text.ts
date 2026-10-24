@@ -16,6 +16,7 @@ import type { FieldType } from "@std/values/field-type";
 import { stringifyJson } from "@std/values/json";
 import { isJsonString } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
+import { TEXT_TRIM_CHARACTERS } from "@std/values/text";
 
 /**
  * Quotes an identifier.
@@ -180,6 +181,17 @@ const lengthPredicates = (
 };
 
 /**
+ * Rows missing required content: prose blanks remain strings, never valid required values.
+ * @param column - The column expression.
+ * @param type - The field type.
+ * @returns The null/non-blank violation predicate, without modifying stored data.
+ */
+export const requiredPredicate = (column: string, type: FieldType): string =>
+  isTextType(type)
+    ? `(${column} IS NULL OR btrim(${column}, ${quoteLiteral(TEXT_TRIM_CHARACTERS)}) = '')`
+    : `${column} IS NULL`;
+
+/**
  * Rows that violate effective field constraints, or constraints tightened
  * from a previous field when one is supplied.
  * @param column - The column expression.
@@ -193,7 +205,7 @@ export const violationPredicates = (
   previous?: EffectiveField
 ): readonly string[] => [
   ...(field.required && previous?.required !== true
-    ? [`${column} IS NULL`]
+    ? [requiredPredicate(column, field.type)]
     : []),
   ...lengthPredicates(column, field.type, previous?.type),
   ...boundPredicates(column, field.type, previous?.type),

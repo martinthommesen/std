@@ -25,6 +25,7 @@
  * | 16 | latest definition revision equals the effective record | `check-config` |
  * | 17 | observed Postgres TLS protocol and cipher (informational) | `check-server` |
  * | 18 | service identities and exclusive role assignments | `check-service-identities` |
+ * | 19 | deterministic ICU list-order identity and index readiness | `config/list-order` |
  */
 import type { DefinitionInvalid } from "@std/definitions/problems";
 import { Effect, Schema } from "effect";
@@ -32,6 +33,7 @@ import { SqlClient } from "effect/sql";
 
 import { loadSnapshot } from "../catalog/load.ts";
 import { layerTablesExist, readLayerState } from "../config/layer-store.ts";
+import { checkListOrder } from "../config/list-order.ts";
 import type { PlatformMigration } from "../platform/migration.ts";
 import { PLATFORM_MIGRATIONS } from "../platform/migrations.ts";
 import { SQLSTATE_LOCK_NOT_AVAILABLE } from "../sql/errors.ts";
@@ -132,6 +134,14 @@ const allChecks = Effect.fn("Doctor.checks")(function* allChecks(
     ...(yield* checkUnicodeVersion),
     ...(yield* checkServerSettings),
     ...(yield* checkDatabaseTls),
+    ...(yield* checkListOrder.pipe(
+      Effect.as<readonly Finding[]>([]),
+      Effect.catchTag("ListOrderRefused", (error) =>
+        Effect.succeed([
+          finding(19, "error", "listOrder", error.message, "core.list_order"),
+        ])
+      )
+    )),
   ];
 
   // The platform tables are compared with their migrations first and on

@@ -44,7 +44,7 @@ const TICKET = "helpdesk.ticket";
 const INCIDENT = "helpdesk.incident";
 
 /** What each version must ship. */
-type Step2Version = Exclude<HelpdeskVersion, "v3">;
+type Step2Version = Extract<HelpdeskVersion, "v1" | "v2">;
 
 interface Expected {
   readonly version: number;

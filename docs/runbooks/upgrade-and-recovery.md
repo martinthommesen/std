@@ -71,7 +71,7 @@ Legacy local rules or subscriptions that name a reserved service identity do not
 psql "$STD_DATABASE_URL" -At <<'SQL'
 UPDATE core.role SET state = 'active' WHERE id = 'f02cabb1-cdc9-5371-81f0-d77cc1cd2ef3'::uuid RETURNING id::text AS value;
 SQL
-pnpm std upgrade --set examples/helpdesk/v3
+pnpm std upgrade --set examples/helpdesk/v4
 pnpm std doctor
 ```
 
@@ -211,3 +211,11 @@ pnpm std doctor
 ```
 
 The second `v2` run changes nothing, the revision included.
+
+## Text policy and list-order upgrades
+
+Core v6 and helpdesk v4 classify prose prospectively; they do not backfill stored text or rewrite history/events. Earlier normalization is irreversible. Upgrade the shipped set with `std upgrade --set examples/helpdesk/v4`; local fields opt in with `textPolicy: freeText`, independently of `nonBlank` and required constraints. Review stored literals/defaults and application assumptions on an authorized upgrade copy; this work makes no production census.
+
+The initial deployment list order is deterministic ICU en-GB. To change it, stop every server and worker, inspect `std upgrade --plan --list-locale sv-SE` (or another installed `pg_catalog.pg_collation.colllocale` with ICU provider), then run the same upgrade with `--expect <hash>` as shown by the CLI. Omitting `--list-locale` retains the installed locale. Locale selection has no fallback. The plan binds provider, actual ICU version, previous policy and generated indexes. After restoring a database onto a different ICU version, startup/doctor refuse the mismatch; perform the same offline upgrade to rebuild before restarting. Never repair this by only refreshing the catalog version.
+
+Migration 0034 installs the policy, resumes existing schema journals before rebuilding their committed index definitions, then replaces all dependent indexes and records a new epoch in one transaction. Non-index dependencies on the STD-owned collation are refused. A failed rebuild rolls back its index/collation/policy changes and is rerunnable; startup refuses an uncompleted initial installation. Restart processes after completion, run `std doctor`, and restart textual pagination: old tokens receive `InvalidCursor`. ID-only and non-text continuations retain their policy. No data rewriting or deployment is authorized by the policy decision.

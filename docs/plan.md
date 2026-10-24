@@ -17,6 +17,8 @@ Where the standards and ServiceNow differ, the standards win. ServiceNow stays t
 
 **Stack (chosen by Martin):** TypeScript + Effect 4 on Node 26, TypeScript 7 strict, pnpm monorepo, Postgres 18 through `@effect/sql-pg` behind STD's own SQL layer, a [Foldkit](https://foldkit.dev) + Vite web app (Martin, 2026-10-21, replacing React). See "Stack" and "Effect".
 
+The 2026-10-24 text-policy change (decisions 0042–0043) preserves classified prose and selects deterministic ICU list ordering. It ships core v6 and helpdesk v4; all remaining stages, gates and TMF/ODA/ITIL requirements below remain in scope. The later helpdesk feature version is v5. This policy implementation does not close pending conformance rows or implement the later import workstream.
+
 ## How this plan is organized
 
 - Six stages: Stage 0 (architecture spike), then Steps 1 to 5. Steps 3 to 5 were re-staged on 2026-10-22 (decision 0021): the old Step 3 items are split between Step 3 and Step 4, and the old Step 4 (release) is now Step 5. A contract that says "Step 4" for a release item means Step 5. Each stage has a gate: evidence that must exist, as passing CI tests or committed measurements, before the next stage starts. The gates use Martin's review table as their base.
@@ -231,7 +233,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 - Groups, nested roles, roles from group membership; API tokens; explain mode; an access-rule editor built on the filter builder; `myGroups` in conditions; one reference hop in access-rule conditions (moved from Step 3).
 - Party roles in `core` and the TMF632, TMF669 and TMF672 adapters over the Step 3 party foundation and over STD's roles and access rules, with config subscriptions for role events (Contracts 4.6, 11.3).
 - The `cmdb` app set and TMF638 and TMF639 (Contracts 11.4).
-- Change requests, approvals, service requests and a minimal request catalog in the helpdesk set v4, behind TMF641 and TMF622 (Contracts 11.5, 14).
+- Change requests, approvals, service requests and a minimal request catalog in the helpdesk set v5 (v4 carries the approved text-policy change), behind TMF641 and TMF622 (Contracts 11.5, 14).
 - CSV and JSON import with source systems and the external identity mapping, matching, field-level conflict detection, reference resolution, jobs with batches, checkpoints, resume, reports and dry run (Contracts 7), moved from Step 3: its first real consumers are CMDB and party loads.
 - `RecordService.saveBatch` (Contracts 7.7), moved from Step 3.
 

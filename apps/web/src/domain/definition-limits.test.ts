@@ -109,9 +109,9 @@ const storedReference = definitionRecord({
 });
 
 describe("a field definition's form", () => {
-  it("shows the type of a field that is not a reference, a required flag that is set, and an unset number prefix read-only", () => {
+  it("shows the type of an integer field, a required flag that is set, and an unset number prefix read-only", () => {
     const page = formOn(
-      definitionRecord({ required: true, type: { kind: "text" } })
+      definitionRecord({ required: true, type: { kind: "integer" } })
     );
 
     expect(showOf(page, "type")).toBe("ReadOnly");
@@ -169,6 +169,37 @@ describe("a field definition's form", () => {
     expect(checkForm(retargeted).problems).toStrictEqual({
       [IDS.type]: [TYPE_CHANGE_TEXT],
     });
+  });
+
+  it("allows text policy edits while retaining fixed kind, case and length settings", () => {
+    const stored = definitionRecord({
+      required: false,
+      type: { kind: "text" },
+    });
+
+    expect(showOf(formOn(stored), "type")).toBe("Editable");
+
+    const changedType = (type: RecordJson["values"][string]) =>
+      formOn(
+        stored,
+        Message.UpdatedText({ fieldId: IDS.type, text: JSON.stringify(type) })
+      );
+
+    expect(
+      checkForm(
+        changedType({ kind: "text", nonBlank: true, textPolicy: "freeText" })
+      ).problems
+    ).toStrictEqual({});
+
+    for (const fixed of [
+      { kind: "longText" },
+      { caseSensitive: true, kind: "text" },
+      { kind: "text", maxLength: 500 },
+    ]) {
+      expect(checkForm(changedType(fixed)).problems).toStrictEqual({
+        [IDS.type]: [TYPE_CHANGE_TEXT],
+      });
+    }
   });
 
   it("applies to no other table", () => {

@@ -32,6 +32,7 @@ import { formatDateTime } from "@std/values/date-time";
 import type { Plaintext } from "@std/values/write-only";
 import { Clock, Duration, Effect, Redacted } from "effect";
 
+import { listOrderKey } from "../config/list-order-key.ts";
 import { readRows, writeRows } from "../records/sql-run.ts";
 import { effectiveRoles } from "./actor.ts";
 import type { ActingUser } from "./actor.ts";
@@ -127,6 +128,7 @@ export const signIn = Effect.fn("Sessions.signIn")(function* signIn(
 ) {
   const failures = yield* admitSignIn(login, source);
   const tables = userTables(snapshot);
+  const indexedLogin = listOrderKey({ kind: "text" }, sql`"u".${tables.login}`);
   const key = loginKey(login);
 
   // FOR NO KEY UPDATE serializes issuance and conflicts with the UPDATE that deactivates the user: a
@@ -137,7 +139,7 @@ export const signIn = Effect.fn("Sessions.signIn")(function* signIn(
     sql`SELECT "u"."id"::text AS "id", "u".${tables.password} AS "password",
   "u".${tables.active}::text AS "active"
 FROM ${tables.user} AS "u"
-WHERE casefold(("u".${tables.login}) COLLATE pg_unicode_fast) = ${textParameter(key, "text")}
+WHERE ${indexedLogin} = ${textParameter(key, "text")}
 FOR NO KEY UPDATE OF "u"`
   );
 

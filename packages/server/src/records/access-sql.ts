@@ -34,6 +34,8 @@ import type { AccessAction } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 
+import { listOrderKey } from "../config/list-order-key.ts";
+
 /** What access-rule conditions are resolved with (Contracts 5.7, 5.10). */
 export interface AccessContext {
   /** The evaluation instant, epoch milliseconds. */
@@ -96,6 +98,7 @@ export const decisionSql = (
     alias,
     hooks: {
       column: (source, field) => identSql(source.alias, field.name),
+      equalityKey: (field, value) => listOrderKey(field.type, value),
       join: () => {
         throw new RangeError("Access-rule conditions follow no reference.");
       },

@@ -404,7 +404,7 @@ const typeLiteral = (
   at: Segments
 ): CheckedOperand | undefined => {
   const converted = convertLiteral(
-    field.type.kind,
+    field.type,
     json.value,
     field.choices === undefined ? {} : { choices: field.choices }
   );
@@ -744,7 +744,11 @@ const typePattern = (
     return undefined;
   }
 
-  const needle = convertNeedleLiteral(pattern, kind, expr.right);
+  const needle = convertNeedleLiteral(
+    pattern,
+    { ...left.field.type, kind },
+    expr.right
+  );
 
   if (!needle.ok) {
     checker.issues.push(literalIssue(needle.error, [...at, "right"]));

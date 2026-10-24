@@ -88,6 +88,8 @@ import {
   SCHEMA_LIFECYCLE,
 } from "./lifecycle.ts";
 import type { PlannedResume, ResumedChangeSet } from "./lifecycle.ts";
+import { applyListOrder, planListOrder } from "./list-order.ts";
+import type { ListOrderRefused } from "./list-order.ts";
 import {
   applySetLoad,
   planSetLoad,
@@ -103,6 +105,8 @@ import { UpgradePlanStale } from "./upgrade-plan-stale.ts";
 
 /** Options of `std upgrade`. */
 export interface UpgradeOptions extends ChangeSetOptions {
+  /** Registered deterministic ICU locale; absent keeps the installed locale, initially en-GB. */
+  readonly listLocale?: string;
   /** App set directories, in any order (loaded in `requires` order). */
   readonly sets?: readonly string[];
   /** The core set (default: the one shipped with the server). */
@@ -132,6 +136,8 @@ export interface PlannedSecurityChange extends SecurityChange {
 
 /** What `std upgrade` will do (`--plan`), and what the real run did first. */
 export interface UpgradePlan {
+  /** Ordering transition and ICU identity; omitted for custom pre-order migration fixtures. */
+  readonly listOrder?: Effect.Success<ReturnType<typeof planListOrder>>;
   readonly stdVersion: string;
   /** The configuration state the plan starts from (null before migrations). */
   readonly basis: {
@@ -173,6 +179,7 @@ export interface UpgradeReport {
 
 /** Errors of `std upgrade --plan`. */
 export type PlanError =
+  | ListOrderRefused
   | UpgradeRefused
   | MigrationStateRefused
   | DefinitionInvalid
@@ -183,6 +190,7 @@ type PlanServices = ChangeSetServices | Scope.Scope;
 
 /** Errors of `std upgrade`. */
 export type UpgradeError =
+  | ListOrderRefused
   | DataBatchSizeInvalid
   | DataMigrationFailed
   | UpgradeIncomplete
@@ -508,11 +516,7 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
   connection: DedicatedConnection,
   options: UpgradeOptions,
   servers: readonly number[]
-): Effect.fn.Return<
-  ComputedPlan,
-  MigrationStateRefused | DefinitionInvalid | DatabaseError,
-  ChangeSetServices
-> {
+): Effect.fn.Return<ComputedPlan, PlanError, ChangeSetServices> {
   const resume = yield* plannedResumes(connection);
   const installed = yield* readInstalledState;
 
@@ -550,7 +554,13 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
           options.lifecycle ?? SCHEMA_LIFECYCLE
         );
 
-  const hashed: HashedPlan = {
+  const listOrder = (options.migrations ?? PLATFORM_MIGRATIONS).some(
+    (migration) => migration.id === 34
+  )
+    ? yield* planListOrder(options.listLocale)
+    : undefined;
+
+  const basePlan: HashedPlan = {
     basis: {
       changeSetId: installed.state?.changeSetId ?? null,
       revision: installed.state?.revision ?? null,
@@ -568,6 +578,9 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
     sets,
     stdVersion: STD_VERSION,
   };
+
+  const hashed =
+    listOrder === undefined ? basePlan : { ...basePlan, listOrder };
 
   return {
     order,
@@ -748,6 +761,16 @@ export const runUpgrade: (
         error: stuck.outcome.error,
         set: null,
       });
+    }
+
+    // Resume the prior release's journal first: an interrupted step can contain
+    // the prior index expression. Rebuild from the committed snapshot afterwards.
+    if (
+      (options.migrations ?? PLATFORM_MIGRATIONS).some(
+        (migration) => migration.id === 34
+      )
+    ) {
+      yield* applyListOrder(connection, options.listLocale);
     }
 
     const sets = yield* applySets(connection, computed, options);

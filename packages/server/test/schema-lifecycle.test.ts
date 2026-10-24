@@ -567,7 +567,7 @@ describe("schema-lifecycle", () => {
 
             assert.strictEqual(renamedTable.state, "completed");
             assert.deepStrictEqual(renamedTable.followUps, [
-              `CREATE UNIQUE INDEX CONCURRENTLY ${generatedName("ix", tableFirst.id)} ON "site"."badge" (casefold("serial" COLLATE pg_unicode_fast))`,
+              `CREATE UNIQUE INDEX CONCURRENTLY ${generatedName("ix", tableFirst.id)} ON "site"."badge" ((casefold("serial" COLLATE pg_unicode_fast) COLLATE core.list_order))`,
             ]);
 
             // A field rename plus a unique index on that field; a duplicate

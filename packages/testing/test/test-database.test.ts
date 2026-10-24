@@ -44,6 +44,7 @@ import { migration0030 } from "@std/server/platform/migrations/0030-form-rules";
 import { migration0031 } from "@std/server/platform/migrations/0031-http-edge";
 import { migration0032 } from "@std/server/platform/migrations/0032-session-expiry";
 import { migration0033 } from "@std/server/platform/migrations/0033-session-issuance";
+import { migration0034 } from "@std/server/platform/migrations/0034-list-order";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
 import { DatabaseConfig } from "@std/server/sql/database-config";
 import { decodeRows } from "@std/server/sql/rows";
@@ -297,6 +298,7 @@ describe("test-database", () => {
         migration0031,
         migration0032,
         migration0033,
+        migration0034,
       ])
     );
     assert.notStrictEqual(

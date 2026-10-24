@@ -12,7 +12,7 @@ import type {
 import { generatedName } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
-import { maxLengthOf } from "@std/values/field-type";
+import { isCaseSensitive, maxLengthOf } from "@std/values/field-type";
 
 import { SESSION_END_TRIGGER } from "../auth/session-revocation.ts";
 import { PLATFORM_MIGRATIONS } from "../platform/migrations.ts";
@@ -68,9 +68,12 @@ export interface DescribedConstraint {
 
 /** An index a class table should have. */
 export interface DescribedIndex {
+  readonly collations?: readonly (string | null)[];
   readonly name: string;
   readonly unique: boolean;
   readonly enforcement: Enforcement;
+  /** Expected Postgres 18 deparsed keys of a definition index. */
+  readonly keys?: (quote: QuoteColumn) => readonly string[];
 }
 
 const TIMESTAMP = "timestamp(3) with time zone";
@@ -430,7 +433,28 @@ export const describedIndexes = (
     unique: true,
   },
   ...snapshot.indexes(definition.id).map((index) => ({
+    collations: index.fieldIds.map((id) => {
+      const kind = snapshot.field(id)?.type.kind;
+
+      return kind === "text" || kind === "choice" ? "core.list_order" : null;
+    }),
     enforcement: index.enforcement,
+    keys: (quote: QuoteColumn) =>
+      index.fieldIds.map((id) => {
+        const field = snapshot.field(id);
+
+        if (field === undefined) {
+          throw new Error(`Index ${index.id} has no field ${id}.`);
+        }
+
+        const column = quote(field.name);
+
+        if (field.type.kind === "text" && !isCaseSensitive(field.type)) {
+          return `casefold(${column} COLLATE pg_unicode_fast)`;
+        }
+
+        return column;
+      }),
     name: generatedName("ix", index.id),
     unique: index.unique,
   })),

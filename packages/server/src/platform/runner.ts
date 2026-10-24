@@ -19,6 +19,8 @@ import { Effect, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { applyListOrder, checkListOrder } from "../config/list-order.ts";
+import type { ListOrderRefused } from "../config/list-order.ts";
 import { schemaKeyHolders } from "../schema/coordinator.ts";
 import { quoteIdent } from "../schema/sql-text.ts";
 import { unlimitedSession } from "../schema/step-spec.ts";
@@ -121,6 +123,7 @@ export interface MigrationOutcome {
 
 /** Errors of the migration step. */
 export type UpgradeError =
+  | ListOrderRefused
   | MigrationStateRefused
   | UpgradeRefused
   | DatabaseError;
@@ -142,7 +145,7 @@ export const checkPlatformMigrations: (
   migrations?: readonly PlatformMigration[]
 ) => Effect.Effect<
   void,
-  MigrationStateRefused | DatabaseError,
+  MigrationStateRefused | DatabaseError | ListOrderRefused,
   SqlClient.SqlClient
 > = Effect.fn("Platform.checkMigrations")(
   function* checkLedgerAtStartup(
@@ -158,6 +161,10 @@ export const checkPlatformMigrations: (
 
     if (refusal !== undefined) {
       return yield* refusal;
+    }
+
+    if (migrations.some((migration) => migration.id === 34)) {
+      yield* checkListOrder;
     }
 
     return yield* Effect.void;
@@ -348,7 +355,7 @@ export const applyPendingMigrations: (
   migrations?: readonly PlatformMigration[]
 ) => Effect.Effect<
   readonly MigrationOutcome[],
-  MigrationStateRefused | DatabaseError
+  MigrationStateRefused | DatabaseError | ListOrderRefused
 > = Effect.fn("Platform.applyPendingMigrations")(
   function* applyPendingMigrations(
     connection: DedicatedConnection,
@@ -408,6 +415,10 @@ export const runPlatformMigrations: (
     }
 
     const outcomes = yield* applyPendingMigrations(connection, migrations);
+
+    if (migrations.some((migration) => migration.id === 34)) {
+      yield* applyListOrder(connection);
+    }
 
     yield* connection.advisoryUnlock(SCHEMA_KEY);
 

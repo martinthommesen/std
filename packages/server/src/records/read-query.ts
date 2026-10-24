@@ -1,10 +1,3 @@
-/**
- * The parameters of a read (Contracts 3.4, 3.5, 6.6): filter, sort,
- * selection, limit, count and labels, each resolved against the caller's
- * visible schema before any query runs. A misspelled name and a
- * never-readable one give the same `UnknownField`, naming what the request
- * said.
- */
 import { InvalidFilter } from "@std/api/errors/invalid-filter";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import type { FilterIssue } from "@std/api/errors/schemas";
@@ -17,6 +10,7 @@ import { resolveCondition, timeZoneFor } from "@std/conditions/resolve";
 import { compileCondition } from "@std/conditions/sql";
 import type { CompiledCondition } from "@std/conditions/sql";
 import { rawSql } from "@std/conditions/sql-fragment";
+import type { SqlFragment } from "@std/conditions/sql-fragment";
 import { locateIssues, parseCondition } from "@std/conditions/syntax-parse";
 import type { ResolvedCondition } from "@std/conditions/typed";
 import type { Condition } from "@std/definitions/condition";
@@ -26,6 +20,15 @@ import type { FieldKind } from "@std/values/field-type";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Option } from "effect";
 
+/**
+ * The parameters of a read (Contracts 3.4, 3.5, 6.6): filter, sort,
+ * selection, limit, count and labels, each resolved against the caller's
+ * visible schema before any query runs. A misspelled name and a
+ * never-readable one give the same `UnknownField`, naming what the request
+ * said.
+ */
+import { listOrderKey } from "../config/list-order-key.ts";
+import { bindListOrder } from "./read-cursor.ts";
 import { AUDIT_FIELDS, fieldInfoOf } from "./read-field.ts";
 import type { ReadField } from "./read-field.ts";
 import type { ReadScope, ReadView } from "./read-view.ts";
@@ -127,6 +130,12 @@ const UNSORTABLE: ReadonlySet<FieldKind> = new Set<FieldKind>([
 export interface SortKey {
   readonly field: ReadField;
   readonly descending: boolean;
+  /** The deployment order identity; absent for non-text keys. */
+  readonly orderPolicy?: string;
+  /** A caller-masked derived value; otherwise the field's masked value. */
+  readonly expression?: SqlFragment;
+  /** Stable projection identity, separate from the backing field's identity. */
+  readonly projection?: string;
 }
 
 /**
@@ -176,7 +185,7 @@ export const parseSort = Effect.fn("ReadQuery.parseSort")(function* parseSort(
     keys.push({ descending, field });
   }
 
-  return keys;
+  return yield* bindListOrder(keys);
 });
 
 /** One selected value: a field of the record, or one hop through a reference. */
@@ -379,6 +388,7 @@ const compileInView = (
           ? { parameters: [], parts: ["NULL"] }
           : sourceView.value(source.alias, readField);
       },
+      equalityKey: (field, value) => listOrderKey(field.type, value),
       join: (target) => ({
         guard: scope
           .view(target.source.classId)

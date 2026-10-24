@@ -22,6 +22,12 @@ const decodeCondition = decodeUnknownOption(ConditionSchema);
 /** A field type, or a definition's `type` as JSON. */
 type TypeJson = JsonValue | undefined;
 
+const MUTABLE_TYPE_SETTINGS: ReadonlySet<string> = new Set([
+  "allowedRecords",
+  "textPolicy",
+  "nonBlank",
+]);
+
 /**
  * The allowed-records condition of a field type.
  *
@@ -46,39 +52,36 @@ export const allowedRecordsOf = (
 };
 
 /**
- * A field type's JSON without its allowed-records setting, for comparing
+ * A field type's immutable settings, for comparing
  * the parts of a type that never change (Contracts 6.5). An explicit
  * `aggregate: false` is the absent default and is dropped too, so the
  * owner-reference setting compares by meaning (4.9: fixed at creation).
  *
  * @param type - A field type or its JSON.
- * @returns The JSON without `allowedRecords`.
+ * @returns The JSON without mutable allowedRecords/textPolicy/nonBlank settings.
  */
-export const withoutAllowedRecords = (type: TypeJson): TypeJson =>
+export const fixedTypeSettings = (type: TypeJson): TypeJson =>
   type !== undefined && isJsonObject(type)
     ? Object.fromEntries(
         Object.entries(type).filter(
           ([key, value]) =>
-            key !== "allowedRecords" &&
+            !MUTABLE_TYPE_SETTINGS.has(key) &&
             !(key === "aggregate" && value === false)
         )
       )
     : type;
 
 /**
- * Whether two field types differ in their allowed-records setting only
- * (or not at all), which is the one change a field's type may take.
+ * Whether two field types retain all fixed settings. The reference predicate
+ * and text validation/preservation policies may change without rewriting rows.
  *
  * @param before - The stored type.
  * @param after - The new type.
- * @returns True when everything but `allowedRecords` is equal.
+ * @returns True when all fixed settings are equal.
  */
-export const sameTypeApartFromAllowedRecords = (
-  before: TypeJson,
-  after: TypeJson
-): boolean => {
-  const left = withoutAllowedRecords(before);
-  const right = withoutAllowedRecords(after);
+export const sameFixedType = (before: TypeJson, after: TypeJson): boolean => {
+  const left = fixedTypeSettings(before);
+  const right = fixedTypeSettings(after);
 
   return left === undefined || right === undefined
     ? left === right

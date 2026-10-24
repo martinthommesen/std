@@ -63,7 +63,7 @@ import { doctorLines, planLines, reportLines } from "./format.ts";
 const USAGE = `Usage: std <command>
 
 Commands:
-  upgrade [--plan] [--json] [--expect <hash>] [--report <file>] [--set <dir>]...
+  upgrade [--plan] [--json] [--expect <hash>] [--report <file>] [--set <dir>]... [--list-locale <ICU locale>]
                   Apply platform migrations, resume interrupted change sets,
                   load the core definition set and each app set, then run
                   data migrations (stop all STD servers first). --plan
@@ -184,6 +184,7 @@ const schemaCommand = (
 
 /** Parsed `std upgrade` arguments. */
 interface UpgradeArguments {
+  readonly listLocale: string | undefined;
   readonly plan: boolean;
   readonly json: boolean;
   readonly expect: string | undefined;
@@ -193,7 +194,7 @@ interface UpgradeArguments {
 
 const FLAGS = new Set(["--plan", "--json"]);
 
-const VALUED = new Set(["--expect", "--report", "--set"]);
+const VALUED = new Set(["--expect", "--report", "--set", "--list-locale"]);
 
 /**
  * Parses the arguments after `upgrade`.
@@ -224,6 +225,7 @@ const upgradeArguments = (
   return {
     expect: values.get("--expect")?.at(-1),
     json: flags.has("--json"),
+    listLocale: values.get("--list-locale")?.at(-1),
     plan: flags.has("--plan"),
     report: values.get("--report")?.at(-1),
     sets: (values.get("--set") ?? []).map((entry) => path.resolve(entry)),
@@ -261,17 +263,22 @@ const upgrade = (args: UpgradeArguments) => {
       ? { sets: args.sets }
       : { expectedPlanHash: args.expect, sets: args.sets };
 
+  const configured =
+    args.listLocale === undefined
+      ? options
+      : { ...options, listLocale: args.listLocale };
+
   // `--json` alone plans too (Contracts 8.5: `--plan` and `--json` change nothing).
   const run =
     args.plan || args.json
-      ? planUpgrade(options).pipe(
+      ? planUpgrade(configured).pipe(
           Effect.map((plan) => ({
             lines: planLines(plan),
             refused: plan.refusals.length > 0,
             text: JSON.stringify(plan, null, 2),
           }))
         )
-      : runUpgrade(options).pipe(
+      : runUpgrade(configured).pipe(
           Effect.map((report) => ({
             lines: reportLines(report),
             refused: false,

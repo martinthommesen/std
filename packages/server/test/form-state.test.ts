@@ -19,7 +19,7 @@ import { runUpgrade } from "../src/config/upgrade.ts";
 import { revisionHeaderValue } from "../src/http/schema-revision-header.ts";
 import { asObject, numberOf, textOf } from "./api-support.ts";
 import {
-  HELPDESK_V3,
+  HELPDESK_V4,
   clientFor,
   createTicket,
   itilLayer,
@@ -594,7 +594,7 @@ describe("form-state", () => {
           id: rule.id,
           version: rule.version,
         });
-        yield* runUpgrade({ sets: [HELPDESK_V3] });
+        yield* runUpgrade({ sets: [HELPDESK_V4] });
         const verdict = yield* preview({ impact: "1", urgency: "1" });
         assert.strictEqual(verdict.fields.priority?.readOnly, false);
 

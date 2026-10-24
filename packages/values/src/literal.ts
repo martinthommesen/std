@@ -18,7 +18,7 @@ import { parseDecimal, rescaleDecimal } from "./decimal.ts";
 import type { Decimal } from "./decimal.ts";
 import { ok, refuse } from "./field-error.ts";
 import type { Decoded } from "./field-error.ts";
-import type { FieldKind } from "./field-type.ts";
+import type { FieldKind, FieldType, FieldTypeOf } from "./field-type.ts";
 import {
   BIG_INTEGER_MAX,
   BIG_INTEGER_MIN,
@@ -57,6 +57,10 @@ export interface LiteralOptions {
   readonly choices?: ChoiceList;
 }
 
+/** Literal conversion needs the kind and text policy, but ignores field limits. */
+export type LiteralType = Pick<FieldType, "kind"> &
+  Pick<FieldTypeOf<"text">, "textPolicy">;
+
 const typeLimit = (kind: "text" | "longText"): number =>
   kind === "text" ? TEXT_MAX_LENGTH_LIMIT : LONG_TEXT_MAX_LENGTH;
 
@@ -65,14 +69,17 @@ const wrongType = (expected: string): Decoded<never> =>
 
 const convertTextLiteral = (
   kind: "text" | "longText",
-  json: JsonValue
+  json: JsonValue,
+  policy: FieldTypeOf<"text">["textPolicy"]
 ): Decoded<string> => {
   if (!isJsonString(json)) {
     return wrongType("a string");
   }
 
   const converted =
-    kind === "text" ? convertSingleLineText(json) : convertLongText(json);
+    kind === "text"
+      ? convertSingleLineText(json, policy)
+      : convertLongText(json, policy);
 
   if (!converted.ok) {
     return converted;
@@ -113,21 +120,23 @@ const stringLiteral = <A>(
  * Converts the literal of `eq`, `ne`, `lt` to `ge`, `in` and `notIn` (one
  * list element at a time) under the left field's type.
  *
- * @param kind - The left field's kind.
+ * @param type - The left field's kind and text policy.
  * @param json - The literal in the type's canonical JSON form.
  * @param options - Choice list for choice fields.
  * @returns The literal's value, or an `InvalidValue`: `notComparable` for
  *   password, secret, json and condition, which have no equality.
  */
 export const convertLiteral = (
-  kind: FieldKind,
+  type: LiteralType,
   json: JsonValue,
   options: LiteralOptions = {}
 ): Decoded<LiteralValue> => {
+  const { kind } = type;
+
   switch (kind) {
     case "text":
     case "longText": {
-      return convertTextLiteral(kind, json);
+      return convertTextLiteral(kind, json, type.textPolicy);
     }
 
     case "integer": {
@@ -244,14 +253,14 @@ export const convertNumberText = (
  * limit). Fold it with `likePattern` or `matchesPattern`.
  *
  * @param operator - The pattern operator (`notContains` uses `contains`).
- * @param kind - The left field's kind, text or long text.
+ * @param type - The text field's kind and text policy.
  * @param json - The needle.
  * @returns The NFC needle, or an `InvalidValue`; `emptyNeedle` for an empty
  *   `contains` needle.
  */
 export const convertNeedleLiteral = (
   operator: PatternOperator,
-  kind: "text" | "longText",
+  type: FieldTypeOf<"text" | "longText">,
   json: JsonValue
 ): Decoded<string> => {
   if (!isJsonString(json)) {
@@ -262,9 +271,9 @@ export const convertNeedleLiteral = (
     return refuse("emptyNeedle", "contains needs a non-empty needle.");
   }
 
-  const converted = convertNeedle(json);
+  const converted = convertNeedle(json, type.textPolicy);
 
   return converted.ok
-    ? checkLength(converted.value, typeLimit(kind))
+    ? checkLength(converted.value, typeLimit(type.kind))
     : converted;
 };

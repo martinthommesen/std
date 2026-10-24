@@ -1,15 +1,11 @@
 /**
  * Text write conversion (Contracts 5.5), shared by server and browser.
  *
- * 1. Refuse text that is not well-formed Unicode or contains U+0000.
- * 2. Normalize to NFC.
- * 3. Single-line text: refuse CR, LF, U+2028, U+2029 and control characters
- *    other than tab; trim with the ECMAScript `trim()` set; `""` becomes null.
- * 4. Long text: CRLF and CR become LF; no trimming; whitespace-only becomes
- *    null.
- * 5. Length is counted in code points.
- *
- * Needles for `contains`, `startsWith` and `endsWith` get steps 1, 2 and 5.
+ * Both policies validate Unicode, U+0000, the single-line repertoire and
+ * code-point length. `freeText` retains every accepted scalar, including
+ * empty/whitespace strings and CR/LF sequences in long text. The absent or
+ * `normalized` policy retains NFC, identifier trimming and legacy blank/null
+ * conversion. Pattern needles follow the field policy without trimming.
  */
 import { ok, refuse } from "./field-error.ts";
 import type { Decoded, Refused } from "./field-error.ts";
@@ -22,6 +18,13 @@ export const TEXT_MAX_LENGTH_LIMIT = 4000;
 
 /** The maximum length of long text, in code points. */
 export const LONG_TEXT_MAX_LENGTH = 1_000_000;
+
+/**
+ * ECMAScript WhiteSpace/LineTerminator set for SQL adapters of trim-based checks.
+ * https://tc39.es/ecma262/#sec-white-space and #sec-line-terminators.
+ */
+export const TEXT_TRIM_CHARACTERS =
+  "\u0009\u000A\u000B\u000C\u000D\u0020\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF";
 
 const LAST_BMP = 0xff_ff;
 const TAB = 0x09;
@@ -88,14 +91,16 @@ const hasRefusedSingleLineCharacter = (text: string): boolean => {
 };
 
 /**
- * Write conversion for single-line text (steps 1 to 3).
+ * Write conversion for single-line text.
  *
  * @param input - The text as received.
- * @returns The stored text, null for empty, or `notWellFormed`,
+ * @param policy - Explicit scalar preservation or the normalized identifier policy.
+ * @returns The accepted text, null for normalized empty text, or `notWellFormed`,
  *   `nulCharacter` or `controlCharacter`. Length is checked by the caller.
  */
 export const convertSingleLineText = (
-  input: string
+  input: string,
+  policy: "normalized" | "freeText" = "normalized"
 ): Decoded<string | null> => {
   const encodingError = checkEncoding(input);
 
@@ -103,7 +108,7 @@ export const convertSingleLineText = (
     return encodingError;
   }
 
-  const normalized = input.normalize("NFC");
+  const normalized = policy === "freeText" ? input : input.normalize("NFC");
 
   if (hasRefusedSingleLineCharacter(normalized)) {
     return refuse(
@@ -112,23 +117,35 @@ export const convertSingleLineText = (
     );
   }
 
+  if (policy === "freeText") {
+    return ok(input);
+  }
+
   const trimmed = normalized.trim();
 
   return ok(trimmed === "" ? null : trimmed);
 };
 
 /**
- * Write conversion for long text (steps 1, 2 and 4).
+ * Write conversion for long text.
  *
  * @param input - The text as received.
- * @returns The stored text with LF line ends, null for whitespace-only, or
+ * @param policy - Explicit scalar preservation or the normalized identifier policy.
+ * @returns The accepted text (normalized policy converts line endings and blanks), or
  *   `notWellFormed` or `nulCharacter`. Length is checked by the caller.
  */
-export const convertLongText = (input: string): Decoded<string | null> => {
+export const convertLongText = (
+  input: string,
+  policy: "normalized" | "freeText" = "normalized"
+): Decoded<string | null> => {
   const encodingError = checkEncoding(input);
 
   if (encodingError !== undefined) {
     return encodingError;
+  }
+
+  if (policy === "freeText") {
+    return ok(input);
   }
 
   const converted = input.normalize("NFC").replaceAll(CR_LF_OR_CR, "\n");
@@ -137,16 +154,22 @@ export const convertLongText = (input: string): Decoded<string | null> => {
 };
 
 /**
- * Conversion for pattern needles (steps 1 and 2; the caller counts length).
+ * Conversion for pattern needles (the caller counts length).
  * Needles are not trimmed and may be empty.
  *
  * @param input - The needle as written.
- * @returns The NFC needle, or `notWellFormed` or `nulCharacter`.
+ * @param policy - The field's scalar policy.
+ * @returns The policy-converted needle, or `notWellFormed` or `nulCharacter`.
  */
-export const convertNeedle = (input: string): Decoded<string> => {
+export const convertNeedle = (
+  input: string,
+  policy: "normalized" | "freeText" = "normalized"
+): Decoded<string> => {
   const encodingError = checkEncoding(input);
 
-  return encodingError ?? ok(input.normalize("NFC"));
+  return (
+    encodingError ?? ok(policy === "freeText" ? input : input.normalize("NFC"))
+  );
 };
 
 /**
@@ -159,7 +182,13 @@ export const convertNeedle = (input: string): Decoded<string> => {
 export const checkLength = (
   text: string,
   maxLength: number
-): Decoded<string> =>
-  codePointLength(text) <= maxLength
+): Decoded<string> => {
+  const length = codePointLength(text);
+
+  return length <= maxLength
     ? ok(text)
-    : refuse("tooLong", `Text is limited to ${maxLength} characters.`);
+    : refuse(
+        "tooLong",
+        `maxLength=${maxLength} code points; asked for ${length}.`
+      );
+};

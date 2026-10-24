@@ -17,7 +17,7 @@ export const CLI = fileURLToPath(
 
 /** The helpdesk definition set v3 (TMF621 is served over it). */
 export const HELPDESK_SET = fileURLToPath(
-  new URL("../../helpdesk/v3", import.meta.url)
+  new URL("../../helpdesk/v4", import.meta.url)
 );
 
 /** The repository's root. */
@@ -67,7 +67,7 @@ export const startHelpdeskServer = Effect.fn("HelpdeskServer.start")(
     };
 
     yield* run(
-      "std upgrade --set examples/helpdesk/v3",
+      "std upgrade --set examples/helpdesk/v4",
       process.execPath,
       [CLI, "upgrade", "--set", HELPDESK_SET],
       env

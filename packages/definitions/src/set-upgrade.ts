@@ -25,7 +25,7 @@ import { isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { isSuccess } from "effect/Result";
 
-import { sameTypeApartFromAllowedRecords } from "./allowed-records.ts";
+import { sameFixedType } from "./allowed-records.ts";
 import { applyOperations } from "./apply.ts";
 import type { AppliedChangeSet, ApplyError } from "./apply.ts";
 import type { Definition, Owner } from "./definition.ts";
@@ -551,17 +551,14 @@ const checkExisting = (
     return false;
   }
 
-  // A reference's allowed-records condition may change with a new set
-  // version (decision 0020); any other type change may not.
-  if (
-    current.kind === "field" &&
-    !sameTypeApartFromAllowedRecords(current.type, target.type)
-  ) {
+  // Only the reference predicate and prospective text policies may change;
+  // storage kind, target, case and length remain fixed.
+  if (current.kind === "field" && !sameFixedType(current.type, target.type)) {
     refuse(
       planning,
       "typeChanged",
       current.id,
-      `The set changes the type of ${name}; types never change in v0.1. Add a new field and retire this one.`
+      `The set changes the type of ${name}; fixed type settings cannot change. Add a new field and retire this one.`
     );
 
     return false;

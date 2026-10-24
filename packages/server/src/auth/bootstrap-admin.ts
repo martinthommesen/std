@@ -34,6 +34,7 @@ import type { JsonValue } from "@std/values/json-value";
 import { Effect, Layer, Redacted, Schema } from "effect";
 
 import { Catalog } from "../catalog/catalog.ts";
+import { listOrderKey } from "../config/list-order-key.ts";
 import { OutboxSaveHooks } from "../records/outbox-producer.ts";
 import { createRecord } from "../records/save-pipeline.ts";
 import { readRows } from "../records/sql-run.ts";
@@ -94,12 +95,18 @@ const BootstrapSaveServices = Layer.mergeAll(
 const userWithLogin = Effect.fn("BootstrapAdmin.userWithLogin")(
   function* userWithLogin(snapshot: ConfigSnapshot, login: string) {
     const tables = userTables(snapshot);
+
+    const indexedLogin = listOrderKey(
+      { kind: "text" },
+      sql`"u".${tables.login}`
+    );
+
     const key = loginKey(login);
 
     const [user] = yield* readRows(
       sql`SELECT "u"."id"::text AS "id"
 FROM ${tables.user} AS "u"
-WHERE casefold(("u".${tables.login}) COLLATE pg_unicode_fast) = ${textParameter(key, "text")}`
+WHERE ${indexedLogin} = ${textParameter(key, "text")}`
     );
 
     return user?.id ?? undefined;

@@ -17,6 +17,7 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { isString } from "@std/values/field-value";
 import { Effect, Option } from "effect";
 
+import { listOrderKey } from "../config/list-order-key.ts";
 import { recordRelation } from "../records/relation.ts";
 import { loadRecord, loadRoot } from "../records/save-sql.ts";
 import { readRows } from "../records/sql-run.ts";
@@ -92,6 +93,7 @@ export const selectForEach = Effect.fn("Rules.selectForEach")(
         alias: FOR_EACH_ALIAS,
         hooks: {
           column: (source, field) => identSql(source.alias, field.name),
+          equalityKey: (field, value) => listOrderKey(field.type, value),
           join: () => {
             throw new RangeError("A forEach condition follows no reference.");
           },

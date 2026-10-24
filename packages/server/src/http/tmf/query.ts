@@ -43,14 +43,15 @@ import type {
   PartsChanged,
   Pattern,
 } from "@std/conditions/ast";
+import { joinSql, rawSql, sql } from "@std/conditions/sql-fragment";
 import type { Attribute, ValueAttribute } from "@std/tmf/mapping";
 import { parseTmfFields, parseTmfSort } from "@std/tmf/query";
 import type { QueryIssue } from "@std/tmf/query";
-import { Effect, Option, Result } from "effect";
+import { Effect, Option, Predicate, Result } from "effect";
 
-import { decodeCursor } from "../../records/read-cursor.ts";
+import { bindListOrder, decodeCursor } from "../../records/read-cursor.ts";
 import type { CursorPosition } from "../../records/read-cursor.ts";
-import { parseLimit } from "../../records/read-query.ts";
+import { BASE_ALIAS, parseLimit } from "../../records/read-query.ts";
 import type { SortKey } from "../../records/read-query.ts";
 import type { ReadScope, ReadView } from "../../records/read-view.ts";
 import {
@@ -63,6 +64,7 @@ import type { Comparison } from "../api/query.ts";
 import type { QueryParameters } from "../api/request.ts";
 import type { MappedResource } from "./context.ts";
 import { extensionsOf, knownOn, typeAttributesFor } from "./context.ts";
+import { compileSortValue } from "./sort-value.ts";
 import { readFieldOf } from "./sources.ts";
 
 /** The directives of a TMF list. */
@@ -440,22 +442,74 @@ const parseSortKeys = Effect.fn("TmfQuery.sort")(function* parseSortKeys(
   for (const key of parsed.success) {
     const attribute = knownByName.get(key.attribute);
 
-    const field =
-      attribute?.kind === "value" && attribute.sort !== undefined
-        ? readFieldOf(view, attribute.sort)
-        : undefined;
-
-    if (field === undefined) {
+    if (attribute?.kind !== "value" || attribute.sort === undefined) {
       return yield* queryIssueError({
         attribute: key.attribute,
         kind: "unsortable",
       });
     }
 
-    keys.push({ descending: key.descending, field });
+    if (Predicate.isString(attribute.sort)) {
+      const field = readFieldOf(view, attribute.sort);
+
+      if (field === undefined) {
+        return yield* queryIssueError({
+          attribute: key.attribute,
+          kind: "unsortable",
+        });
+      }
+
+      keys.push({ descending: key.descending, field });
+      continue;
+    }
+
+    const fields = attribute.sources.map((source) => ({
+      field: readFieldOf(view, source),
+      source,
+    }));
+
+    const first = fields.at(0)?.field;
+
+    if (
+      first === undefined ||
+      fields.some((entry) => entry.field === undefined)
+    ) {
+      return yield* queryIssueError({
+        attribute: key.attribute,
+        kind: "unsortable",
+      });
+    }
+
+    const source = (id: string) => {
+      const field = fields.find((entry) => entry.source === id)?.field;
+
+      if (field === undefined) {
+        throw new Error(
+          `Mapped sort ${attribute.name} reads undeclared source ${id}.`
+        );
+      }
+
+      return view.value(BASE_ALIAS, field);
+    };
+
+    const readable = fields.map((entry) =>
+      entry.field === undefined
+        ? rawSql("false")
+        : view.readable(BASE_ALIAS, entry.field)
+    );
+
+    keys.push({
+      descending: key.descending,
+      expression: sql`(CASE WHEN ${joinSql(readable, " AND ")} THEN ${compileSortValue(attribute.sort, source)} ELSE NULL END)`,
+      field: {
+        ...first,
+        type: { caseSensitive: true, kind: "longText", textPolicy: "freeText" },
+      },
+      projection: `/tmf/${attribute.name}/${JSON.stringify(attribute.sort)}`,
+    });
   }
 
-  return keys;
+  return yield* bindListOrder(keys);
 });
 
 /**

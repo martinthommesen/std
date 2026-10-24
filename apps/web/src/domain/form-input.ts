@@ -222,6 +222,13 @@ const textJson = (
   const { kind } = field.type;
 
   if (kind === "text" || kind === "longText") {
+    if (
+      (field.type.kind === "text" || field.type.kind === "longText") &&
+      field.type.textPolicy === "freeText"
+    ) {
+      return Result.succeed(text);
+    }
+
     return Result.succeed(text === "" ? null : text);
   }
 

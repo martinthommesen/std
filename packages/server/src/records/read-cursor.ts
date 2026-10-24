@@ -2,8 +2,8 @@
  * Sorting and keyset cursors (Contracts 3.5).
  *
  * Every sort key is the field's masked expression (so a hidden value sorts
- * exactly like empty), text keys in code point order (`pg_unicode_fast`;
- * case-insensitive text by its `casefold` key). Ascending keys sort
+ * exactly like empty), text keys under the deployment's deterministic ICU collation
+ * (case-insensitive text by its Unicode `casefold` key). Ascending keys sort
  * `NULLS LAST`, descending ones `NULLS FIRST`, and `id` ascending breaks
  * ties.
  *
@@ -33,7 +33,7 @@ import {
   textParameter,
 } from "@std/conditions/sql-fragment";
 import type { SqlFragment } from "@std/conditions/sql-fragment";
-import { isCaseSensitive, parameterCast } from "@std/values/field-type";
+import { parameterCast } from "@std/values/field-type";
 import type { FieldType } from "@std/values/field-type";
 import { checkInteger } from "@std/values/integer";
 import {
@@ -45,6 +45,8 @@ import {
 import { parseUuid } from "@std/values/uuid";
 import { Effect, Schema } from "effect";
 
+import { hasLanguageOrder, listOrderKey } from "../config/list-order-key.ts";
+import { checkListOrder } from "../config/list-order.ts";
 import type { SortKey } from "./read-query.ts";
 
 /** A sort key compiled over masked expressions. */
@@ -105,8 +107,6 @@ const decodeCursorJson = Schema.decodeUnknownEffect(
 
 const encodeCursorJson = Schema.encodeSync(Schema.fromJsonString(CursorSchema));
 
-const COLLATION = rawSql(" COLLATE pg_unicode_fast");
-
 /**
  * The sort expression of a field's masked expression.
  *
@@ -117,15 +117,27 @@ const COLLATION = rawSql(" COLLATE pg_unicode_fast");
 export const keyExpression = (
   type: FieldType,
   masked: SqlFragment
-): SqlFragment => {
-  if (type.kind === "text" || type.kind === "longText") {
-    return isCaseSensitive(type)
-      ? sql`(${masked}${COLLATION})`
-      : sql`(casefold(${masked}${COLLATION})${COLLATION})`;
-  }
+): SqlFragment => listOrderKey(type, masked);
 
-  return type.kind === "choice" ? sql`(${masked}${COLLATION})` : masked;
-};
+/**
+ * Bind textual continuations to the current provider, locale, version and epoch.
+ * @param keys - The resolved sort keys.
+ * @returns The keys with their ordering identity.
+ */
+export const bindListOrder = Effect.fn("ReadCursor.bindListOrder")(
+  function* bindListOrder(keys: readonly SortKey[]) {
+    if (!keys.some((key) => hasLanguageOrder(key.field.type))) {
+      return keys;
+    }
+
+    const policy = yield* checkListOrder.pipe(Effect.orDie);
+    const identity = `icu/${policy.locale}/${policy.version}/${policy.epoch}`;
+
+    return keys.map((key) =>
+      hasLanguageOrder(key.field.type) ? { ...key, orderPolicy: identity } : key
+    );
+  }
+);
 
 /**
  * `ORDER BY` for the keys, then `id`.
@@ -224,7 +236,13 @@ export const cursorPredicate = (
  * @returns The signature.
  */
 export const sortSignature = (keys: readonly SortKey[]): string[] =>
-  keys.map((key) => `${key.descending ? "-" : ""}${key.field.id}`);
+  keys.map((key) => {
+    const order = hasLanguageOrder(key.field.type)
+      ? `@list-order-1/${key.orderPolicy ?? "unbound"}`
+      : "";
+
+    return `${key.descending ? "-" : ""}${key.field.id}${key.projection ?? ""}${order}`;
+  });
 
 /**
  * Encodes a cursor.

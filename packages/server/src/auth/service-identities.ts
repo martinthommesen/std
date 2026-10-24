@@ -8,6 +8,7 @@ import {
 } from "@std/definitions/well-known";
 import { Effect } from "effect";
 
+import { listOrderKey } from "../config/list-order-key.ts";
 import { readRows } from "../records/sql-run.ts";
 import { loginKey, userTables } from "./user-table.ts";
 
@@ -33,10 +34,11 @@ export const helpdeskIdentityCollision = Effect.fn(
   "Auth.helpdeskIdentityCollision"
 )(function* helpdeskIdentityCollision(snapshot: ConfigSnapshot) {
   const tables = userTables(snapshot);
+  const indexedLogin = listOrderKey({ kind: "text" }, sql`"u".${tables.login}`);
 
   const [user] =
     yield* readRows(sql`SELECT u.id::text AS id FROM ${tables.user} u
-    WHERE casefold("u".${tables.login} COLLATE pg_unicode_fast) = ${textParameter(HELPDESK_CASCADE_LOGIN, "text")}
+    WHERE ${indexedLogin} = ${textParameter(HELPDESK_CASCADE_LOGIN, "text")}
     AND u.id <> ${textParameter(HELPDESK_CASCADE_USER_ID, "uuid")} ORDER BY u.id LIMIT 1`);
 
   return user?.id ?? undefined;

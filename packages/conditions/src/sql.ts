@@ -111,6 +111,12 @@ export interface SqlJoin {
 
 /** The caller's hooks. */
 export interface SqlHooks {
+  /**
+   * Database adapter's equality/index key. Its equality must match the default
+   * Unicode comparison key exactly; a deterministic collation may change order
+   * but must retain byte-distinct equality. Patterns retain the default key.
+   */
+  readonly equalityKey?: (field: FieldInfo, value: SqlFragment) => SqlFragment;
   readonly column: (source: SqlRecordSource, field: FieldInfo) => SqlFragment;
   readonly join: (target: SqlJoinTarget) => SqlJoin;
 }
@@ -244,6 +250,14 @@ const keyOf = (path: TypedPath, expression: SqlFragment): SqlFragment =>
     ? sql`casefold(${expression} COLLATE pg_unicode_fast)`
     : expression;
 
+const equalityKey = (
+  compiler: Compiler,
+  path: TypedPath,
+  expression: SqlFragment
+): SqlFragment =>
+  compiler.options.hooks.equalityKey?.(path.field, expression) ??
+  keyOf(path, expression);
+
 const literalText = (value: ComparableValue): string => {
   switch (value.kind) {
     case "text":
@@ -322,7 +336,7 @@ const compileCompare = (
     );
 
     if (atom.compare === "eq") {
-      const key = keyOf(atom.left, left);
+      const key = equalityKey(compiler, atom.left, left);
 
       return negated
         ? sql`(${key} <> ${parameter} OR ${left} IS NULL)`
@@ -339,7 +353,7 @@ const compileCompare = (
   if (atom.compare === "eq") {
     const distinct = negated ? "IS DISTINCT FROM" : "IS NOT DISTINCT FROM";
 
-    return sql`${keyOf(atom.left, left)} ${rawSql(distinct)} ${keyOf(right.path, other)}`;
+    return sql`${equalityKey(compiler, atom.left, left)} ${rawSql(distinct)} ${equalityKey(compiler, right.path, other)}`;
   }
 
   return negated
@@ -365,7 +379,7 @@ const compileIn = (
   }
 
   const left = columnOf(compiler, atom.left);
-  const key = keyOf(atom.left, left);
+  const key = equalityKey(compiler, atom.left, left);
 
   const parameter = arrayParameter(
     values,

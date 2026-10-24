@@ -93,6 +93,11 @@ const setLines = (report: SetReport): readonly string[] => [
  */
 export const planLines = (plan: UpgradePlan): readonly string[] => [
   `Plan ${plan.hash} (STD ${plan.stdVersion}, from revision ${plan.basis.revision ?? "none"})`,
+  ...(plan.listOrder === undefined
+    ? []
+    : [
+        `List order: deterministic ICU ${plan.listOrder.target.locale}, version ${plan.listOrder.target.version}; ${plan.listOrder.rebuild ? "rebuild affected indexes and invalidate textual cursors" : "unchanged"}`,
+      ]),
   ...(plan.migrations.length === 0
     ? ["Platform migrations: up to date"]
     : plan.migrations.map(
