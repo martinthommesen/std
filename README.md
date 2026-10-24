@@ -15,7 +15,7 @@ docker compose up --build                  # Postgres 18, then `std upgrade` onc
 examples/quickstart.sh                     # in a second terminal, from the repository root
 ```
 
-`docker compose up` starts Postgres, runs the one-shot `upgrade` service (`std upgrade --set examples/helpdesk/v2`, which applies the platform migrations and loads the core definition set and the helpdesk example; then `std bootstrap-admin`, which creates the first administrator; then `pnpm helpdesk:seed`, the helpdesk's demo users and incidents), and starts the `server` service (`std serve`) on <http://127.0.0.1:8080> and the `worker` service (`std worker`, the outbox worker that runs after-commit effects; decision 0023) once the upgrade has exited 0. Open <http://localhost:8080> in a browser and sign in as the administrator, as `admin` or `agent` from the helpdesk (below), or, after the script below, as `alice` or `bob`; the web app keeps its session in an HTTP-only cookie.
+`docker compose up` starts Postgres and runs the one-shot `upgrade` service. That service runs `std upgrade --set examples/helpdesk/v2` to apply the platform migrations and load the core definition set and helpdesk example. It then runs `std bootstrap-admin` to create the first administrator, followed by `pnpm helpdesk:seed` to create the helpdesk's demo users and incidents. Once `upgrade` exits 0, compose starts `server` (`std serve`) on <http://127.0.0.1:8080> and `worker` (`std worker`). The worker runs after-commit effects from the outbox (decision 0023). Open <http://localhost:8080> in a browser and sign in as the administrator, as `admin` or `agent` from the helpdesk (below), or, after the script below, as `alice` or `bob`; the web app keeps its session in an HTTP-only cookie.
 
 `examples/quickstart.sh` then works through the HTTP API only:
 
@@ -61,7 +61,7 @@ The set has two versions, `v1` and `v2` (the current one, which compose loads). 
 
 ## Getting started
 
-For development: requires pnpm 12 and Docker. pnpm downloads the pinned Node 26 itself.
+Development requires pnpm 12 and Docker. pnpm downloads the pinned Node 26 itself.
 
 ```sh
 pnpm install     # also patches tsc to report Effect diagnostics

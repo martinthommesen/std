@@ -20,7 +20,7 @@ export const apiOpenApi: JsonObject = Schema.decodeUnknownSync(
 )(OpenApi.fromApi(StdApi));
 
 /**
- * The document as the route answers it, written once: the document never
- * changes while the server runs.
+ * The serialized document returned by the route. It is computed once and
+ * stays unchanged while the server runs.
  */
 export const apiOpenApiText = stringifyJson(apiOpenApi);

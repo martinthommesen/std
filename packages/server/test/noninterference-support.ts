@@ -8,7 +8,7 @@ import type { Arbitrary, Parameters } from "fast-check";
  * @param samples - Hidden-value samples.
  * @param write - Writes one sample.
  * @param answers - Observations to compare with the baseline.
- * @param parameters - The property's existing run count and seed.
+ * @param parameters - The property's run count and seed.
  * @returns The property, with the caller's services captured for each sample.
  */
 export const hiddenValuesProperty = Effect.fnUntraced(

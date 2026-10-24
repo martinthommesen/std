@@ -102,8 +102,8 @@ export const waitUntil = <E, R>(
   );
 
 /**
- * Counts lock waiters in this test's database without changing polling policy.
- * @param options - The original observer's session and wait-event predicates.
+ * Counts lock waiters in this test's database.
+ * @param options - Session and wait-event predicates.
  * @returns The number of matching sessions, or the query failure.
  */
 export const lockWaiterCount = Effect.fn("Test.lockWaiterCount")(
@@ -129,7 +129,7 @@ const decodeCount = decodeRows(Schema.Struct({ n: Schema.Int }));
 /**
  * Counts rows from a trusted SQL FROM fragment.
  * @param table - The FROM fragment, including any predicate.
- * @returns The count or the original missing-row sentinel.
+ * @returns The count, or -1 when the query returns no row.
  */
 export const countRows = (table: string) =>
   SqlClient.SqlClient.pipe(

@@ -1,4 +1,4 @@
-# 0028 — Postgres TLS and signed Step 3 deliverables
+# 0028. Postgres TLS and signed Step 3 deliverables
 
 Date: 2026-10-22. Owner: Martin. Workstream: 3S. Implements spec-check M16, ODA governance GB1008 §5.2.2 and §5.2.9. The owner requires protection in transit inside the component and signed deliverables in Step 3. The matching plan and contract edits belong to another writer; this change leaves those files untouched.
 

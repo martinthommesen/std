@@ -22,10 +22,10 @@
  *   or of the owner's delete there (which deletes its parts without an
  *   aggregate save); a part change with neither predates aggregates (a set
  *   before helpdesk v3) and so every aggregate version.
- * - **A fixed number of statements**, whatever the number of parts: the
- *   touched parts in one, and the array's members (today's parts and those
- *   deleted after the change) with their versions and saved images
- *   (`core.change_image`) together in one. Change entries the
+ * - **A fixed number of statements**, whatever the number of parts: one
+ *   statement reads the touched parts. Another reads the array's members,
+ *   both current parts and parts deleted after the change, with their
+ *   versions and saved images (`core.change_image`). Change entries the
  *   image backfill (migration 0028) has not reached yet are rebuilt
  *   together (`readEntriesAt`, two statements for all, at most three
  *   entries per version), with each class's field origins read once.

@@ -75,7 +75,7 @@ interface Refusal {
  * @param token - The caller.
  * @param definition - The stored definition.
  * @param action - The lifecycle operation.
- * @param labels - The existing generic and endpoint diagnostics.
+ * @param labels - The generic and endpoint diagnostics.
  * @param expected - The expected refusal.
  * @returns Both requests, in generic then endpoint order.
  */

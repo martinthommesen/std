@@ -111,7 +111,7 @@ const keyedByApiName = (value: JsonObject): JsonObject =>
  * @param origin - The request origin.
  * @param record - The record the entry belongs to.
  * @param href - The entry's URL from its change ID.
- * @param entry - The v1 history entry.
+ * @param fields - The v1 history entry.
  * @returns The `ChangeEntry` resource.
  */
 const changeEntryOf = (
@@ -119,9 +119,8 @@ const changeEntryOf = (
   origin: string,
   record: JsonObject,
   href: (changeId: string) => string,
-  entry: RenderedHistoryEntry
+  fields: RenderedHistoryEntry
 ): JsonObject => {
-  const fields = entry;
   const { kind, changeId: id } = fields;
 
   const actor = entityRef(scope, origin, {
