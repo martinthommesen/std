@@ -726,18 +726,18 @@ const HISTORY_SOURCES: readonly SourceKey[] = [
  *
  * @param history - The change entries, in version order.
  * @param fromVersion - Inclusive first version to render; earlier changes still update replay state.
- * @returns Each change and the version it was recorded at.
+ * @returns The rendered changes in replay order.
  */
 const recordedChanges = (
   history: readonly HistoryStep[],
   fromVersion?: number
-): readonly { readonly version: number; readonly item: JsonObject }[] => {
+): readonly JsonObject[] => {
   const state = new Map<SourceKey, { readonly value: JsonValue }>(
     STATUS_SOURCES.map((source) => [source, { value: null }])
   );
 
   let previous: string | undefined;
-  const changes: { version: number; item: JsonObject }[] = [];
+  const changes: JsonObject[] = [];
 
   for (const step of history) {
     for (const source of STATUS_SOURCES) {
@@ -766,7 +766,7 @@ const recordedChanges = (
         item.set("statusChangeReason", reason);
       }
 
-      changes.push({ item: Object.fromEntries(item), version: step.version });
+      changes.push(Object.fromEntries(item));
     }
 
     previous = status;
@@ -794,11 +794,9 @@ const renderStatusHistory = (
     step.changes.has(F.statusChangeHistory)
   );
 
-  const recorded = recordedChanges(history, written?.version);
-
   return present([
     ...storedItems(values, F.statusChangeHistory, typed("StatusChange")),
-    ...recorded.map((change) => change.item),
+    ...recordedChanges(history, written?.version),
   ]);
 };
 

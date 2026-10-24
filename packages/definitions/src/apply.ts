@@ -22,10 +22,10 @@ import {
   checkVersion,
   currentOf,
   decodeAs,
-  nextVersion,
   PLAIN_NOTE,
   record,
   startWork,
+  withChanges,
 } from "./apply-work.ts";
 import type { ApplyContext, OperationNote, Work } from "./apply-work.ts";
 import type {
@@ -336,11 +336,7 @@ const update = (
     return;
   }
 
-  const next = decodeAs(work, current.id, {
-    ...current,
-    ...operation.changes,
-    version: nextVersion(work, current.id),
-  });
+  const next = withChanges(work, current, operation.changes);
 
   if (next !== undefined) {
     record(work, operation, next, {
@@ -434,11 +430,7 @@ const setOverride = (
     return;
   }
 
-  const next = decodeAs(work, definition.id, {
-    ...current,
-    ...definition,
-    version: nextVersion(work, definition.id),
-  });
+  const next = withChanges(work, current, definition);
 
   if (next !== undefined) {
     record(work, operation, next, {
@@ -470,11 +462,7 @@ const adopt = (
     return;
   }
 
-  const next = decodeAs(work, current.id, {
-    ...current,
-    owner: { layer: "local" },
-    version: nextVersion(work, current.id),
-  });
+  const next = withChanges(work, current, { owner: { layer: "local" } });
 
   if (next !== undefined) {
     record(work, operation, next);

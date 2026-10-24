@@ -39,18 +39,33 @@ export const formRulesFor = (
     snapshot.fields(classId).map((field) => field.id)
   );
 
+  const hiddenByField = new Map<string, boolean>();
+  const view = classViewOf(snapshot);
+
   const isHidden = (fieldId: string): boolean => {
+    const cached = hiddenByField.get(fieldId);
+
+    if (cached !== undefined) {
+      return cached;
+    }
+
     const field = snapshot.field(fieldId);
 
     if (field === undefined) {
+      hiddenByField.set(fieldId, true);
+
       return true;
     }
 
     const onClass = ownLineageFieldIds.has(fieldId) ? classId : field.classId;
 
-    return (
-      fieldDecision(snapshot, caller, "read", onClass, fieldId).kind === "never"
-    );
+    const hidden =
+      fieldDecision(snapshot, caller, "read", onClass, fieldId).kind ===
+      "never";
+
+    hiddenByField.set(fieldId, hidden);
+
+    return hidden;
   };
 
   return rules.flatMap((rule) =>
@@ -63,7 +78,7 @@ export const formRulesFor = (
               simplifyForCaller(rule.condition ?? { op: "true" }, {
                 classId,
                 isHidden,
-                view: classViewOf(snapshot),
+                view,
               })
             ),
             fieldId: rule.fieldId,

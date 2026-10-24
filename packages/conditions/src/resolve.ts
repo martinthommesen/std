@@ -98,7 +98,6 @@ type Bound =
   | { readonly kind: "afterMax" };
 
 interface Clock {
-  readonly temporal: TemporalApi;
   readonly context: ConditionContext;
   readonly zoned: Temporal.ZonedDateTime;
   readonly today: Temporal.PlainDate;
@@ -323,10 +322,6 @@ const compareWithBound = (
   return holdsForEveryValue ? notEmpty(left) : FALSE;
 };
 
-interface Resolver {
-  readonly clock: Clock;
-}
-
 const meOperand = (context: ConditionContext): ResolvedOperand => {
   if (context.me === undefined) {
     return { kind: "unavailable" };
@@ -342,21 +337,21 @@ const meOperand = (context: ConditionContext): ResolvedOperand => {
 };
 
 const boundOf = (
-  resolver: Resolver,
+  clock: Clock,
   operand: CheckedOperand,
   left: TypedPath
 ): Bound | undefined => {
   switch (operand.kind) {
     case "now": {
-      return instantBound(resolver.clock.context.now);
+      return instantBound(clock.context.now);
     }
 
     case "relNow": {
-      return relNow(resolver.clock, operand.unit, operand.offset);
+      return relNow(clock, operand.unit, operand.offset);
     }
 
     case "relToday": {
-      return relToday(resolver.clock, operand.unit, operand.offset, left);
+      return relToday(clock, operand.unit, operand.offset, left);
     }
 
     case "path":
@@ -419,14 +414,11 @@ const resolveRecordCompare = (
   return { ...node, right: { kind: "literal", value: comparable } };
 };
 
-const resolveCompare = (
-  resolver: Resolver,
-  node: CompareNode
-): ResolvedNode => {
+const resolveCompare = (clock: Clock, node: CompareNode): ResolvedNode => {
   const { right } = node;
 
   if (right.kind === "record") {
-    return resolveRecordCompare(resolver.clock.context, node, right.field);
+    return resolveRecordCompare(clock.context, node, right.field);
   }
 
   if (right.kind === "path" || right.kind === "literal") {
@@ -434,10 +426,10 @@ const resolveCompare = (
   }
 
   if (right.kind === "me") {
-    return { ...node, right: meOperand(resolver.clock.context) };
+    return { ...node, right: meOperand(clock.context) };
   }
 
-  const bound = boundOf(resolver, right, node.left);
+  const bound = boundOf(clock, right, node.left);
 
   if (bound === undefined) {
     throw new ConditionDefectError("myGroups reached a comparison.");
@@ -463,7 +455,7 @@ const groupOperands = (context: ConditionContext): ResolvedOperand[] => {
 };
 
 const resolveIn = (
-  resolver: Resolver,
+  clock: Clock,
   node: Extract<CheckedNode, { readonly op: "in" }>
 ): ResolvedNode => {
   const right: ResolvedOperand[] = [];
@@ -472,11 +464,11 @@ const resolveIn = (
     if (operand.kind === "literal" || operand.kind === "path") {
       right.push(operand);
     } else if (operand.kind === "me") {
-      right.push(meOperand(resolver.clock.context));
+      right.push(meOperand(clock.context));
     } else if (operand.kind === "myGroups") {
-      right.push(...groupOperands(resolver.clock.context));
+      right.push(...groupOperands(clock.context));
     } else {
-      const bound = boundOf(resolver, operand, node.left);
+      const bound = boundOf(clock, operand, node.left);
 
       // An out-of-range element matches no stored value.
       if (bound?.kind === "value") {
@@ -489,10 +481,9 @@ const resolveIn = (
 };
 
 const resolvePeriod = (
-  resolver: Resolver,
+  clock: Clock,
   node: Extract<CheckedNode, { readonly op: "inPeriod" }>
 ): ResolvedNode => {
-  const { clock } = resolver;
   const start = periodStart(clock, node.unit);
 
   const startBound = guarded(node.offset, () =>
@@ -512,30 +503,30 @@ const resolvePeriod = (
   };
 };
 
-const resolveNode = (resolver: Resolver, node: CheckedNode): ResolvedNode => {
+const resolveNode = (clock: Clock, node: CheckedNode): ResolvedNode => {
   switch (node.op) {
     case "and":
     case "or": {
       return {
-        args: node.args.map((arg) => resolveNode(resolver, arg)),
+        args: node.args.map((arg) => resolveNode(clock, arg)),
         op: node.op,
       };
     }
 
     case "not": {
-      return { arg: resolveNode(resolver, node.arg), op: "not" };
+      return { arg: resolveNode(clock, node.arg), op: "not" };
     }
 
     case "compare": {
-      return resolveCompare(resolver, node);
+      return resolveCompare(clock, node);
     }
 
     case "in": {
-      return resolveIn(resolver, node);
+      return resolveIn(clock, node);
     }
 
     case "inPeriod": {
-      return resolvePeriod(resolver, node);
+      return resolvePeriod(clock, node);
     }
 
     case "const":
@@ -596,11 +587,42 @@ const makeClock = (
 
   return valid({
     context,
-    temporal,
     today: zoned.toPlainDate(),
     weekStart,
     zoned,
   });
+};
+
+/**
+ * Prepares context and calendar math for checked nodes in one resolution.
+ * @param context - The evaluation context.
+ * @param options - An injected Temporal implementation, if any.
+ * @returns A node resolver, or the same context-validation issues as resolveCondition.
+ * @internal
+ */
+export const prepareResolver = (
+  context: ConditionContext,
+  options: ResolveOptions = {}
+): ConditionResult<(node: CheckedNode) => ResolvedNode> => {
+  const temporal = temporalOf(options);
+
+  if (temporal === undefined) {
+    return invalid([
+      issue(
+        "temporalUnavailable",
+        [],
+        "No Temporal implementation: pass one in the resolver options."
+      ),
+    ]);
+  }
+
+  const clock = makeClock(temporal, context);
+
+  if (!clock.ok) {
+    return clock;
+  }
+
+  return valid((node: CheckedNode) => resolveNode(clock.value, node));
 };
 
 /** The zones a caller knows about. */
@@ -639,28 +661,9 @@ export const resolveCondition = (
   context: ConditionContext,
   options: ResolveOptions = {}
 ): ConditionResult<ResolvedCondition> => {
-  const temporal = temporalOf(options);
+  const prepared = prepareResolver(context, options);
 
-  if (temporal === undefined) {
-    return invalid([
-      issue(
-        "temporalUnavailable",
-        [],
-        "No Temporal implementation: pass one in the resolver options."
-      ),
-    ]);
-  }
-
-  const clock = makeClock(temporal, context);
-
-  if (!clock.ok) {
-    return clock;
-  }
-
-  return valid(
-    makeResolved(
-      condition.classId,
-      resolveNode({ clock: clock.value }, condition.root)
-    )
-  );
+  return prepared.ok
+    ? valid(makeResolved(condition.classId, prepared.value(condition.root)))
+    : prepared;
 };

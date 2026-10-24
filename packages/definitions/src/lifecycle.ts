@@ -27,12 +27,11 @@ import type { JsonObject } from "@std/values/json-value";
 import {
   checkVersion,
   currentOf,
-  decodeAs,
-  nextVersion,
   record,
   recordCascade,
   refuse,
   viewOf,
+  withChanges,
 } from "./apply-work.ts";
 import type { OperationNote, Work } from "./apply-work.ts";
 import type {
@@ -57,20 +56,6 @@ import { UseRetireOrPurge } from "./use-retire-or-purge.ts";
 import { SCHEMA_PURGE_PERMISSION_ID } from "./well-known.ts";
 
 type Op<T extends Operation["op"]> = Extract<Operation, { readonly op: T }>;
-
-const withChanges = (
-  work: Work,
-  current: Definition,
-  changes: JsonObject
-): Definition | undefined => {
-  const json: JsonObject = current;
-
-  return decodeAs(work, current.id, {
-    ...json,
-    ...changes,
-    version: nextVersion(work, current.id),
-  });
-};
 
 const unsupported = (work: Work, id: DefinitionId, message: string): void => {
   work.problems.push(problem("unsupportedChange", id, message));

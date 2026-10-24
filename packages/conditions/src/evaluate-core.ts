@@ -16,6 +16,7 @@ import type { ComparableValue, StoredOrPlaintext } from "@std/values/compare";
 import { isCaseSensitive } from "@std/values/field-type";
 import type { FieldKind } from "@std/values/field-type";
 import { isString } from "@std/values/field-value";
+import { textKey } from "@std/values/fold";
 import { matchesPattern } from "@std/values/like-pattern";
 import { isPlaintext, isSecretState } from "@std/values/write-only";
 
@@ -180,7 +181,17 @@ const evaluateIn = (
     return "unknown";
   }
 
-  const value = comparable(node.left, left);
+  const compared = comparable(node.left, left);
+
+  const value: ComparableValue =
+    compared.kind === "text" || compared.kind === "longText"
+      ? {
+          ...compared,
+          caseSensitive: true,
+          value: textKey(compared.value, compared.caseSensitive),
+        }
+      : compared;
+
   let unknown = false;
 
   for (const operand of node.right) {

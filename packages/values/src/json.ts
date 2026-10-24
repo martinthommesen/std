@@ -187,6 +187,36 @@ const sameExactDecimal = (left: ExactDecimal, right: ExactDecimal): boolean =>
   left.digits === right.digits &&
   left.exponent === right.exponent;
 
+const checkedNumber = (
+  literal: string,
+  parts: NumberParts
+): Decoded<number> => {
+  const value = Number(literal);
+
+  if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
+    return refuse(
+      "unsafeInteger",
+      "JSON integers must be within ±(2^53 - 1); send larger values as strings."
+    );
+  }
+
+  const roundTrip = scanNumber(String(value), 0);
+
+  const exact =
+    Number.isFinite(value) &&
+    roundTrip !== undefined &&
+    sameExactDecimal(toExactDecimal(parts), toExactDecimal(roundTrip.parts));
+
+  if (!exact) {
+    return refuse(
+      "inexactNumber",
+      "JSON numbers must be exactly representable as a double; send such values as strings."
+    );
+  }
+
+  return ok(value === 0 ? 0 : value);
+};
+
 /**
  * Checks a JSON number literal: it must denote exactly the double it parses
  * to (so jsonb and JavaScript hold the same value), and an integer within
@@ -203,33 +233,7 @@ export const checkNumberLiteral = (literal: string): Decoded<number> => {
     return refuse("invalidJson", "Not a JSON number.");
   }
 
-  const value = Number(literal);
-
-  if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
-    return refuse(
-      "unsafeInteger",
-      "JSON integers must be within ±(2^53 - 1); send larger values as strings."
-    );
-  }
-
-  const roundTrip = scanNumber(String(value), 0);
-
-  const exact =
-    Number.isFinite(value) &&
-    roundTrip !== undefined &&
-    sameExactDecimal(
-      toExactDecimal(written.parts),
-      toExactDecimal(roundTrip.parts)
-    );
-
-  if (!exact) {
-    return refuse(
-      "inexactNumber",
-      "JSON numbers must be exactly representable as a double; send such values as strings."
-    );
-  }
-
-  return ok(value === 0 ? 0 : value);
+  return checkedNumber(literal, written.parts);
 };
 
 const checkString = (text: string): string => {
@@ -319,8 +323,9 @@ const readNumber = (cursor: Cursor): number => {
     return syntaxError();
   }
 
-  const checked = checkNumberLiteral(
-    cursor.text.slice(cursor.index, scanned.end)
+  const checked = checkedNumber(
+    cursor.text.slice(cursor.index, scanned.end),
+    scanned.parts
   );
 
   cursor.index = scanned.end;

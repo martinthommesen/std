@@ -8,9 +8,9 @@
  * adds `condition_reads` edges like stored rule conditions.
  */
 import type { FieldType } from "@std/values/field-type";
-import { stringifyJson } from "@std/values/json";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
+import { jsonbEquals } from "@std/values/jsonb";
 import { getOrUndefined } from "effect/Option";
 import { decodeUnknownOption } from "effect/Schema";
 
@@ -82,5 +82,5 @@ export const sameTypeApartFromAllowedRecords = (
 
   return left === undefined || right === undefined
     ? left === right
-    : stringifyJson(left) === stringifyJson(right);
+    : jsonbEquals(left, right);
 };
