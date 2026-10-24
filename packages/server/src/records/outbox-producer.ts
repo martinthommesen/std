@@ -209,6 +209,62 @@ export const ruleCarriers = (
   return carriers;
 };
 
+const candidatesBySnapshot = new WeakMap<
+  ConfigSnapshot,
+  Map<DefinitionId, Map<ChangeKind, readonly SubscriptionDefinition[]>>
+>();
+
+const subscriptionCandidates = (
+  snapshot: ConfigSnapshot,
+  classId: DefinitionId,
+  kind: ChangeKind
+): readonly SubscriptionDefinition[] => {
+  let byClass = candidatesBySnapshot.get(snapshot);
+
+  if (byClass === undefined) {
+    byClass = new Map();
+    candidatesBySnapshot.set(snapshot, byClass);
+  }
+
+  let byKind = byClass.get(classId);
+
+  if (byKind === undefined) {
+    byKind = new Map();
+    byClass.set(classId, byKind);
+  }
+
+  const known = byKind.get(kind);
+
+  if (known !== undefined) {
+    return known;
+  }
+
+  const lineage = new Set(
+    snapshot.lineage(classId).map((definition) => definition.id)
+  );
+
+  const carriers = ruleCarriers(snapshot);
+
+  const candidates = snapshot.subscriptions().filter((subscription) => {
+    if (
+      subscription.state !== "active" ||
+      !subscription.enabled ||
+      carriers.has(subscription.id)
+    ) {
+      return false;
+    }
+
+    return (
+      lineage.has(subscription.classId) &&
+      subscription.operations.includes(kind)
+    );
+  });
+
+  byKind.set(kind, candidates);
+
+  return candidates;
+};
+
 /**
  * The subscriptions a change matches, by ID. Throws `ConditionDefectError`
  * when a stored condition no longer checks or resolves.
@@ -223,35 +279,31 @@ export const matchingSubscriptions = (
   change: SubscribedChange,
   context: SubscriptionContext
 ): readonly SubscriptionDefinition[] => {
-  const lineage = new Set(
-    snapshot.lineage(change.classId).map((definition) => definition.id)
-  );
+  let image: RecordImage | undefined;
 
-  const image = imageOf(change.image);
-  const carriers = ruleCarriers(snapshot);
-
-  const watches = (subscription: SubscriptionDefinition): boolean =>
-    subscription.state === "active" &&
-    subscription.enabled &&
-    lineage.has(subscription.classId) &&
-    !carriers.has(subscription.id);
-
-  return snapshot
-    .subscriptions()
-    .filter(
-      (subscription) =>
-        watches(subscription) &&
-        subscription.operations.includes(change.kind) &&
-        acceptsHubEvent(
+  return subscriptionCandidates(snapshot, change.classId, change.kind).filter(
+    (subscription) => {
+      if (
+        !acceptsHubEvent(
           snapshot,
           subscription,
           change.classId,
           change.kind,
           change.image.values
-        ) &&
-        conditionHolds(snapshot, subscription, image, context)
-    )
-    .toSorted((left, right) => compareIds(left.id, right.id));
+        )
+      ) {
+        return false;
+      }
+
+      if (subscription.condition === null) {
+        return true;
+      }
+
+      image ??= imageOf(change.image);
+
+      return conditionHolds(snapshot, subscription, image, context);
+    }
+  );
 };
 
 /**

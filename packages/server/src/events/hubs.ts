@@ -37,6 +37,7 @@ import type { ActingUser } from "../auth/actor.ts";
 import { authenticate } from "../auth/sessions.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { parseListQuery } from "../http/api/query.ts";
+import { tableOfCollection } from "../http/api/table-names.ts";
 import { knownOn } from "../http/tmf/context.ts";
 import type { MappedResource } from "../http/tmf/context.ts";
 import { parseTmfListQuery } from "../http/tmf/query.ts";
@@ -606,14 +607,17 @@ export const genericTarget = (
     return undefined;
   }
 
-  const table = snapshot
-    .all("class")
-    .find(
-      (entry) =>
-        resourceTopicName(snapshot, entry.id) ===
-          `${RESOURCE_TOPIC_PREFIX}${resource}` &&
-        knowsTable(snapshot, actor, entry.id)
-    );
+  const name = tableOfCollection(snapshot, resource);
+  const table = name === undefined ? undefined : snapshot.classByName(name);
+
+  if (
+    table === undefined ||
+    resourceTopicName(snapshot, table.id) !==
+      `${RESOURCE_TOPIC_PREFIX}${resource}` ||
+    !knowsTable(snapshot, actor, table.id)
+  ) {
+    return undefined;
+  }
 
   return table === undefined
     ? undefined

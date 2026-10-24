@@ -52,7 +52,7 @@ import { RequestRevision } from "../sql/request-revision.ts";
 import {
   cursorPredicate,
   decodeCursor,
-  encodeCursor,
+  finishPage,
   keyExpression,
   orderBy,
 } from "./read-cursor.ts";
@@ -77,6 +77,7 @@ import { encodeTextValue, recordJson } from "./record-json.ts";
 import { recordRelation } from "./relation.ts";
 import { readRows } from "./sql-run.ts";
 import type { TextRow } from "./sql-run.ts";
+import { isWriteOnly } from "./stored-values.ts";
 
 /** `GET /api/v1/tables/{table}/records`. */
 export interface ListRequest {
@@ -330,10 +331,7 @@ const addLabel = (
 
   // A password or secret never labels a record, even if a definition set
   // made it a display field: its stored value is never returned (6.5).
-  const writeOnly =
-    display?.type.kind === "password" || display?.type.kind === "secret";
-
-  if (display === undefined || writeOnly) {
+  if (display === undefined || isWriteOnly(display.type.kind)) {
     return false;
   }
 
@@ -839,32 +837,12 @@ export const readPage = Effect.fn("Records.readPage")(function* readPage(
         )
       : yield* readRows(plainPage(parts));
 
-  const read = page.slice(0, spec.limit);
-  const rows = reversed ? read.toReversed() : read;
-  const last = rows.at(-1);
-
-  // After a `before` page, records follow it (the cursor's own position).
-  const hasMore = reversed
-    ? last !== undefined
-    : page.length > spec.limit && last !== undefined;
-
-  const nextCursor =
-    hasMore && last !== undefined
-      ? encodeCursor(spec.sortKeys, {
-          id: last.id ?? "",
-          values: keys.map((_, index) => last[`k${index}`] ?? null),
-        })
-      : null;
-
-  const first = rows.at(0);
-
-  const firstCursor =
-    first === undefined
-      ? null
-      : encodeCursor(spec.sortKeys, {
-          id: first.id ?? "",
-          values: keys.map((_, index) => first[`k${index}`] ?? null),
-        });
+  const { rows, firstCursor, hasMore, nextCursor } = finishPage(
+    page,
+    spec.limit,
+    reversed,
+    spec.sortKeys
+  );
 
   const records = rows.map(projection.decode);
 
@@ -955,50 +933,6 @@ export const listRecords = Effect.fn("Records.list")(function* listRecords(
 });
 
 /**
- * Reads one record through a view by ID (Contracts 2.3, 3.5). A record
- * outside the view's subtree or the caller's visibility, and an ID that
- * does not exist or is not a UUID, give the same `NotFound`.
- *
- * @param scope - The caller's scope.
- * @param view - The endpoint's view.
- * @param id - The record ID as the request gave it.
- * @param options - Selection, labels and targets.
- * @returns The decoded record.
- */
-export const readOne = Effect.fn("Records.readOne")(function* readOne(
-  scope: ReadScope,
-  view: ReadView,
-  id: string,
-  options: {
-    readonly selection: readonly SelectedValue[];
-    readonly withLabels: boolean;
-    readonly withTargets: boolean;
-  }
-) {
-  const parsedId = parseUuid(id.toLowerCase());
-
-  if (!parsedId.ok) {
-    return yield* new NotFound();
-  }
-
-  const projection = project(
-    scope,
-    view,
-    options.selection,
-    options.withLabels,
-    options.withTargets
-  );
-
-  const [row] = yield* readRows(
-    sql`SELECT ${joinSql(projection.columns, ", ")}
-FROM ${recordRelation(scope.snapshot, view.classId)} AS ${identSql(BASE_ALIAS)}${optionalJoins(projection.joins)}
-WHERE ${ID} = ${textParameter(parsedId.value, "uuid")} AND ${view.visibility(BASE_ALIAS)}`
-  );
-
-  return row === undefined ? yield* new NotFound() : projection.decode(row);
-});
-
-/**
  * Reads several records through one view by ID (the same visibility and
  * masks as `readOne`); IDs the caller cannot see are left out.
  *
@@ -1042,6 +976,43 @@ WHERE ${ID} = ANY(${arrayParameter(valid, "uuid")}) AND ${view.visibility(BASE_A
       return [decoded.id, decoded] as const;
     })
   );
+});
+
+/**
+ * Reads one record through a view by ID (Contracts 2.3, 3.5). A record
+ * outside the view's subtree or the caller's visibility, and an ID that
+ * does not exist or is not a UUID, give the same `NotFound`.
+ *
+ * @param scope - The caller's scope.
+ * @param view - The endpoint's view.
+ * @param id - The record ID as the request gave it.
+ * @param options - Selection, labels and targets.
+ * @returns The decoded record.
+ */
+export const readOne = Effect.fn("Records.readOne")(function* readOne(
+  scope: ReadScope,
+  view: ReadView,
+  id: string,
+  options: {
+    readonly selection: readonly SelectedValue[];
+    readonly withLabels: boolean;
+    readonly withTargets: boolean;
+  }
+) {
+  const parsedId = parseUuid(id.toLowerCase());
+
+  if (!parsedId.ok) {
+    return yield* new NotFound();
+  }
+
+  const records = yield* readByIds(scope, view, [parsedId.value], options);
+  const record = records.get(parsedId.value);
+
+  if (record === undefined) {
+    return yield* new NotFound();
+  }
+
+  return record;
 });
 
 /**

@@ -456,8 +456,8 @@ const relatedListsOf = (
 
         if (
           name !== null &&
-          readableAt(table.id, field.id) &&
-          !above.some((level) => qualifies(level.id))
+          !above.some((level) => qualifies(level.id)) &&
+          readableAt(table.id, field.id)
         ) {
           lists.push({
             field: field.name,

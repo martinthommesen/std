@@ -1,3 +1,4 @@
+import { SYSTEM_FIELD_NAMES as SYSTEM_MEMBERS } from "@std/access/visible-schema";
 import { UnknownField } from "@std/api/errors/unknown-field";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 /**
@@ -25,15 +26,7 @@ import { Effect, Result, Schema } from "effect";
 import { InvalidBody } from "./invalid-body.ts";
 
 /** The system members of a record (Contracts 3.2, 6.6), never writable. */
-export const SYSTEM_FIELD_NAMES: ReadonlySet<string> = new Set([
-  "id",
-  "class",
-  "version",
-  "created_at",
-  "created_by",
-  "updated_at",
-  "updated_by",
-]);
+export const SYSTEM_FIELD_NAMES: ReadonlySet<string> = new Set(SYSTEM_MEMBERS);
 
 /** A write body on the wire: a JSON object of field names to values. */
 const WriteBodySchema = Schema.Record(Schema.String, Schema.Json);

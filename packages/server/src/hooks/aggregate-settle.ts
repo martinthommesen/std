@@ -66,12 +66,14 @@ import type {
   SettleSet,
 } from "../records/aggregate-images.ts";
 import type { SettleInput } from "../records/save-hooks.ts";
+import { loadRecords } from "../records/save-sql.ts";
+import type { StoredRecord } from "../records/stored-record.ts";
 import { imageOf } from "../records/stored-record.ts";
 import { suppliedFieldsOf } from "../records/supplied-fields.ts";
 import { applyDeriveRules, refusalError } from "./before-rules.ts";
 import { preloadPath } from "./rule-condition.ts";
 import type { RuleContext } from "./rule-condition.ts";
-import { selectForEach, sourceImage } from "./rule-for-each.ts";
+import { selectForEach } from "./rule-for-each.ts";
 import type { RuleRecord } from "./rule-for-each.ts";
 import { selectRules } from "./rule-selection.ts";
 import { assignedValue } from "./rule-values.ts";
@@ -205,7 +207,7 @@ const holds = Effect.fn("Aggregates.ruleHolds")(function* holds(
  * @param assignment - The field and its value form.
  * @param sources - What the value reads.
  * @param ruleId - The proposing rule.
- * @returns True when the image changed.
+ * @returns Nothing; changed images are marked dirty.
  */
 const assign = (
   settling: Settling,
@@ -213,7 +215,7 @@ const assign = (
   assignment: RuleAssignment,
   sources: { readonly owner: ValueRecord; readonly source: ValueRecord | null },
   ruleId: DefinitionId
-): boolean => {
+): void => {
   const { field, value } = assignedValue(settling.snapshot, assignment, {
     ...settling.context,
     owner: sources.owner,
@@ -224,14 +226,12 @@ const assign = (
   const current = target.image[assignment.fieldId] ?? null;
 
   if (storedEquals(field.type.kind, current, value)) {
-    return false;
+    return;
   }
 
   target.image[assignment.fieldId] = value;
   target.rules.add(ruleId);
   settling.dirty.add(target.key);
-
-  return true;
 };
 
 const ownerRecord = (owner: SettleOwner): RuleRecord => ({
@@ -280,7 +280,6 @@ const setParts = Effect.fn("Aggregates.setParts")(function* setParts(
   index: number
 ) {
   const parts = partsOf(settling.set, owner, action.classId);
-  let changed = false;
 
   const where =
     action.where === null
@@ -323,14 +322,13 @@ const setParts = Effect.fn("Aggregates.setParts")(function* setParts(
 
     if (matches) {
       for (const assignment of action.values) {
-        changed =
-          assign(
-            settling,
-            part,
-            assignment,
-            { owner: ownerRecord(owner), source: null },
-            rule.id
-          ) || changed;
+        assign(
+          settling,
+          part,
+          assignment,
+          { owner: ownerRecord(owner), source: null },
+          rule.id
+        );
       }
 
       if (settling.dirty.has(part.key)) {
@@ -338,8 +336,6 @@ const setParts = Effect.fn("Aggregates.setParts")(function* setParts(
       }
     }
   }
-
-  return changed;
 });
 
 /**
@@ -411,8 +407,27 @@ const createParts = Effect.fn("Aggregates.createParts")(function* createParts(
       return yield* new AggregateNotSettled();
     }
 
+    const loaded = new Map<string, ReadonlyMap<string, StoredRecord>>();
+
+    for (const [classId, records] of Map.groupBy(
+      selected,
+      (record) => record.classId
+    )) {
+      loaded.set(
+        classId,
+        yield* loadRecords(
+          settling.snapshot,
+          classId,
+          records.map((record) => record.id)
+        )
+      );
+    }
+
     for (const record of selected) {
-      sources.push(yield* sourceImage(settling.snapshot, record));
+      const found = loaded.get(record.classId)?.get(record.id);
+      sources.push(
+        found === undefined ? null : { id: record.id, image: imageOf(found) }
+      );
     }
   }
 
@@ -435,7 +450,7 @@ const createParts = Effect.fn("Aggregates.createParts")(function* createParts(
     owner.parts.push(part.key);
   }
 
-  return sources.length > 0;
+  return yield* Effect.void;
 });
 
 /**
@@ -444,27 +459,24 @@ const createParts = Effect.fn("Aggregates.createParts")(function* createParts(
  * @param settling - The settling.
  * @param owner - The owner.
  * @param rule - The rule, whose condition holds.
- * @returns True when an action proposed something.
+ * @returns Nothing; actions mark proposed images dirty.
  */
 const runActions = Effect.fn("Aggregates.runActions")(function* runActions(
   settling: Settling,
   owner: SettleOwner,
   rule: RecordRuleDefinition
 ) {
-  let proposed = false;
-
   for (const [index, action] of rule.actions.entries()) {
     switch (action.type) {
       case "set": {
         for (const assignment of action.values) {
-          proposed =
-            assign(
-              settling,
-              owner.image,
-              assignment,
-              { owner: ownerRecord(owner), source: null },
-              rule.id
-            ) || proposed;
+          assign(
+            settling,
+            owner.image,
+            assignment,
+            { owner: ownerRecord(owner), source: null },
+            rule.id
+          );
         }
 
         break;
@@ -475,14 +487,12 @@ const runActions = Effect.fn("Aggregates.runActions")(function* runActions(
       }
 
       case "setParts": {
-        proposed =
-          (yield* setParts(settling, owner, rule, action, index)) || proposed;
+        yield* setParts(settling, owner, rule, action, index);
         break;
       }
 
       case "createParts": {
-        proposed =
-          (yield* createParts(settling, owner, rule, action)) || proposed;
+        yield* createParts(settling, owner, rule, action);
         break;
       }
 
@@ -497,7 +507,7 @@ const runActions = Effect.fn("Aggregates.runActions")(function* runActions(
     }
   }
 
-  return proposed;
+  return yield* Effect.void;
 });
 
 /**
@@ -508,7 +518,7 @@ const runActions = Effect.fn("Aggregates.runActions")(function* runActions(
  * @param settling - The settling.
  * @param image - The changed image.
  * @param live - The pass's shared settling images.
- * @returns True when they changed it further.
+ * @returns Nothing; derives update images already marked dirty.
  */
 const derive = Effect.fn("Aggregates.derive")(function* derive(
   settling: Settling,
@@ -529,19 +539,14 @@ const derive = Effect.fn("Aggregates.derive")(function* derive(
     supplied: image.id === null ? new Set() : yield* suppliedFieldsOf(image.id),
   });
 
-  let changed = false;
-
   for (const [fieldId, value] of derived.set) {
     const field = settling.snapshot.field(fieldId);
     const current = image.image[fieldId] ?? null;
 
     if (field !== undefined && !storedEquals(field.type.kind, current, value)) {
       image.image[fieldId] = value;
-      changed = true;
     }
   }
-
-  return changed;
 });
 
 /**
@@ -554,8 +559,6 @@ const derive = Effect.fn("Aggregates.derive")(function* derive(
 const runPass = Effect.fn("Aggregates.pass")(function* runPass(
   settling: Settling
 ) {
-  let proposed = false;
-
   settling.dirty.clear();
 
   for (const owner of innermostFirst(settling.set)) {
@@ -571,7 +574,7 @@ const runPass = Effect.fn("Aggregates.pass")(function* runPass(
           owner.entry.fired.add(rule.id);
         }
 
-        proposed = (yield* runActions(settling, owner, rule)) || proposed;
+        yield* runActions(settling, owner, rule);
       }
     }
   }
@@ -597,11 +600,11 @@ const runPass = Effect.fn("Aggregates.pass")(function* runPass(
     );
 
     for (const image of deriving) {
-      proposed = (yield* derive(settling, image, live)) || proposed;
+      yield* derive(settling, image, live);
     }
   }
 
-  return proposed;
+  return settling.dirty.size > 0;
 });
 
 /**

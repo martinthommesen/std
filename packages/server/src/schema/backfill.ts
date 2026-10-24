@@ -138,17 +138,22 @@ const sweep = Effect.fnUntraced(function* sweep(
     detailText(step, "column")
   );
 
+  const definitionId = detailText(step, "definitionId");
+  const prefix = detailText(step, "prefix");
+  const prefixes = prefixesOf(step);
+  const batchSizeText = String(batchSize);
+
   let cursor = start;
   let total = 0;
 
   for (;;) {
     const [row] = yield* connection
       .execute(statement, [
-        detailText(step, "definitionId"),
+        definitionId,
         cursor,
-        String(batchSize),
-        detailText(step, "prefix"),
-        prefixesOf(step),
+        batchSizeText,
+        prefix,
+        prefixes,
         step.id,
       ])
       .pipe(Effect.flatMap(decodeBatch));

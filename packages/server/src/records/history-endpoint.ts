@@ -404,7 +404,7 @@ const entryJson = (
   snapshot: ConfigSnapshot,
   entry: HistoryEntry,
   fields: JsonObject
-): JsonObject => {
+) => {
   const changes: Record<string, JsonValue> = {};
 
   for (const [fieldId, change] of Object.entries(entry.fields)) {
@@ -424,6 +424,9 @@ const entryJson = (
     version: entry.version,
   };
 };
+
+/** One history entry rendered with current field names and historical descriptors. */
+export type RenderedHistoryEntry = ReturnType<typeof entryJson>;
 
 /**
  * A record's history through endpoint E for the `Actor`.

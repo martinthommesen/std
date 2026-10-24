@@ -1,3 +1,4 @@
+import { API_PREFIX } from "@std/api/api";
 /** Dead-letter resources and stored operator tasks (Contracts 4.6, 10). */
 import { DeadDeliveryTaskCreate, DeliveryId } from "@std/api/dead-letters";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
@@ -53,7 +54,7 @@ import {
   readAuthenticatedBody,
   declaresBody,
 } from "./request.ts";
-import { API_PREFIX, originOf } from "./resource.ts";
+import { originOf } from "./resource.ts";
 
 interface PageHeaders {
   readonly "x-result-count": string;

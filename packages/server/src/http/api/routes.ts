@@ -1,3 +1,4 @@
+import { API_PREFIX } from "@std/api/api";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { MethodNotAllowed } from "@std/api/errors/method-not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
@@ -57,7 +58,7 @@ import {
   readAuthenticatedBody,
   declaresBody,
 } from "./request.ts";
-import { originOf, API_PREFIX } from "./resource.ts";
+import { originOf } from "./resource.ts";
 import { tmfErrorResponse } from "./tmf-error.ts";
 
 /** The path parameters of a record route. */

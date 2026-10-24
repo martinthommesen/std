@@ -10,6 +10,8 @@ import {
   payloadOf,
   PayloadUnreadable,
   readEntries,
+  readEntriesAt,
+  entryTargetKey,
   readFieldOrigins,
 } from "../outbox/delivery-payload.ts";
 import type { FieldOrigin } from "../outbox/delivery-payload.ts";
@@ -127,6 +129,11 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
     const events = [];
     const originsByClass = new Map<string, ReadonlyMap<string, FieldOrigin>>();
 
+    // A malformed target must still be isolated and logged per candidate.
+    const pageEntries = yield* readEntriesAt(
+      rows.map((row) => ({ recordId: row.record_id, version: row.version }))
+    ).pipe(Effect.catchTag("PayloadUnreadable", () => Effect.succeed(null)));
+
     for (const [index, row] of rows.entries()) {
       const rendered: JsonObject[] = [];
       candidates.push({
@@ -134,13 +141,18 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
         position: { id: row.id, occurredAt: row.occurred_at },
       });
 
-      const entries = yield* readEntries(row.record_id, row.version).pipe(
-        Effect.catchTag("PayloadUnreadable", () =>
-          Effect.logWarning("Resource event payload is unreadable", {
-            changeId: row.id,
-          }).pipe(Effect.as([]))
-        )
-      );
+      const entries =
+        pageEntries === null
+          ? yield* readEntries(row.record_id, row.version).pipe(
+              Effect.catchTag("PayloadUnreadable", () =>
+                Effect.logWarning("Resource event payload is unreadable", {
+                  changeId: row.id,
+                }).pipe(Effect.as([]))
+              )
+            )
+          : (pageEntries.get(
+              entryTargetKey({ recordId: row.record_id, version: row.version })
+            ) ?? []);
 
       const entry = entries.at(-1);
 

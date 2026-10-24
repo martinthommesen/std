@@ -1,3 +1,4 @@
+import { API_PREFIX } from "@std/api/api";
 import { ApplyChangeSetCreate } from "@std/api/change-sets";
 /**
  * `applyChangeSet` on `/api/v1` (Contracts 1.4, 1.5, 10.5), a TMF630 task
@@ -35,7 +36,7 @@ import { answered } from "./answered.ts";
 import { getAndHead } from "./methods.ts";
 import { jsonAnswer } from "./records.ts";
 import { jsonBodyOf, readAuthenticatedBody, withSession } from "./request.ts";
-import { originOf, API_PREFIX } from "./resource.ts";
+import { originOf } from "./resource.ts";
 
 /** The task resource's collection path. */
 export const APPLY_CHANGE_SET_PATH = `${API_PREFIX}/applyChangeSet`;

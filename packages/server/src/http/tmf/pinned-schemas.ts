@@ -49,6 +49,7 @@ const asObject = (value: JsonValue | undefined): JsonObject =>
 
 /** A parsed OpenAPI document with its compiled validators. */
 export interface LoadedDocument {
+  readonly schemaId: string;
   readonly document: JsonObject;
   readonly validators: Map<string, ValidateFunction>;
   readonly ajv: Ajv;
@@ -190,12 +191,18 @@ export const loadDocument = (file: string): LoadedDocument => {
   ajv.addFormat("uri", (text: string) => URL.canParse(text));
   ajv.addFormat("float", true);
   ajv.addFormat("base64", true);
+  const schemaId = `tmf:${encodeURIComponent(file)}`;
   ajv.addSchema({
     $defs: Object.fromEntries(defs),
-    $id: `tmf:${encodeURIComponent(file)}`,
+    $id: schemaId,
   });
 
-  const loaded: LoadedDocument = { ajv, document, validators: new Map() };
+  const loaded: LoadedDocument = {
+    ajv,
+    document,
+    schemaId,
+    validators: new Map(),
+  };
 
   documents.set(file, loaded);
 
@@ -223,13 +230,7 @@ export const validatorOf = (
 
   const compiled = loaded.ajv.compile({
     $id: `tmf-response:${encodeURIComponent(key)}`,
-    allOf: [
-      rewrite(
-        schema,
-        false,
-        `tmf:${encodeURIComponent(key.split("|")[0] ?? "")}`
-      ),
-    ],
+    allOf: [rewrite(schema, false, loaded.schemaId)],
   });
 
   loaded.validators.set(key, compiled);

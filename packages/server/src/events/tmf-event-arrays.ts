@@ -23,9 +23,9 @@
  *   aggregate save); a part change with neither predates aggregates (a set
  *   before helpdesk v3) and so every aggregate version.
  * - **A fixed number of statements**, whatever the number of parts: the
- *   touched parts in one, the array's members (today's parts and those
- *   deleted after the change) in two, and their versions at the change with
- *   their saved images (`core.change_image`) in one. Change entries the
+ *   touched parts in one, and the array's members (today's parts and those
+ *   deleted after the change) with their versions and saved images
+ *   (`core.change_image`) together in one. Change entries the
  *   image backfill (migration 0028) has not reached yet are rebuilt
  *   together (`readEntriesAt`, two statements for all, at most three
  *   entries per version), with each class's field origins read once.
@@ -300,6 +300,10 @@ const arraysWritten = Effect.fnUntraced(function* arraysWritten(
   const { delivery } = read;
   const touched = new Set<string>();
 
+  if (arrays.length === 0) {
+    return touched;
+  }
+
   const rows = yield* readRows(
     sql`WITH "written" AS (
   SELECT "w"."record_id", min("w"."record_version") AS "first", max("w"."record_version") AS "last"
@@ -397,37 +401,28 @@ const partsAtChange = Effect.fnUntraced(function* partsAtChange(
   const ownerId = textParameter(delivery.recordId, "uuid");
   const version = textParameter(String(delivery.recordVersion), "int8");
 
-  // The members: today's parts of the owner, and those a later aggregate
-  // version of it deleted.
-  const live = yield* readRows(
-    sql`SELECT ${identSql("p", "id")}::text AS "id"
-FROM ${recordRelation(snapshot, owner.classId)} AS ${identSql("p")}
-WHERE ${identSql("p", owner.name)} = ${ownerId}`
-  );
-
-  const deleted = yield* readRows(
-    sql`SELECT "p"."record_id"::text AS "id"
-FROM core."change" AS "o"
-JOIN core."change" AS "p" ON "p"."operation_id" = "o"."operation_id"
-WHERE "o"."record_id" = ${ownerId} AND "o"."record_version" > ${version}
-  AND ${OWNER_VERSION} AND "p"."kind" = 'delete'
-  AND "p"."record_class_id" = ANY(${classes})`
-  );
-
-  const ids = [...live, ...deleted].flatMap((row) =>
-    row.id === undefined || row.id === null ? [] : [row.id]
-  );
-
   // Each member's last change that belongs to an owner version up to the
   // change's: the aggregate save or delete in its operation, or none
   // (before aggregates).
   const versions = yield* readRows(
-    sql`SELECT DISTINCT ON ("p"."record_id") ${PART_COLUMNS}
+    sql`WITH "members" AS (
+  SELECT ${identSql("p", "id")} AS "id"
+  FROM ${recordRelation(snapshot, owner.classId)} AS ${identSql("p")}
+  WHERE ${identSql("p", owner.name)} = ${ownerId}
+  UNION
+  SELECT "p"."record_id" AS "id"
+  FROM core."change" AS "o"
+  JOIN core."change" AS "p" ON "p"."operation_id" = "o"."operation_id"
+  WHERE "o"."record_id" = ${ownerId} AND "o"."record_version" > ${version}
+    AND ${OWNER_VERSION} AND "p"."kind" = 'delete'
+    AND "p"."record_class_id" = ANY(${classes})
+)
+SELECT DISTINCT ON ("p"."record_id") ${PART_COLUMNS}
 FROM core."change" AS "p"
 LEFT JOIN core."change" AS "o" ON "o"."operation_id" = "p"."operation_id"
   AND "o"."record_id" = ${ownerId} AND ${OWNER_VERSION}
 ${PART_IMAGES}
-WHERE "p"."record_id" = ANY(${arrayParameter(ids, "uuid")})
+WHERE "p"."record_id" IN (SELECT "id" FROM "members")
   AND ("o"."record_version" IS NULL OR "o"."record_version" <= ${version})
 ORDER BY "p"."record_id", "p"."record_version" DESC`
   ).pipe(Effect.flatMap(PartRows));

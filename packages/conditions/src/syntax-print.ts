@@ -1,3 +1,4 @@
+import { comparisonClass } from "@std/values/field-type";
 /**
  * The printer of the condition text syntax: field IDs print as their current
  * names, so `parseCondition(printCondition(a))` gives `a` back for every
@@ -109,12 +110,6 @@ const RELATIVE_WORDS = new Map([
   [1, "next"],
 ]);
 
-const NUMBER_KINDS: ReadonlySet<FieldKind> = new Set([
-  "integer",
-  "bigInteger",
-  "decimal",
-]);
-
 const quote = (text: string, delimiter: string): string => {
   let out = delimiter;
 
@@ -222,7 +217,7 @@ const printLiteral = (field: FieldInfo, literal: LiteralValue): string => {
   const { value } = literal;
   const { kind } = field.type;
 
-  if (NUMBER_KINDS.has(kind)) {
+  if (comparisonClass(kind) === "numeric") {
     return printNumber(kind, value);
   }
 

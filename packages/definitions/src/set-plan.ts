@@ -166,7 +166,9 @@ export const topologicalOrder = (
     pending.set(item.id, deps);
 
     for (const dep of deps) {
-      dependents.set(dep, [...(dependents.get(dep) ?? []), item.id]);
+      const adjacent = dependents.get(dep) ?? [];
+      adjacent.push(item.id);
+      dependents.set(dep, adjacent);
     }
   }
 

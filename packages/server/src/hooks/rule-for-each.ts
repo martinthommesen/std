@@ -10,12 +10,7 @@
 import type { RecordImage } from "@std/conditions/evaluate-core";
 import { resolveCondition } from "@std/conditions/resolve";
 import { compileCondition } from "@std/conditions/sql";
-import {
-  identSql,
-  rawSql,
-  sql,
-  textParameter,
-} from "@std/conditions/sql-fragment";
+import { identSql, rawSql, sql } from "@std/conditions/sql-fragment";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { RuleForEach } from "@std/definitions/rule-definition";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -23,7 +18,7 @@ import { isString } from "@std/values/field-value";
 import { Effect, Option } from "effect";
 
 import { recordRelation } from "../records/relation.ts";
-import { loadRecord, rootTable } from "../records/save-sql.ts";
+import { loadRecord, loadRoot } from "../records/save-sql.ts";
 import { readRows } from "../records/sql-run.ts";
 import { imageOf } from "../records/stored-record.ts";
 import { checkedRuleCondition } from "./rule-condition.ts";
@@ -131,14 +126,9 @@ export const rootOf = Effect.fn("Rules.rootOf")(function* rootOf(
   classId: DefinitionId,
   id: string
 ) {
-  const rows = yield* readRows(
-    sql`SELECT "id"::text AS "id", "class_id"::text AS "class_id", "version"::text AS "version"
-FROM ${rawSql(rootTable(snapshot, classId))} WHERE "id" = ${textParameter(id, "uuid")}`
+  return (yield* loadRoot(snapshot, classId, id, "none")).pipe(
+    Option.map((root): Selected => ({ ...root, id }))
   );
-
-  const [found] = selectedOf(rows);
-
-  return Option.fromNullishOr(found);
 });
 
 /**

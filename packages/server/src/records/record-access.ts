@@ -152,6 +152,35 @@ export const proposedRelation = (
   return sql`(SELECT ${joinSql([...system, ...columns], ", ")})`;
 };
 
+const readability = (scope: ReadScope, classId: DefinitionId) => {
+  const view = scope.view(classId, true);
+  const fields = scope.snapshot.fields(classId);
+
+  const columns = fields.map((field, index) => {
+    const readField = view.byId(field.id);
+
+    return truthColumn(
+      readField === undefined ? FALSE_SQL : view.readable(ALIAS, readField),
+      `f${index}`
+    );
+  });
+
+  return {
+    columns: joinSql(
+      [truthColumn(view.visibility(ALIAS), "visible"), ...columns],
+      ", "
+    ),
+    decode: (
+      row: Readonly<Record<string, string | null>>
+    ): ReadonlySet<DefinitionId> =>
+      new Set(
+        fields.flatMap((field, index) =>
+          row[`f${index}`] === "true" ? [field.id] : []
+        )
+      ),
+  };
+};
+
 /**
  * The fields the caller could read on a proposed record: none unless the
  * record would be visible, then each field whose read rules pass on it.
@@ -163,20 +192,10 @@ export const proposedRelation = (
  */
 export const readableOnProposal = Effect.fn("Records.readableOnProposal")(
   function* readableOnProposal(scope: ReadScope, record: ProposedRecord) {
-    const view = scope.view(record.classId, true);
-    const fields = scope.snapshot.fields(record.classId);
-
-    const columns = fields.map((field, index) => {
-      const readField = view.byId(field.id);
-
-      return truthColumn(
-        readField === undefined ? FALSE_SQL : view.readable(ALIAS, readField),
-        `f${index}`
-      );
-    });
+    const projection = readability(scope, record.classId);
 
     const [row] = yield* readRows(
-      sql`SELECT ${joinSql([truthColumn(view.visibility(ALIAS), "visible"), ...columns], ", ")}
+      sql`SELECT ${projection.columns}
 FROM ${proposedRelation(scope.snapshot, record)} AS ${identSql(ALIAS)}`
     );
 
@@ -184,13 +203,7 @@ FROM ${proposedRelation(scope.snapshot, record)} AS ${identSql(ALIAS)}`
       return new Set<DefinitionId>();
     }
 
-    const readable: ReadonlySet<DefinitionId> = new Set(
-      fields.flatMap((field, index) =>
-        row?.[`f${index}`] === "true" ? [field.id] : []
-      )
-    );
-
-    return readable;
+    return projection.decode(row);
   }
 );
 
@@ -210,20 +223,10 @@ export const readableOnRecord = Effect.fn("Records.readableOnRecord")(
     classId: DefinitionId,
     id: string
   ) {
-    const view = scope.view(classId, true);
-    const fields = scope.snapshot.fields(classId);
-
-    const columns = fields.map((field, index) => {
-      const readField = view.byId(field.id);
-
-      return truthColumn(
-        readField === undefined ? FALSE_SQL : view.readable(ALIAS, readField),
-        `f${index}`
-      );
-    });
+    const projection = readability(scope, classId);
 
     const [row] = yield* readRows(
-      sql`SELECT ${joinSql([truthColumn(view.visibility(ALIAS), "visible"), ...columns], ", ")}
+      sql`SELECT ${projection.columns}
 FROM ${recordRelation(scope.snapshot, classId)} AS ${identSql(ALIAS)}
 WHERE ${identSql(ALIAS, "id")} = ${textParameter(id, "uuid")}`
     );
@@ -232,12 +235,6 @@ WHERE ${identSql(ALIAS, "id")} = ${textParameter(id, "uuid")}`
       return Option.none<ReadonlySet<DefinitionId>>();
     }
 
-    const readable: ReadonlySet<DefinitionId> = new Set(
-      fields.flatMap((field, index) =>
-        row[`f${index}`] === "true" ? [field.id] : []
-      )
-    );
-
-    return Option.some(readable);
+    return Option.some(projection.decode(row));
   }
 );

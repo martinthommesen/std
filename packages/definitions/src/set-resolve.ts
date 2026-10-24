@@ -35,6 +35,7 @@ import type { DefinitionId } from "./ids.ts";
 import { splitQualifiedName } from "./names.ts";
 import { DefinitionInvalid, problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
+import { originOwns, setOrigin } from "./requester.ts";
 import { SetFileSchema } from "./set-file.ts";
 import type {
   ConditionEntrySchema,
@@ -134,16 +135,9 @@ const ownerOf = (header: SetHeader): Owner =>
     ? { layer: "core" }
     : { layer: "app", setId: header.id };
 
-const sameOwner = (left: Owner, right: Owner): boolean => {
-  if (left.layer === "app" && right.layer === "app") {
-    return left.setId === right.setId;
-  }
-
-  return left.layer === right.layer;
-};
-
 /** State of one resolution. */
 interface Resolution {
+  readonly lineages: Map<TableEntry, readonly Level[]>;
   readonly header: SetHeader;
   readonly owner: Owner;
   readonly visible: readonly Owner[];
@@ -161,7 +155,9 @@ const visibleBase = (
   definition: Definition | undefined
 ): Definition | undefined =>
   definition !== undefined &&
-  resolution.visible.some((owner) => sameOwner(owner, definition.owner))
+  resolution.visible.some((owner) =>
+    originOwns(setOrigin(owner), definition.owner)
+  )
     ? definition
     : undefined;
 
@@ -235,6 +231,12 @@ const lineageOf = (
   resolution: Resolution,
   entry: TableEntry
 ): readonly Level[] => {
+  const known = resolution.lineages.get(entry);
+
+  if (known !== undefined) {
+    return known;
+  }
+
   const chain: Level[] = [{ entry }];
   const seen = new Set<string>([entry.name]);
   let parent = entry.extends ?? null;
@@ -261,7 +263,10 @@ const lineageOf = (
     }
   }
 
-  return chain.toReversed();
+  const lineage = chain.toReversed();
+  resolution.lineages.set(entry, lineage);
+
+  return lineage;
 };
 
 const fieldOnLevel = (
@@ -352,23 +357,8 @@ const isReferenceEntry = (type: TypeEntry): type is ReferenceEntry =>
 const isConditionEntry = (type: TypeEntry): type is ConditionEntry =>
   !isSimpleKind(type) && "class" in type;
 
-/** The field type of each bare kind name. */
 /** A reference type. */
 type ReferenceType = FieldTypeOf<"reference">;
-
-const SIMPLE_TYPES: Readonly<Record<SimpleKind, FieldType>> = {
-  bigInteger: { kind: "bigInteger" },
-  boolean: { kind: "boolean" },
-  choice: { kind: "choice" },
-  date: { kind: "date" },
-  dateTime: { kind: "dateTime" },
-  integer: { kind: "integer" },
-  json: { kind: "json" },
-  longText: { kind: "longText" },
-  password: { kind: "password" },
-  text: { kind: "text" },
-  uuid: { kind: "uuid" },
-};
 
 const resolveType = (
   resolution: Resolution,
@@ -376,7 +366,7 @@ const resolveType = (
   type: TypeEntry
 ): FieldType | undefined => {
   if (isSimpleKind(type)) {
-    return SIMPLE_TYPES[type];
+    return { kind: type };
   }
 
   if (isReferenceEntry(type)) {
@@ -932,7 +922,10 @@ const checkIds = (resolution: Resolution, files: readonly SetFile[]): void => {
     seen.add(id);
     const stored = resolution.base.get(id);
 
-    if (stored !== undefined && !sameOwner(stored.owner, resolution.owner)) {
+    if (
+      stored !== undefined &&
+      !originOwns(setOrigin(stored.owner), resolution.owner)
+    ) {
       resolution.problems.push(
         problem(
           "duplicateId",
@@ -1035,6 +1028,7 @@ export const resolveSet = (
     base,
     drafts: [],
     header,
+    lineages: new Map(),
     namespaces: namesOf(contents, (file) => file.namespaces ?? []),
     owner,
     permissions: namesOf(contents, (file) => file.permissions ?? []),

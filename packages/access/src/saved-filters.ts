@@ -17,7 +17,7 @@ import { decodeExpr } from "@std/conditions/ast";
 import { checkConditionJson } from "@std/conditions/check";
 import type { ClassView, FieldInfo } from "@std/conditions/class-view";
 import { printCondition } from "@std/conditions/syntax-print";
-import { withChoices } from "@std/definitions/condition-view";
+import { classViewOf } from "@std/definitions/condition-view";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import type { MetaSavedFilter } from "@std/definitions/table-metadata";
@@ -43,6 +43,7 @@ export const callerFilterView = (
   caller: Caller
 ): ClassView => {
   const views = new Map<DefinitionId, VisibleSchema | undefined>();
+  const definitions = classViewOf(snapshot);
 
   const viewOf = (classId: DefinitionId): VisibleSchema | undefined => {
     if (!views.has(classId)) {
@@ -59,25 +60,21 @@ export const callerFilterView = (
   };
 
   const infoOf = (
+    classId: DefinitionId,
     found: ReturnType<VisibleSchema["byId"]>
   ): FieldInfo | undefined =>
     found === undefined
       ? undefined
-      : withChoices(snapshot, {
-          classId: found.field.classId,
-          id: found.field.id,
-          name: found.field.name,
-          retired: found.field.state === "retired",
-          type: found.field.type,
-        });
+      : definitions.field(classId, found.field.id);
 
   const field = (classId: DefinitionId, fieldId: DefinitionId) =>
-    infoOf(viewOf(classId)?.byId(fieldId));
+    infoOf(classId, viewOf(classId)?.byId(fieldId));
 
   return {
     canRead: (classId, fieldId) => field(classId, fieldId) !== undefined,
     field,
-    fieldByName: (classId, name) => infoOf(viewOf(classId)?.byName(name)),
+    fieldByName: (classId, name) =>
+      infoOf(classId, viewOf(classId)?.byName(name)),
   };
 };
 

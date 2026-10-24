@@ -266,7 +266,12 @@ const sourceRecordsOf = Effect.fn("Tmf.sourceRecordsOf")(
   ) {
     const records = yield* readSourceRecords(
       {
-        attributes: mapped.resource.attributes,
+        attributes: mapped.resource.attributes.filter(
+          (attribute) =>
+            attribute.kind !== "parts" ||
+            fields === null ||
+            fields.has(attribute.name)
+        ),
         extraKeys: extraKeysOf(scope.snapshot, mapped.resource),
         scope,
       },

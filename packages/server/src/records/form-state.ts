@@ -43,6 +43,7 @@ import { readableOnProposal, readableOnRecord } from "./record-access.ts";
 import { loadRecord, loadRoot } from "./save-sql.ts";
 import { imageOf } from "./stored-record.ts";
 import type { StoredRecord } from "./stored-record.ts";
+import { isWriteOnly } from "./stored-values.ts";
 import type { ProposalCheck } from "./write-access.ts";
 import { WriteAccess } from "./write-access.ts";
 import { resolveWriteBody } from "./write-body.ts";
@@ -249,11 +250,7 @@ const readableValues = Effect.fn("Forms.readableValues")(
     const values = new Map<string, JsonValue>();
 
     for (const field of fields) {
-      if (
-        !readable.has(field.field.id) ||
-        field.type.kind === "password" ||
-        field.type.kind === "secret"
-      ) {
+      if (!readable.has(field.field.id) || isWriteOnly(field.type.kind)) {
         continue;
       }
 
@@ -495,8 +492,7 @@ const proposeForm = Effect.fn("Forms.propose")(function* proposeForm(
 
   const presence = new Set(
     [...resolved.success.entries].flatMap(([id, entry]) =>
-      (entry.field.type.kind === "password" ||
-        entry.field.type.kind === "secret") &&
+      isWriteOnly(entry.field.type.kind) &&
       Schema.is(FormSecretPresence)(entry.json)
         ? [id]
         : []

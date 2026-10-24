@@ -16,7 +16,7 @@ import { constUndefined } from "effect/Function";
 import type { ListQuery } from "../http/api/query.ts";
 import {
   cursorPredicate,
-  encodeCursor,
+  finishPage,
   keyExpression,
   orderBy,
 } from "../records/read-cursor.ts";
@@ -307,18 +307,12 @@ export const readDeadPage = Effect.fn("Outbox.readDeadPage")(
     WHERE ${joinSql(positions, " AND ")} ORDER BY ${orderBy(reversed ? flipped : keys, identSql("r", "id"), reversed)}
     LIMIT ${textParameter(String(query.limit + 1), "int8")} OFFSET ${textParameter(String(query.offset), "int8")}`);
 
-    const read = rows.slice(0, query.limit);
-    const pageRows = reversed ? read.toReversed() : read;
-
-    const cursorOf = (row: (typeof rows)[number]) =>
-      encodeCursor(query.sortKeys, {
-        id: row.id ?? "",
-        values: keys.map((_, index) => row[`k${index}`] ?? null),
-      });
-
-    const first = pageRows.at(0);
-    const last = pageRows.at(-1);
-    const hasMore = reversed ? last !== undefined : rows.length > query.limit;
+    const {
+      rows: pageRows,
+      firstCursor,
+      hasMore,
+      nextCursor,
+    } = finishPage(rows, query.limit, reversed, query.sortKeys);
 
     const [total] = query.withCount
       ? yield* readRows(
@@ -327,9 +321,9 @@ export const readDeadPage = Effect.fn("Outbox.readDeadPage")(
       : [];
 
     const page: Page = {
-      firstCursor: first === undefined ? null : cursorOf(first),
+      firstCursor,
       hasMore,
-      nextCursor: last !== undefined && hasMore ? cursorOf(last) : null,
+      nextCursor,
       records: [],
     };
 

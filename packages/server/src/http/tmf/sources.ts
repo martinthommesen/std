@@ -16,7 +16,6 @@
  */
 import type { Expr } from "@std/conditions/ast";
 import {
-  arrayParameter,
   identSql,
   joinSql,
   sql,
@@ -35,6 +34,7 @@ import type {
   SourceValues,
 } from "@std/tmf/mapping";
 import { formatDateTime } from "@std/values/date-time";
+import { stringifyJson } from "@std/values/json";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
@@ -50,6 +50,7 @@ import type { DecodedRecord, Page } from "../../records/read-records.ts";
 import type { ReadScope, ReadView } from "../../records/read-view.ts";
 import { recordRelation } from "../../records/relation.ts";
 import { readRows } from "../../records/sql-run.ts";
+import type { TextRow } from "../../records/sql-run.ts";
 
 const SYSTEM_PREFIX = "system:";
 
@@ -448,17 +449,15 @@ export const readSourceRecords = Effect.fn("Tmf.readSourceRecords")(
     const concrete = yield* concreteRecords(read, view, records);
     const ids = concrete.map((record) => record.id);
 
-    const parts = new Map<
-      string,
-      ReadonlyMap<string, SourceRecord[]> | undefined
-    >();
+    const parts = new Map<string, ReadonlyMap<string, SourceRecord[]>>();
 
     for (const attribute of read.attributes) {
       if (attribute.kind === "parts") {
-        parts.set(
-          attribute.name,
-          yield* partsByOwner(read.scope, attribute, ids)
-        );
+        const byOwner = yield* partsByOwner(read.scope, attribute, ids);
+
+        if (byOwner !== undefined) {
+          parts.set(attribute.name, byOwner);
+        }
       }
     }
 
@@ -466,9 +465,7 @@ export const readSourceRecords = Effect.fn("Tmf.readSourceRecords")(
       const own = new Map<string, readonly SourceRecord[]>();
 
       for (const [name, byOwner] of parts) {
-        if (byOwner !== undefined) {
-          own.set(name, byOwner.get(record.id) ?? []);
-        }
+        own.set(name, byOwner.get(record.id) ?? []);
       }
 
       return {
@@ -511,88 +508,118 @@ const ENTRY_COLUMNS = sql`c.id::text AS id, c.operation_id::text AS operation_id
 // fields, in version order.
 const entriesSql = (
   record: SqlFragment | SqlParameter,
-  version: number,
-  fieldIds: readonly string[]
+  version: SqlFragment | SqlParameter,
+  fieldIds: SqlFragment | SqlParameter
 ) => sql`SELECT ${ENTRY_COLUMNS}
 FROM core."change" c
 WHERE c.record_id = ${record}
-  AND c.record_version <= ${textParameter(String(version), "int8")}
-  AND jsonb_exists_any(c.fields, ${arrayParameter(fieldIds, "text")})
+  AND c.record_version <= ${version}
+  AND jsonb_exists_any(c.fields, ${fieldIds})
 ORDER BY c.record_version`;
 
 const LIVE = "r";
 
-/**
- * A record's history rows for some fields, and which of the record's
- * fields the caller may still read: with a scope, read with the live
- * record's visibility and field predicates in the same statement, so one
- * snapshot decides both (as the history endpoint's read does); without one
- * (a delivery, whose payload decided readability at its version), the
- * entries alone, every field as read.
- *
- * @param record - The record as read.
- * @param historyFields - The history fields readable on it.
- * @param scope - The caller's scope, for a live read.
- * @returns The entry rows and the fields still readable (null: all).
- */
+interface HistoryInput {
+  readonly position: number;
+  readonly record: SourceRecord;
+  readonly fields: readonly string[];
+  readonly historyFields: readonly string[];
+}
+
+interface HistoryRows {
+  readonly live: ReadonlySet<string> | null;
+  readonly denied: ReadonlySet<string>;
+  readonly rows: readonly TextRow[];
+}
+
+// Every input has the same concrete class. A live predicate and its history
+// stay in one statement, so the later snapshot's denials still win.
 const historyRows = Effect.fnUntraced(function* historyRows(
-  record: SourceRecord,
-  historyFields: readonly string[],
+  inputs: readonly HistoryInput[],
   scope: ReadScope | undefined
 ) {
-  if (scope === undefined) {
-    return {
-      live: null,
-      rows: yield* readRows(
-        entriesSql(
-          textParameter(record.id, "uuid"),
-          record.version,
-          historyFields
-        )
-      ),
-    };
+  const targets = sql`jsonb_to_recordset(${textParameter(
+    stringifyJson(
+      inputs.map((input) => ({
+        history_fields: [...input.historyFields],
+        position: input.position,
+        record_id: input.record.id,
+        version: input.record.version,
+      }))
+    ),
+    "jsonb"
+  )}) AS "t" ("position" int8, "record_id" uuid, "version" int8, "history_fields" text[])`;
+
+  const history = entriesSql(
+    identSql("t", "record_id"),
+    identSql("t", "version"),
+    identSql("t", "history_fields")
+  );
+
+  const [firstInput] = inputs;
+
+  if (firstInput === undefined) {
+    return new Map<number, HistoryRows>();
   }
 
-  const view = scope.view(record.classId, true);
+  const view = scope?.view(firstInput.record.classId, true);
+  const fieldIds = [...new Set(inputs.flatMap((input) => input.fields))];
 
-  // Every stored field the record was read with, and the history fields.
-  const fieldIds = [
-    ...new Set([
-      ...historyFields,
-      ...[...record.values.keys()].flatMap((key) =>
-        view.byId(key) === undefined ? [] : [key]
-      ),
-    ]),
-  ];
+  const predicates =
+    view === undefined
+      ? []
+      : fieldIds.map((fieldId, index) => {
+          const field = view.byId(fieldId);
 
-  const predicates = fieldIds.map((fieldId, index) => {
-    const field = view.byId(fieldId);
-    const holds = field === undefined ? sql`FALSE` : view.readable(LIVE, field);
-    const column = identSql(`f${index}`);
+          const holds =
+            field === undefined ? sql`FALSE` : view.readable(LIVE, field);
 
-    return sql`(${view.visibility(LIVE)} AND ${holds})::text AS ${column}`;
-  });
+          const column = identSql(`f${index}`);
+
+          return sql`(${view.visibility(LIVE)} AND ${holds})::text AS ${column}`;
+        });
 
   const rows = yield* readRows(
-    sql`SELECT ${joinSql(predicates, ", ")}, "h".*
-FROM ${recordRelation(scope.snapshot, record.classId)} AS ${identSql(LIVE)}
-LEFT JOIN LATERAL (${entriesSql(identSql(LIVE, "id"), record.version, historyFields)}) AS "h" ON true
-WHERE ${identSql(LIVE, "id")} = ${textParameter(record.id, "uuid")}
-ORDER BY "h"."version_text"::bigint`
+    scope === undefined
+      ? sql`SELECT "t"."position"::text AS "target_position", "h".*
+FROM ${targets}
+LEFT JOIN LATERAL (${history}) AS "h" ON true
+ORDER BY "t"."position", "h"."version_text"::bigint`
+      : sql`SELECT "t"."position"::text AS "target_position", ${joinSql(predicates, ", ")}, "h".*
+FROM ${targets}
+JOIN ${recordRelation(scope.snapshot, firstInput.record.classId)} AS ${identSql(LIVE)} ON ${identSql(LIVE, "id")} = "t"."record_id"
+LEFT JOIN LATERAL (${history}) AS "h" ON true
+ORDER BY "t"."position", "h"."version_text"::bigint`
   );
 
-  const [first] = rows;
+  const byPosition = Map.groupBy(rows, (row) => Number(row.target_position));
 
-  // A record gone or hidden since: no field is readable any more.
-  const live: ReadonlySet<string> = new Set(
-    fieldIds.filter((_, index) => first?.[`f${index}`] === "true")
+  return new Map(
+    inputs.map((input): [number, HistoryRows] => {
+      const own = byPosition.get(input.position) ?? [];
+      const [first] = own;
+
+      const live =
+        scope === undefined
+          ? null
+          : new Set(
+              fieldIds.filter((_, index) => first?.[`f${index}`] === "true")
+            );
+
+      return [
+        input.position,
+        {
+          denied: new Set(
+            input.fields.filter(
+              (fieldId) => live !== null && !live.has(fieldId)
+            )
+          ),
+          live,
+          rows: own.filter((row) => row.id !== null && row.id !== undefined),
+        },
+      ];
+    })
   );
-
-  return {
-    denied: new Set(fieldIds.filter((fieldId) => !live.has(fieldId))),
-    live,
-    rows: rows.filter((row) => row.id !== null && row.id !== undefined),
-  };
 });
 
 /**
@@ -658,9 +685,7 @@ export const withHistory = Effect.fn("Tmf.withHistory")(function* withHistory(
     return records;
   }
 
-  const result: SourceRecord[] = [];
-
-  for (const record of records) {
+  const inputs = records.flatMap((record, position): HistoryInput[] => {
     const historyFields = [
       ...new Set(
         needing.flatMap((attribute) =>
@@ -672,32 +697,70 @@ export const withHistory = Effect.fn("Tmf.withHistory")(function* withHistory(
     ];
 
     if (historyFields.length === 0) {
-      result.push(record);
-    } else {
-      const read = yield* historyRows(record, historyFields, scope);
+      return [];
+    }
 
-      const readable = new Set(
-        historyFields.filter(
-          (fieldId) => read.live === null || read.live.has(fieldId)
-        )
+    const view = scope?.view(record.classId, true);
+
+    const fields = [
+      ...new Set([
+        ...historyFields,
+        ...[...record.values.keys()].filter(
+          (key) => view?.byId(key) !== undefined
+        ),
+      ]),
+    ];
+
+    return [{ fields, historyFields, position, record }];
+  });
+
+  const byPosition = new Map<number, HistoryRows>();
+
+  for (const group of Map.groupBy(
+    inputs,
+    (input) => input.record.classId
+  ).values()) {
+    for (const [position, read] of yield* historyRows(group, scope)) {
+      byPosition.set(position, read);
+    }
+  }
+
+  const inputByPosition = new Map(
+    inputs.map((input) => [input.position, input])
+  );
+
+  const result: SourceRecord[] = [];
+
+  for (const [position, record] of records.entries()) {
+    const input = inputByPosition.get(position);
+    const read = byPosition.get(position);
+
+    if (input === undefined || read === undefined) {
+      result.push(record);
+      continue;
+    }
+
+    const readable = new Set(
+      input.historyFields.filter(
+        (fieldId) => read.live === null || read.live.has(fieldId)
+      )
+    );
+
+    const steps: HistoryStep[] = [];
+
+    for (const row of read.rows) {
+      const entry = yield* entryOfRow(
+        yield* decodeEntryRow(row).pipe(Effect.orDie),
+        readable
       );
 
-      const steps: HistoryStep[] = [];
-
-      for (const row of read.rows) {
-        const entry = yield* entryOfRow(
-          yield* decodeEntryRow(row).pipe(Effect.orDie),
-          readable
-        );
-
-        steps.push(stepOf(entry));
-      }
-
-      const live =
-        read.live === null ? record : withoutDenied(record, read.denied);
-
-      result.push({ ...live, history: steps });
+      steps.push(stepOf(entry));
     }
+
+    const live =
+      read.live === null ? record : withoutDenied(record, read.denied);
+
+    result.push({ ...live, history: steps });
   }
 
   return result;

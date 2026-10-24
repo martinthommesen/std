@@ -30,6 +30,7 @@
  *   attempt counts like a failed one.
  */
 import type { SubscriptionDefinition } from "@std/definitions/definition";
+import { compareBigIntegers } from "@std/values/integer";
 import { Duration, Effect, Option, Random, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -224,15 +225,8 @@ const decodeClaimed = decodeRows(
   })
 );
 
-const byRowId = (left: ClaimedDelivery, right: ClaimedDelivery): number => {
-  const order = BigInt(left.id) - BigInt(right.id);
-
-  if (order === 0n) {
-    return 0;
-  }
-
-  return order < 0n ? -1 : 1;
-};
+const byRowId = (left: ClaimedDelivery, right: ClaimedDelivery): number =>
+  compareBigIntegers(BigInt(left.id), BigInt(right.id));
 
 /**
  * PostgreSQL interval text for a duration, in milliseconds.

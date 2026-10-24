@@ -685,7 +685,13 @@ export const parseSelection = Effect.fn("ApiQuery.parseSelection")(
   }
 );
 
-const single = Effect.fn("ApiQuery.single")(function* single(
+/**
+ * Reads one singleton query directive, refusing repeated occurrences.
+ * @param query - The query parameters in wire order.
+ * @param name - The directive name.
+ * @returns Its value, or undefined when absent.
+ */
+export const single = Effect.fn("ApiQuery.single")(function* single(
   query: QueryParameters,
   name: string
 ) {

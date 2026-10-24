@@ -1,3 +1,4 @@
+import { comparisonClass } from "@std/values/field-type";
 /**
  * The parser of the condition text syntax (grammar in
  * `docs/decisions/0005-conditions.md`). Names resolve to field IDs through
@@ -146,12 +147,6 @@ const COMPARE_OPERATORS = new Map<string, CompareOperator>([
   ["=", "eq"],
   [">", "gt"],
   [">=", "ge"],
-]);
-
-const NUMBER_KINDS: ReadonlySet<FieldKind> = new Set([
-  "integer",
-  "bigInteger",
-  "decimal",
 ]);
 
 const STRING_KINDS: ReadonlySet<FieldKind> = new Set([
@@ -426,7 +421,7 @@ const parseNumberLiteral = (
   advance(parser);
   const { kind } = field.type;
 
-  if (!NUMBER_KINDS.has(kind)) {
+  if (comparisonClass(kind) !== "numeric") {
     throw literalError(token, "This field does not take a number.");
   }
 

@@ -95,12 +95,15 @@ const closeConflict = Effect.fn("Config.closeConflict")(function* closeConflict(
 });
 
 const removeBase = Effect.fn("Config.removeBase")(function* removeBase(
-  recordId: DefinitionId
+  recordIds: readonly DefinitionId[]
 ) {
-  const sql = yield* SqlClient.SqlClient;
+  if (recordIds.length === 0) {
+    return;
+  }
 
-  yield* sql`DELETE FROM core."config_override" WHERE record_id = ${recordId}::uuid`;
-  yield* sql`DELETE FROM core."config_base" WHERE id = ${recordId}::uuid`;
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`DELETE FROM core."config_override" WHERE record_id = ANY(${recordIds}::uuid[])`;
+  yield* sql`DELETE FROM core."config_base" WHERE id = ANY(${recordIds}::uuid[])`;
 });
 
 /**
@@ -122,9 +125,7 @@ export const writeOverrideChanges = Effect.fn("Config.writeOverrideChanges")(
       yield* closeConflict(changes.closeConflict, actorId);
     }
 
-    for (const recordId of changes.removeBases) {
-      yield* removeBase(recordId);
-    }
+    yield* removeBase(changes.removeBases);
   }
 );
 

@@ -41,7 +41,7 @@ import type {
 } from "./layers.ts";
 import { UPDATABLE } from "./operation.ts";
 import type { Operation } from "./operation.ts";
-import { setOrigin, SYSTEM_REQUESTER } from "./requester.ts";
+import { originOwns, setOrigin, SYSTEM_REQUESTER } from "./requester.ts";
 import {
   createOperation,
   draftDependencies,
@@ -220,11 +220,6 @@ const refuse = (
     set: planning.input.resolved.header.name,
   });
 };
-
-const sameOwner = (left: Owner, right: Owner): boolean =>
-  left.layer === "app" && right.layer === "app"
-    ? left.setId === right.setId
-    : left.layer === right.layer;
 
 const isLocal = (
   definition: Definition | undefined
@@ -861,7 +856,7 @@ const planRemovals = (planning: Planning, owner: Owner): void => {
     .definitions()
     .filter(
       (definition) =>
-        sameOwner(definition.owner, owner) &&
+        originOwns(setOrigin(owner), definition.owner) &&
         definition.state !== "purged" &&
         !planning.drafts.has(definition.id) &&
         layers.base.get(definition.id)?.removed !== true

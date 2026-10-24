@@ -72,18 +72,9 @@ type RouteServices =
   | Transactions;
 
 /** An operation and the method that serves it. */
-type OperationMethod = readonly [TmfOperation, string];
-
-const COLLECTION_METHODS: readonly OperationMethod[] = [
-  ["list", "GET"],
-  ["create", "POST"],
-];
-
-const ITEM_METHODS: readonly OperationMethod[] = [
-  ["retrieve", "GET"],
-  ["patch", "PATCH"],
-  ["delete", "DELETE"],
-];
+type OperationMethod =
+  | (typeof COLLECTION_METHODS)[number]
+  | (typeof ITEM_METHODS)[number];
 
 /** Resource methods, in `Allow` order, routed to `405` when not offered. */
 const RESOURCE_METHODS = ["GET", "HEAD", "POST", "PATCH", "DELETE"] as const;
@@ -271,6 +262,17 @@ const deleteWork = (input: TmfInput, id: string) =>
     deleteTmf(input, id, version)
   );
 
+const COLLECTION_METHODS = [
+  ["list", "GET", listTmf],
+  ["create", "POST", createWork],
+] as const;
+
+const ITEM_METHODS = [
+  ["retrieve", "GET", retrieveTmf],
+  ["patch", "PATCH", patchWork],
+  ["delete", "DELETE", deleteWork],
+] as const;
+
 const resourceRoutes = (
   environment: RouteEnvironment,
   mapped: MappedResource
@@ -278,41 +280,42 @@ const resourceRoutes = (
   const base = `${mapped.api.basePath}/${mapped.resource.name}` as const;
   const operations = new Set<TmfOperation>(mapped.resource.operations);
 
-  const routed = <E, R>(operation: TmfOperation, work: OperationWork<E, R>) =>
-    routeWork(environment, mapped, operation, work);
+  const collectionOperations = COLLECTION_METHODS.filter(([operation]) =>
+    operations.has(operation)
+  );
+
+  const itemOperations = ITEM_METHODS.filter(([operation]) =>
+    operations.has(operation)
+  );
 
   const collection: ResourcePath = {
     mapped,
-    offered: offeredOf(mapped, COLLECTION_METHODS),
+    offered: collectionOperations.map(([, method]) => method),
   };
 
   const item: ResourcePath = {
     mapped,
-    offered: offeredOf(mapped, ITEM_METHODS),
+    offered: itemOperations.map(([, method]) => method),
   };
 
+  const routes = (
+    path: `/${string}`,
+    declarations: readonly OperationMethod[]
+  ) =>
+    declarations.flatMap(([operation, method, work]) => {
+      const handle = routeWork<
+        Effect.Error<ReturnType<OperationMethod[2]>>,
+        Effect.Services<ReturnType<OperationMethod[2]>>
+      >(environment, mapped, operation, work);
+
+      return method === "GET"
+        ? getAndHead(path, handle)
+        : [HttpRouter.route(method, path, handle)];
+    });
+
   return [
-    ...(operations.has("list")
-      ? getAndHead(base, routed("list", listTmf))
-      : []),
-    ...(operations.has("create")
-      ? [HttpRouter.route("POST", base, routed("create", createWork))]
-      : []),
-    ...(operations.has("retrieve")
-      ? getAndHead(`${base}/:id`, routed("retrieve", retrieveTmf))
-      : []),
-    ...(operations.has("patch")
-      ? [HttpRouter.route("PATCH", `${base}/:id`, routed("patch", patchWork))]
-      : []),
-    ...(operations.has("delete")
-      ? [
-          HttpRouter.route(
-            "DELETE",
-            `${base}/:id`,
-            routed("delete", deleteWork)
-          ),
-        ]
-      : []),
+    ...routes(base, collectionOperations),
+    ...routes(`${base}/:id`, itemOperations),
     ...unofferedRoutes(environment, base, collection),
     ...unofferedRoutes(environment, `${base}/:id`, item),
   ];

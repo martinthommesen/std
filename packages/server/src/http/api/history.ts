@@ -19,15 +19,12 @@ import { NotFound } from "@std/api/errors/not-found";
 import { apiAttributeNameOf } from "@std/definitions/names";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
 import { formatDateTime, parseDateTime } from "@std/values/date-time";
-import {
-  isJsonArray,
-  isJsonObject,
-  isJsonString,
-} from "@std/values/json-value";
+import { isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { parseInt8Text } from "@std/values/postgres-text";
 import { Effect, Schema } from "effect";
 
+import type { RenderedHistoryEntry } from "../../records/history-endpoint.ts";
 import { recordHistory } from "../../records/history-endpoint.ts";
 import type {
   HistoryAttributeFilter,
@@ -91,24 +88,15 @@ const SYMBOL_SUFFIXES: readonly (readonly [string, Comparison])[] = [
   ["<", "lt"],
 ];
 
-/** A comparison of a numeric `ChangeEntry` attribute with alternatives. */
-interface Bound {
-  readonly comparison: Comparison;
-  readonly values: readonly number[];
-}
-
 const invalid = (parameter: string, message: string) =>
   new InvalidRequest({ message, parameter });
-
-const asRecord = (value: JsonValue | undefined): JsonObject =>
-  value !== undefined && isJsonObject(value) ? value : {};
 
 const textOf = (value: JsonValue | undefined): string =>
   value !== undefined && isJsonString(value) ? value : "";
 
-const keyedByApiName = (value: JsonValue | undefined): JsonObject =>
+const keyedByApiName = (value: JsonObject): JsonObject =>
   Object.fromEntries(
-    Object.entries(asRecord(value)).map(([name, change]) => [
+    Object.entries(value).map(([name, change]) => [
       apiAttributeNameOf(name),
       change,
     ])
@@ -131,15 +119,14 @@ const changeEntryOf = (
   origin: string,
   record: JsonObject,
   href: (changeId: string) => string,
-  entry: JsonValue
+  entry: RenderedHistoryEntry
 ): JsonObject => {
-  const fields = asRecord(entry);
-  const kind = textOf(fields.kind);
-  const id = textOf(fields.changeId);
+  const fields = entry;
+  const { kind, changeId: id } = fields;
 
   const actor = entityRef(scope, origin, {
     declaredClassId: USER_CLASS_ID,
-    id: textOf(fields.actor),
+    id: fields.actor,
     label: null,
     targetClassId: null,
   });
@@ -149,19 +136,19 @@ const changeEntryOf = (
     "@type": "ChangeEntry",
     action: ACTIONS.get(kind) ?? kind,
     actor,
-    cause: fields.cause ?? null,
+    cause: fields.cause,
     changes: keyedByApiName(fields.changes),
-    creationDate: fields.occurredAt ?? null,
+    creationDate: fields.occurredAt,
     entity: record,
     fields: keyedByApiName(fields.fields),
     href: href(id),
     id,
     kind,
-    occurredAt: fields.occurredAt ?? null,
-    operationId: fields.operationId ?? null,
+    occurredAt: fields.occurredAt,
+    operationId: fields.operationId,
     revisedBy: actor,
-    revision: fields.version ?? null,
-    schemaRevision: fields.schemaRevision ?? null,
+    revision: fields.version,
+    schemaRevision: fields.schemaRevision,
   };
 };
 
@@ -381,10 +368,7 @@ const parseHistoryQuery = Effect.fn("Api.historyQuery")(function* parseQuery(
   allowed: "list" | "entry"
 ) {
   const service: Record<string, string> = {};
-  const actions: string[][] = [];
-  const revisions: Bound[] = [];
-  const dates: Bound[] = [];
-  const actors: string[][] = [];
+  const attributes: HistoryAttributeFilter[] = [];
   let fields: ReadonlySet<string> | null = null;
 
   for (const [key, value] of queryOf(input.request)) {
@@ -403,64 +387,50 @@ const parseHistoryQuery = Effect.fn("Api.historyQuery")(function* parseQuery(
         return yield* invalid(key, "Expected created, updated or deleted.");
       }
 
-      actions.push(names);
+      const selectedNames = new Set(names);
+      attributes.push({
+        column: "kind",
+        comparison: "eq",
+        values: [...ACTIONS].flatMap(([kind, name]) =>
+          selectedNames.has(name) ? [kind] : []
+        ),
+      });
     } else if (key === "revisedBy.id" || key === "actor.id") {
-      actors.push(
-        alternativesOf(value).map((name) => name.trim().toLowerCase())
-      );
+      attributes.push({
+        column: "actor_id",
+        comparison: "eq",
+        values: alternativesOf(value).map((name) => name.trim().toLowerCase()),
+      });
     } else {
       const { base, comparison } = splitName(key);
 
       if (base === "revision") {
-        revisions.push({
+        attributes.push({
+          column: "record_version",
           comparison,
-          values: yield* numbersOf(
+          values: (yield* numbersOf(
             key,
             value,
             integerOf,
             "Expected an integer."
-          ),
+          )).map(String),
         });
       } else if (base === "creationDate") {
-        dates.push({
+        attributes.push({
+          column: "occurred_at",
           comparison,
-          values: yield* numbersOf(
+          values: (yield* numbersOf(
             key,
             value,
             instantOf,
             "Expected an RFC 3339 date-time or a date."
-          ),
+          )).map(formatDateTime),
         });
       } else {
         return yield* invalid(key, "Unknown query parameter for history.");
       }
     }
   }
-
-  const attributes: HistoryAttributeFilter[] = [
-    ...actions.map((values) => ({
-      column: "kind" as const,
-      comparison: "eq" as const,
-      values: [...ACTIONS].flatMap(([kind, name]) =>
-        values.includes(name) ? [kind] : []
-      ),
-    })),
-    ...actors.map((values) => ({
-      column: "actor_id" as const,
-      comparison: "eq" as const,
-      values,
-    })),
-    ...revisions.map((bound) => ({
-      column: "record_version" as const,
-      comparison: bound.comparison,
-      values: bound.values.map(String),
-    })),
-    ...dates.map((bound) => ({
-      column: "occurred_at" as const,
-      comparison: bound.comparison,
-      values: bound.values.map(formatDateTime),
-    })),
-  ];
 
   return { attributes, fields, service, ...(yield* historyPaging(input)) };
 });
@@ -527,8 +497,7 @@ const visibleEntries = Effect.fn("Api.historyEntries")(function* entries(
   const href = (changeId: string): string =>
     `${recordHref(input.origin, input.collection, recordId)}/history/${changeId}`;
 
-  const { entries: raw } = history.body;
-  const list = isJsonArray(raw) ? raw : [];
+  const list = history.body.entries;
 
   return {
     entries: list.map((entry) =>
