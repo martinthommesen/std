@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-version="$(jq -r .version packages/server/package.json)"
-if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-  echo "Release version '$version' must be canonical major.minor.patch without prerelease or build suffixes." >&2
-  exit 1
-fi
+version="$(bash docker/release-version.sh)"
 
 # docs/plan.md's Steps 3, 4 and 5 each name their release tag. Other
 # versions need an explicit policy there before they can publish.

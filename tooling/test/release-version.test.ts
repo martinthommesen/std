@@ -91,6 +91,10 @@ const releaseFixture = (version: string): string => {
     path.join(repoRoot, "docker/release-conformance.sh"),
     path.join(scratch, "docker/release-conformance.sh")
   );
+  cpSync(
+    path.join(repoRoot, "docker/release-version.sh"),
+    path.join(scratch, "docker/release-version.sh")
+  );
   symlinkSync(
     path.join(repoRoot, "node_modules"),
     path.join(scratch, "node_modules")
@@ -147,6 +151,28 @@ const release = async (scratch: string, tag: string, refType = "tag") =>
         GITHUB_OUTPUT: path.join(scratch, "output"),
         GITHUB_REF_NAME: tag,
         GITHUB_REF_TYPE: refType,
+        PUBLICATION_RECORD: path.join(scratch, "publication"),
+      },
+    }
+  );
+
+const dryRun = async (scratch: string) =>
+  await runCommand(
+    "/bin/bash",
+    [
+      "-eu",
+      "-c",
+      'pnpm check:release\nbash "$1"',
+      "--",
+      path.join(scratch, "record-publication.sh"),
+    ],
+    {
+      cwd: scratch,
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: path.join(scratch, "output"),
+        GITHUB_REF_NAME: "main",
+        GITHUB_REF_TYPE: "branch",
         PUBLICATION_RECORD: path.join(scratch, "publication"),
       },
     }
@@ -264,6 +290,87 @@ describe("release-version", () => {
       );
       expect(readFileSync(path.join(scratch, "publication"), "utf-8")).toBe(
         "publication\n"
+      );
+    }
+  );
+
+  it.each([
+    ["0.0.3", "step3"],
+    ["0.0.4", "step4"],
+    ["0.1.0", "step5"],
+  ])(
+    "allows canonical %s through the %s dry-run gate to the recording stand-in",
+    async (version, stage) => {
+      const scratch = releaseFixture(version);
+      const result = await dryRun(scratch);
+
+      expect(result.code).toBe(0);
+      expect(result.output).toContain(`gate ${stage} passed`);
+      expect(existsSync(path.join(scratch, "output"))).toBeFalsy();
+      expect(readFileSync(path.join(scratch, "publication"), "utf-8")).toBe(
+        "publication\n"
+      );
+    }
+  );
+
+  it.each(
+    (
+      [
+        ["trailing LF", "0.0.3\n"],
+        ["repeated trailing LF", "0.0.3\n\n"],
+        ["trailing CRLF", "0.0.3\r\n"],
+        ["leading LF", "\n0.0.3"],
+        ["embedded LF", "0.0.\n3"],
+        ["trailing space", "0.0.3 "],
+        ["trailing tab", "0.0.3\t"],
+        ["leading space", " 0.0.3"],
+        ["trailing NUL", "0.0.3\u0000"],
+        ["embedded NUL", "0.0.\u00003"],
+        ["prerelease suffix", "0.0.3-rc.1"],
+        ["build suffix", "0.0.3+build"],
+        ["leading zero", "00.0.3"],
+        ["empty string", ""],
+        ["null", null],
+        ["number", 3],
+        ["boolean", true],
+        ["array", ["0.0.3"]],
+        ["object", { version: "0.0.3" }],
+        ["missing version", undefined],
+      ] as const
+    ).flatMap(([name, version]) =>
+      ["publish", "dry-run"].map((mode) => ({ mode, name, version }))
+    )
+  )(
+    "rejects the original JSON version ($name) in $mode before the recording stand-in",
+    async ({ mode, version }) => {
+      const scratch = releaseFixture("0.0.3");
+
+      writeFileSync(
+        path.join(scratch, "packages/server/package.json"),
+        JSON.stringify({ version })
+      );
+
+      const result =
+        mode === "publish"
+          ? await release(scratch, "v0.0.3")
+          : await dryRun(scratch);
+
+      expect({
+        code: result.code,
+        deliverablesCreated: existsSync(path.join(scratch, "dist")),
+        publicationRecorded: existsSync(path.join(scratch, "publication")),
+        tagEmitted: existsSync(path.join(scratch, "output")),
+      }).toStrictEqual({
+        code: 1,
+        deliverablesCreated: false,
+        publicationRecorded: false,
+        tagEmitted: false,
+      });
+      expect(result.output).toContain("packages/server/package.json");
+      expect(result.output).toContain("must be canonical");
+      expect(result.output).toContain("JSON string");
+      expect(result.output).toContain(
+        `got ${JSON.stringify(version ?? null)}.`
       );
     }
   );
