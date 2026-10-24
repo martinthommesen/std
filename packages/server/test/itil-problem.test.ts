@@ -9,7 +9,7 @@ import {
   HELPDESK,
   HelpdeskFixture,
 } from "../../testing/src/helpdesk-fixture.ts";
-import { asObject, textOf } from "./api-support.ts";
+import { asArray, asObject, textOf } from "./api-support.ts";
 import {
   genericTransitions,
   tmfTransitions,
@@ -24,7 +24,13 @@ import {
   reference,
 } from "./itil-support.ts";
 import { change, values } from "./schema-support.ts";
-import { bodyOf, TICKETS, ticketBody, tmf621As } from "./tmf621-support.ts";
+import {
+  bodyOf,
+  characteristicsWith,
+  TICKETS,
+  ticketBody,
+  tmf621As,
+} from "./tmf621-support.ts";
 
 /** The groups of problem states a TMF621 status keeps (Contracts 11.2). */
 const GROUPS: ReadonlyMap<string, readonly string[]> = new Map([
@@ -69,6 +75,82 @@ const TRANSITIONS = {
 };
 
 describe("itil-problem", () => {
+  it.effect(
+    "TMF621 creates and patches known errors without workaround and preserves fixing within inProgress without root cause",
+    () =>
+      Effect.gen(function* tmfProblemFields() {
+        const admin = yield* tmf621As("admin");
+        const client = yield* clientFor();
+
+        const created = yield* admin.post(
+          TICKETS,
+          ticketBody({
+            ticketType: "problem",
+            troubleTicketCharacteristic: [{ name: "knownError", value: true }],
+          })
+        );
+
+        assert.strictEqual(created.status, 201, created.text);
+        const id = textOf(bodyOf(created).id);
+        const path = `${TICKETS}/${id}`;
+
+        const stored = () =>
+          client.records.get({
+            params: { id, table: "helpdeskProblem" },
+            query: {},
+          });
+
+        const initial = yield* stored();
+        assert.strictEqual(initial.knownError, true);
+        assert.notProperty(initial, "workaround");
+        assert.notProperty(initial, "rootCause");
+        assert.strictEqual(
+          asArray(bodyOf(created).troubleTicketCharacteristic)
+            .map(asObject)
+            .find((item) => item.name === "knownError")?.value,
+          true
+        );
+
+        const patched = yield* admin.patch(path, {
+          status: "inProgress",
+          troubleTicketCharacteristic: characteristicsWith(bodyOf(created), {
+            knownError: true,
+          }),
+        });
+
+        assert.strictEqual(patched.status, 200, patched.text);
+        assert.strictEqual(bodyOf(patched).status, "inProgress");
+        const analysis = yield* stored();
+        assert.strictEqual(analysis.status, "root_cause_analysis");
+        assert.strictEqual(analysis.knownError, true);
+        assert.notProperty(analysis, "workaround");
+        assert.notProperty(analysis, "rootCause");
+
+        const fixing = yield* patchTicket(
+          analysis,
+          { status: "fix_in_progress" },
+          "helpdeskProblem"
+        );
+
+        assert.notProperty(fixing, "rootCause");
+        const kept = yield* admin.patch(path, { status: "inProgress" });
+        assert.strictEqual(kept.status, 200, kept.text);
+        assert.strictEqual(bodyOf(kept).status, "inProgress");
+        assert.strictEqual((yield* stored()).status, "fix_in_progress");
+        assert.notProperty(yield* stored(), "rootCause");
+
+        const resolved = yield* admin.patch(path, { status: "resolved" });
+        assert.strictEqual(resolved.status, 200, resolved.text);
+        assert.strictEqual(bodyOf(resolved).status, "resolved");
+        const final = yield* stored();
+        assert.strictEqual(final.status, "resolved");
+        assert.strictEqual(final.knownError, true);
+        assert.notProperty(final, "workaround");
+        assert.notProperty(final, "rootCause");
+        assert.isString(final.resolvedAt);
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
   it("checks every problem state in the transition matrix", () => {
     assert.deepStrictEqual(Object.keys(TRANSITIONS).toSorted(), [
       "assess",

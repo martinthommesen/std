@@ -1,7 +1,10 @@
 /** Helpdesk v3's incident form, against the default fixture and the real API (plan 3C, 3I). */
+import { randomUUID } from "node:crypto";
+
 import { assert, describe, it, layer } from "@effect/vitest";
 import { FormState } from "@std/api/form-state";
 import {
+  HELPDESK,
   HelpdeskFixture,
   helpdeskTestLayer,
 } from "@std/testing/helpdesk-fixture";
@@ -19,6 +22,7 @@ import {
   openTableList,
   sentAttributes,
   captureResponses,
+  countRecordWrites,
   chooseOption,
   fillField,
   formControl,
@@ -29,6 +33,7 @@ import {
   saveRecordForm,
   signIn,
 } from "./app.ts";
+import type { ReceivedResponse } from "./app.ts";
 import { launchBrowser, stdServe } from "./support.ts";
 
 const INCIDENT = "helpdesk.incident";
@@ -479,4 +484,441 @@ describe("incident form v3", () => {
         }).pipe(Effect.scoped)
     );
   });
+});
+
+const identity = Schema.decodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({ id: Schema.String, revision: Schema.Int })
+  )
+);
+
+const verdict = Schema.decodeSync(Schema.fromJsonString(FormState));
+
+const latestVerdict = async (
+  responses: () => Promise<readonly ReceivedResponse[]>
+) => {
+  const received = await responses();
+
+  const answer = received.findLast(
+    (response) => new URL(response.url).pathname === "/api/v1/checkFormState"
+  );
+
+  assert.isDefined(answer);
+
+  if (answer === undefined) {
+    throw new Error("No form-state response was captured");
+  }
+
+  return verdict(answer.body);
+};
+
+const checkPriorityCell = async (
+  page: Page,
+  origin: string,
+  responses: () => Promise<readonly ReceivedResponse[]>,
+  [impact, urgency, priority, label]: readonly [string, string, string, string]
+): Promise<void> => {
+  await openNewRecordForm(page, origin, "helpdesk.incident", "Incident");
+  await fillField(page, "Description", `Matrix ${impact} ${urgency}`);
+  await chooseOption(page, "Impact", impact);
+  await chooseOption(page, "Urgency", urgency);
+  await page
+    .locator("[data-field=priority] .form-value")
+    .filter({ hasText: label })
+    .waitFor({ state: "attached" });
+  assert.strictEqual(await formFieldText(page, "priority"), label);
+  const proposed = await latestVerdict(responses);
+  assert.strictEqual(proposed.values.priority, priority);
+  const saved = await saveRecordForm(page);
+  assert.strictEqual(saved.status, 201);
+  assert.isFalse(Object.hasOwn(sentAttributes(saved.body), "priority"));
+  const record = identity(await saved.responseBody());
+
+  const stored = await apiRecord(page, origin, {
+    id: record.id,
+    table: "helpdesk.incident",
+  });
+
+  assert.strictEqual(stored.values.priority, priority);
+};
+
+const checkHoldForm = async (
+  page: Page,
+  origin: string,
+  token: string,
+  responses: () => Promise<readonly ReceivedResponse[]>,
+  [table, collection, initial, resumed, label]: readonly [
+    string,
+    string,
+    string,
+    string,
+    string,
+  ]
+): Promise<void> => {
+  const created = await apiCall(origin, token, {
+    body: { description: `Hold ${table}`, status: initial },
+    method: "POST",
+    path: `/${collection}`,
+  });
+
+  assert.strictEqual(created.status, 201, created.text);
+  const address = { id: identity(created.text).id, table };
+  await openRecordForm(page, origin, address);
+  await chooseOption(page, "Status", "On hold");
+  await page
+    .getByLabel("Hold reason (required)")
+    .waitFor({ state: "attached" });
+  assert.strictEqual(
+    await formControl(page, "Hold reason").inputValue(),
+    "awaiting_vendor"
+  );
+  const defaulted = await latestVerdict(responses);
+  assert.strictEqual(defaulted.fields.holdReason?.required, true);
+  assert.strictEqual(defaulted.values.holdReason, "awaiting_vendor");
+  const defaultedSave = await saveRecordForm(page);
+  assert.strictEqual(defaultedSave.status, 200);
+  const unchanged = await apiRecord(page, origin, address);
+  assert.strictEqual(unchanged.values.holdReason, "awaiting_vendor");
+  await formControl(page, "Hold reason").selectOption("");
+  const writes = countRecordWrites(page);
+  await page.getByRole("button", { exact: true, name: "Save" }).click();
+  await page
+    .locator("[data-field=hold_reason] .field-error")
+    .waitFor({ state: "attached" });
+  const cleared = await latestVerdict(responses);
+  assert.strictEqual(cleared.values.holdReason, null);
+  assert.strictEqual(writes(), 0);
+  const stillHeld = await apiRecord(page, origin, address);
+  assert.strictEqual(stillHeld.values.holdReason, "awaiting_vendor");
+  await chooseOption(page, "Hold reason", "Awaiting caller");
+  const explicitSave = await saveRecordForm(page);
+  assert.strictEqual(explicitSave.status, 200);
+  const explicitReason = await apiRecord(page, origin, address);
+  assert.strictEqual(explicitReason.values.holdReason, "awaiting_caller");
+  await chooseOption(page, "Status", label);
+  const resumedSave = await saveRecordForm(page);
+  assert.strictEqual(resumedSave.status, 200);
+  const saved = await apiRecord(page, origin, address);
+  assert.strictEqual(saved.values.status, resumed);
+  assert.notProperty(saved.values, "holdReason");
+};
+
+describe("ITIL form edges", () => {
+  it.live(
+    "all nine priority cells agree between the browser verdict and independently read saved records",
+    () =>
+      Effect.gen(function* priorityCells() {
+        const fixture = yield* HelpdeskFixture;
+        const database = yield* TestDatabase;
+        const server = yield* stdServe(database.url, inject("webRoot"));
+        const browser = yield* launchBrowser;
+        yield* Effect.promise(async () => {
+          const page = await browser.newPage();
+          const responses = await captureResponses(page);
+          await signIn(page, server.origin, fixture.admin);
+
+          const cells = [
+            ["1 - High", "1 - High", "1", "1 - Critical"],
+            ["1 - High", "2 - Medium", "2", "2 - High"],
+            ["1 - High", "3 - Low", "3", "3 - Medium"],
+            ["2 - Medium", "1 - High", "2", "2 - High"],
+            ["2 - Medium", "2 - Medium", "3", "3 - Medium"],
+            ["2 - Medium", "3 - Low", "4", "4 - Low"],
+            ["3 - Low", "1 - High", "3", "3 - Medium"],
+            ["3 - Low", "2 - Medium", "4", "4 - Low"],
+            ["3 - Low", "3 - Low", "5", "5 - Planning"],
+          ] as const;
+
+          for (const cell of cells) {
+            // oxlint-disable-next-line no-await-in-loop -- each case drives the same page through create and read-back before the next case
+            await checkPriorityCell(page, server.origin, responses, cell);
+          }
+
+          await page.close();
+        });
+      }).pipe(Effect.scoped, Effect.provide(helpdeskTestLayer()))
+  );
+
+  it.live(
+    "incident and problem forms default, require and retain hold reasons, then clear them on leaving hold",
+    () =>
+      Effect.gen(function* holdForms() {
+        const fixture = yield* HelpdeskFixture;
+        const database = yield* TestDatabase;
+        const server = yield* stdServe(database.url, inject("webRoot"));
+        const browser = yield* launchBrowser;
+        yield* Effect.promise(async () => {
+          const token = await bearerToken(server.origin, fixture.admin);
+          const page = await browser.newPage();
+          const responses = await captureResponses(page);
+          await signIn(page, server.origin, fixture.admin);
+
+          const forms = [
+            [
+              "helpdesk.incident",
+              "helpdeskIncident",
+              "new",
+              "in_progress",
+              "Work in progress",
+            ],
+            [
+              "helpdesk.problem",
+              "helpdeskProblem",
+              "root_cause_analysis",
+              "root_cause_analysis",
+              "Root cause analysis",
+            ],
+          ] as const;
+
+          for (const form of forms) {
+            // oxlint-disable-next-line no-await-in-loop -- each lifecycle uses the same signed-in page and is read back before the next one
+            await checkHoldForm(page, server.origin, token, responses, form);
+          }
+
+          await page.close();
+        });
+      }).pipe(Effect.scoped, Effect.provide(helpdeskTestLayer()))
+  );
+
+  it.live(
+    "a problem form refuses empty workaround and resolved root cause without a write, then saves supplied details",
+    () =>
+      Effect.gen(function* problemRequirements() {
+        const fixture = yield* HelpdeskFixture;
+        const database = yield* TestDatabase;
+        const server = yield* stdServe(database.url, inject("webRoot"));
+        const browser = yield* launchBrowser;
+        yield* Effect.promise(async () => {
+          const token = await bearerToken(server.origin, fixture.admin);
+
+          const created = await apiCall(server.origin, token, {
+            body: {
+              description: "Problem resolved in browser",
+              status: "root_cause_analysis",
+            },
+            method: "POST",
+            path: "/helpdeskProblem",
+          });
+
+          assert.strictEqual(created.status, 201, created.text);
+
+          const address = {
+            id: identity(created.text).id,
+            table: "helpdesk.problem",
+          };
+
+          const page = await browser.newPage();
+          const responses = await captureResponses(page);
+          await signIn(page, server.origin, fixture.admin);
+          await openRecordForm(page, server.origin, address);
+          await formControl(page, "Known error").click();
+          await page
+            .getByLabel("Workaround (required)")
+            .waitFor({ state: "attached" });
+          await chooseOption(page, "Status", "Resolved");
+          await page
+            .getByLabel("Root cause (required)")
+            .waitFor({ state: "attached" });
+          const required = await latestVerdict(responses);
+          assert.strictEqual(required.fields.rootCause?.required, true);
+          assert.strictEqual(required.fields.workaround?.required, true);
+          const writes = countRecordWrites(page);
+          await page.getByRole("button", { exact: true, name: "Save" }).click();
+          await page
+            .locator("[data-field=root_cause] .field-error")
+            .waitFor({ state: "attached" });
+          assert.strictEqual(
+            await page
+              .locator("[data-field=workaround] .field-error")
+              .textContent(),
+            "This field is required."
+          );
+          assert.strictEqual(writes(), 0);
+          const stored8 = await apiRecord(page, server.origin, address);
+          assert.strictEqual(stored8.values.status, "root_cause_analysis");
+          await chooseOption(page, "Resolution code", "Solved permanently");
+          await fillField(
+            page,
+            "Resolution notes",
+            "Restored the primary interface."
+          );
+          await fillField(page, "Workaround", "Use the spare link.");
+          await fillField(page, "Root cause", "The primary interface failed.");
+          const resolvedSave = await saveRecordForm(page);
+          assert.strictEqual(resolvedSave.status, 200);
+          const saved = await apiRecord(page, server.origin, address);
+          assert.strictEqual(saved.values.status, "resolved");
+          assert.strictEqual(saved.values.knownError, true);
+          assert.strictEqual(saved.values.workaround, "Use the spare link.");
+          assert.strictEqual(
+            saved.values.rootCause,
+            "The primary interface failed."
+          );
+          await page.close();
+        });
+      }).pipe(Effect.scoped, Effect.provide(helpdeskTestLayer()))
+  );
+
+  it.live(
+    "a local priority cell controls the manager form verdict and saved correction while the same API edit keeps the major flag",
+    () =>
+      Effect.gen(function* overriddenMajor() {
+        const fixture = yield* HelpdeskFixture;
+        const database = yield* TestDatabase;
+        const server = yield* stdServe(database.url, inject("webRoot"));
+        const browser = yield* launchBrowser;
+        yield* Effect.promise(async () => {
+          const token = await bearerToken(server.origin, fixture.admin);
+
+          const created = await apiCall(server.origin, token, {
+            body: {
+              description: "Overridden major cell",
+              impact: "2",
+              majorIncident: true,
+              priority: "1",
+              urgency: "1",
+            },
+            method: "POST",
+            path: "/helpdeskIncident",
+          });
+
+          assert.strictEqual(created.status, 201, created.text);
+
+          const address = {
+            id: identity(created.text).id,
+            table: "helpdesk.incident",
+          };
+
+          const rulePath =
+            "/coreRecordRule/97a1b810-9382-57d6-80cd-54e4b21af48a";
+
+          const rule = await apiCall(server.origin, token, {
+            method: "GET",
+            path: rulePath,
+          });
+
+          assert.strictEqual(rule.status, 200, rule.text);
+
+          const shipped = Schema.decodeSync(
+            Schema.fromJsonString(
+              Schema.Struct({ condition: Schema.Json, revision: Schema.Int })
+            )
+          )(rule.text);
+
+          const disabled = await apiCall(server.origin, token, {
+            body: { active: false },
+            method: "PATCH",
+            path: rulePath,
+            version: shipped.revision,
+          });
+
+          assert.strictEqual(disabled.status, 200, disabled.text);
+
+          const local = await apiCall(server.origin, token, {
+            body: {
+              operations: [
+                {
+                  definition: {
+                    actions: [
+                      {
+                        keepSupplied: true,
+                        type: "set",
+                        values: [
+                          {
+                            fieldId: HELPDESK.fields.priority,
+                            value: { value: "2" },
+                          },
+                        ],
+                      },
+                    ],
+                    active: true,
+                    classId: HELPDESK.incident,
+                    condition: shipped.condition,
+                    description: null,
+                    id: randomUUID(),
+                    kind: "recordRule",
+                    name: "local_priority_1_1",
+                    once: false,
+                    operations: ["create", "update"],
+                    order: 111,
+                    owner: { layer: "local" },
+                    phase: "before",
+                    protected: false,
+                    ruleKind: "derive",
+                    runAsId: null,
+                    subscriptionId: null,
+                  },
+                  op: "createRecordRule",
+                },
+              ],
+            },
+            method: "POST",
+            path: "/applyChangeSet",
+          });
+
+          assert.include([200, 201], local.status, local.text);
+          const page = await browser.newPage();
+          const responses = await captureResponses(page);
+          await signIn(page, server.origin, fixture.admin);
+          await openRecordForm(page, server.origin, address);
+          await chooseOption(page, "Impact", "1 - High");
+          await page
+            .locator("[data-field=priority] .form-value")
+            .filter({ hasText: "2 - High" })
+            .waitFor({ state: "attached" });
+          const proposed = await latestVerdict(responses);
+          assert.strictEqual(proposed.values.priority, "2");
+          assert.strictEqual(await formFieldText(page, "priority"), "2 - High");
+          assert.strictEqual(
+            await formControl(page, "Major incident").count(),
+            0
+          );
+          await page
+            .getByText(
+              "The major incident flag will be cleared when you save.",
+              { exact: true }
+            )
+            .waitFor({ state: "attached" });
+          const saved = await saveRecordForm(page);
+          assert.strictEqual(saved.status, 200, await saved.responseBody());
+          assert.strictEqual(sentAttributes(saved.body).majorIncident, false);
+          const stored = await apiRecord(page, server.origin, address);
+          assert.strictEqual(stored.values.priority, proposed.values.priority);
+          assert.strictEqual(stored.values.majorIncident, false);
+
+          const ordinary = await apiCall(server.origin, token, {
+            body: {
+              description: "Same ordinary API edit",
+              impact: "2",
+              majorIncident: true,
+              priority: "1",
+              urgency: "1",
+            },
+            method: "POST",
+            path: "/helpdeskIncident",
+          });
+
+          assert.strictEqual(ordinary.status, 201, ordinary.text);
+          const other = identity(ordinary.text);
+
+          const changed = await apiCall(server.origin, token, {
+            body: { impact: "1" },
+            method: "PATCH",
+            path: `/helpdeskIncident/${other.id}`,
+            version: other.revision,
+          });
+
+          assert.strictEqual(changed.status, 200, changed.text);
+
+          const apiSaved = await apiRecord(page, server.origin, {
+            id: other.id,
+            table: address.table,
+          });
+
+          assert.strictEqual(apiSaved.values.priority, "2");
+          assert.strictEqual(apiSaved.values.majorIncident, true);
+          await page.close();
+        });
+      }).pipe(Effect.scoped, Effect.provide(helpdeskTestLayer()))
+  );
 });

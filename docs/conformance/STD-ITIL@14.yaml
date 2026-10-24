@@ -17,7 +17,7 @@ sources:
     note: Each row's note names the ITIL 4 practice concept it implements; edition review before v0.1.0 (resolved question 8).
 rows:
   - id: STD-ITIL@14/C14/14.1/shipped-configuration
-    source: "Contracts 14.1 (third bullet)"
+    source: "Contracts 14.1 (shipped configuration and every-test bullet)"
     level: mandatory
     requirement: "Every ITIL behavior of the helpdesk set is shipped configuration (choices, record rules, access rules), so an install changes it through overrides and local rules without code."
     note: "ITIL 4 describes practices, not tool states; STD's state models are its own statement of them."
@@ -25,11 +25,11 @@ rows:
     tests:
       - packages/server/test/itil-incident.test.ts#a local rule replaces one priority cell without changing the others
   - id: STD-ITIL@14/C14/14.1/every-surface
-    source: "Contracts 14.1 (third bullet); plan Step 3 gate (ITIL)"
+    source: "Contracts 14.1 (shipped configuration and every-test bullet); plan Step 3 gate (ITIL)"
     level: mandatory
-    requirement: "Each incident and problem behavior below holds the same through the API, TMF621 and, where a form exists, the browser."
+    requirement: "Every incident and problem behavior below is tested through the generic API, TMF621 and, where a form exists, the browser, including the intentional form constraints and API permissiveness of Contracts 14.1."
     status: pending
-    note: "The generic API and TMF621 surfaces are tested row by row (decision 0035); the browser surface belongs to workstream 3C."
+    note: "Focused form edges and all nine browser priority cells have exact proofs. This universal row remains pending: exhaustive browser transition/refusal, reopen/date retention and cascade observations, plus explicit TMF621 cascade evidence, have not all been demonstrated. Per-row evidence is not a completeness signoff."
   - id: STD-ITIL@14/C14/14.1/concrete-class
     source: "Contracts 14.1; plan Step 3 gate (rules follow the concrete class)"
     level: mandatory
@@ -142,7 +142,7 @@ rows:
     requirement: "The incident form shows priority read-only by default (a form rule)."
     status: tested
     tests:
-      - apps/web/test/browser/incident-form.test.ts#incident form v3
+      - "apps/web/test/browser/incident-form.test.ts#creates an incident, shows derived read-only priority, requires resolution details, and clears a manager's major flag below priority 1"
   - id: STD-ITIL@14/C14/14.2/priority-cell-override
     source: "Contracts 14.2 (first bullet)"
     level: mandatory
@@ -163,8 +163,12 @@ rows:
     source: "Contracts 14.2 (second bullet); Contracts 14.4 rule kinds (incident derive)"
     level: mandatory
     requirement: "Entering on_hold without a hold_reason (awaiting_caller, awaiting_change, awaiting_problem, awaiting_vendor) sets awaiting_vendor, leaving on_hold clears it, and the form requires it while on hold."
-    status: pending
-    note: "The API and TMF621 parts are tested (decision 0035); the browser form part belongs to workstream 3C."
+    status: tested
+    tests:
+      - "apps/web/test/browser/incident-form.test.ts#incident and problem forms default, require and retain hold reasons, then clear them on leaving hold"
+      - "packages/server/test/itil-incident.test.ts#hold defaults, writable resolution fields, and bounded Unicode titles are shipped derives"
+      - "packages/server/test/tmf621.test.ts#statuses follow TMF621's life cycle onto the incident state model, and stored states read back"
+      - "packages/server/test/tmf621.test.ts#held keeps a hold reason the holdReason characteristic names, and pending is awaiting the caller"
   - id: STD-ITIL@14/C14/14.2/transitions/from-new
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
@@ -216,8 +220,11 @@ rows:
     source: "Contracts 14.2 (third bullet); Contracts 14.1"
     level: mandatory
     requirement: "The incident form requires resolution_code and resolution_notes to resolve; every API accepts a resolve without them."
-    status: pending
-    note: "The API and TMF621 parts are tested (decision 0035); the browser form part belongs to workstream 3C."
+    status: tested
+    tests:
+      - "apps/web/test/browser/incident-form.test.ts#creates an incident, shows derived read-only priority, requires resolution details, and clears a manager's major flag below priority 1"
+      - "packages/server/test/form-vs-api.test.ts#resolving without code/notes is accepted by the API while the form requires both"
+      - "packages/server/test/form-vs-api.test.ts#through TMF621, resolving without resolution code and notes is accepted while the form requires both"
   - id: STD-ITIL@14/C14/14.2/resolved-at
     source: "Contracts 14.2 (third bullet); Contracts 14.4 rule kinds (ticket derive)"
     level: mandatory
@@ -237,15 +244,21 @@ rows:
     source: "Contracts 14.2 (fourth bullet); Contracts 14.1"
     level: mandatory
     requirement: "The incident form offers major_incident only while priority is 1; when a form edit drops priority below 1 with the flag set, the form clears it for a user who may write it and otherwise keeps it with a notice and lists the incident in the shipped filter of major incidents not at priority 1; the APIs accept the flag at any priority and never clear it."
-    status: pending
-    note: "The API and TMF621 parts are tested (decision 0035); the browser form part belongs to workstream 3C."
+    status: tested
+    tests:
+      - "apps/web/test/browser/incident-form.test.ts#creates an incident, shows derived read-only priority, requires resolution details, and clears a manager's major flag below priority 1"
+      - "apps/web/test/browser/incident-form.test.ts#a local priority cell controls the manager form verdict and saved correction while the same API edit keeps the major flag"
+      - "apps/web/test/browser/incident-form.test.ts#an agent retains a major flag below priority 1 with a notice and can find it through the mismatch filter"
+      - "packages/server/test/itil-incident.test.ts#major incident permission holds through the API while priority never clears the flag and children resolve together"
+      - "packages/server/test/itil-incident.test.ts#TMF621 accepts a resolve without resolution code and notes and renders the major flag as a characteristic"
+      - "packages/server/test/form-vs-api.test.ts#through TMF621, form-locked priority, labels, dates, type and history stay writable, and the hidden major flag is written"
   - id: STD-ITIL@14/C14/14.2/form-vs-api
     source: "Contracts 14.1; Contracts 5.10"
     level: mandatory
     requirement: "Form rules are browser validation, not record-service acceptance: the incident form prevents a resolve without resolution code and notes, and the same payload is accepted through /api/v1 and TMF621."
     status: tested
     tests:
-      - apps/web/test/browser/incident-form.test.ts#incident form v3
+      - "apps/web/test/browser/incident-form.test.ts#creates an incident, shows derived read-only priority, requires resolution details, and clears a manager's major flag below priority 1"
       - "packages/server/test/form-vs-api.test.ts#resolving without code/notes is accepted by the API while the form requires both"
       - "packages/server/test/form-vs-api.test.ts#through TMF621, resolving without resolution code and notes is accepted while the form requires both"
     note: "The browser suite's resolution case requires both fields; the API and TMF621 accept the same resolve (decisions 0035, 0036)."
@@ -346,8 +359,12 @@ rows:
     source: "Contracts 14.3 (second bullet); Contracts 14.1"
     level: mandatory
     requirement: "The problem form requires a non-empty workaround while known_error is set; the APIs accept the flag without one."
-    status: pending
-    note: "The API and TMF621 parts are tested (decision 0035); the browser form part belongs to workstream 3C."
+    status: tested
+    tests:
+      - "apps/web/test/browser/incident-form.test.ts#a problem follows Assess and requires a workaround for known error and root cause for a fix"
+      - "apps/web/test/browser/incident-form.test.ts#a problem form refuses empty workaround and resolved root cause without a write, then saves supplied details"
+      - "packages/server/test/itil-problem.test.ts#known errors work in every state without API-only workaround or root-cause restrictions"
+      - "packages/server/test/itil-problem.test.ts#TMF621 creates and patches known errors without workaround and preserves fixing within inProgress without root cause"
   - id: STD-ITIL@14/C14/14.3/known-error-any-state
     source: "Contracts 14.3 (second bullet)"
     level: mandatory
@@ -359,8 +376,13 @@ rows:
     source: "Contracts 14.3 (second bullet); Contracts 14.1"
     level: mandatory
     requirement: "The problem form requires root_cause to enter fix_in_progress and resolved; the APIs accept both without it."
-    status: pending
-    note: "The API and TMF621 parts are tested (decision 0035); the browser form part belongs to workstream 3C."
+    status: tested
+    tests:
+      - "apps/web/test/browser/incident-form.test.ts#a problem follows Assess and requires a workaround for known error and root cause for a fix"
+      - "apps/web/test/browser/incident-form.test.ts#a problem form refuses empty workaround and resolved root cause without a write, then saves supplied details"
+      - "packages/server/test/itil-problem.test.ts#known errors work in every state without API-only workaround or root-cause restrictions"
+      - "packages/server/test/itil-problem.test.ts#TMF621 creates and patches known errors without workaround and preserves fixing within inProgress without root cause"
+    note: "TMF621 inProgress enters root_cause_analysis from new and preserves an existing fix_in_progress; no additional TMF status is invented. The browser proves both fixing and resolving require root cause."
   - id: STD-ITIL@14/C14/14.3/incident-link
     source: "Contracts 14.3 (third bullet); Contracts 11.2 troubleTicketRelationship"
     level: mandatory
@@ -390,7 +412,12 @@ rows:
     tests:
       - packages/server/test/itil-incident.test.ts#hold defaults, writable resolution fields, and bounded Unicode titles are shipped derives
   - id: STD-ITIL@14/C14/14.4/guards-users-only
-    source: "Contracts 14.4 rule kinds; Contracts 4.10"
+    source: "Contracts 14.4 rule kinds; Contracts 4.9 finalization; Contracts 4.10"
     level: mandatory
-    requirement: "The incident and problem transition guards judge users' writes only, never the saves that settling persists; their derive rules run on every save."
-    status: pending
+    requirement: "The incident and problem transition guards judge users' writes only, never the saves that settling persists; derive rules run on ordinary writes and changed in-memory settling images, and are not rerun when settled saves persist; invariants still run on persistence."
+    status: tested
+    tests:
+      - "packages/server/test/itil-incident.test.ts#settled saves bypass incident transition guards"
+      - "packages/server/test/itil-problem.test.ts#settled saves bypass problem transition guards"
+      - "packages/server/test/record-rules.test.ts#guard and invariant refuse with the rule's fixed message; a settled save runs only invariants"
+      - "packages/server/test/aggregate-finalize.test.ts#no guard or derive rule runs on a persisted save, while guards still refuse users and derive values reach the settled image"
