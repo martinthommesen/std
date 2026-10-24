@@ -73,9 +73,9 @@ import {
   matchesResourceFilters,
   pageAnswer,
   pageBounds,
+  resourceFields,
   selectedResource,
   selectFields,
-  validateResourceFields,
   validateResourceFilters,
 } from "./page.ts";
 import type { ResourceFilter } from "./page.ts";
@@ -172,7 +172,7 @@ const errorResponse = (
     status = 400;
   }
 
-  if (status === 409 && operation === "unregister") {
+  if (status === 409 && ["unregister", "retrieve"].includes(operation)) {
     status = 400;
   }
 
@@ -501,7 +501,8 @@ const eventPageAnswer = Effect.fn("Tmf688.eventPageAnswer")(
     input: RequestInput,
     topic: EventTopic,
     bounds: EventBounds,
-    scan: EventScan
+    scan: EventScan,
+    fields: ReadonlySet<string> | null
   ) {
     const page = [];
 
@@ -517,7 +518,7 @@ const eventPageAnswer = Effect.fn("Tmf688.eventPageAnswer")(
               id: event.id ?? "",
             };
 
-      page.push(selectFields(resource, input.query.get("fields")));
+      page.push(selectFields(resource, fields));
     }
 
     const headers = {
@@ -576,11 +577,16 @@ const readEvents = Effect.fn("Tmf688.readEvents")(function* readEvents(
   }
 
   const filters = yield* validateResourceFilters(input.query, EVENT_ATTRIBUTES);
-  yield* validateResourceFields(input.query.get("fields"), EVENT_ATTRIBUTES);
+
+  const fields = yield* resourceFields(
+    input.query.get("fields"),
+    EVENT_ATTRIBUTES
+  );
+
   const position = yield* eventStartPosition(input, topic, lookupPending);
   const scan = yield* scanEvents(input, topic, bounds, position, filters);
 
-  return yield* eventPageAnswer(input, topic, bounds, scan);
+  return yield* eventPageAnswer(input, topic, bounds, scan, fields);
 });
 
 const resourceRequest = Effect.fn("Tmf688.resourceRequest")(

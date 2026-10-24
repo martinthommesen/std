@@ -1270,7 +1270,7 @@ rows:
     level: mandatory
     requirement: If fields both includes and excludes (!) the same attribute, the server answers 409 Conflict.
     status: pending
-    note: "gap: Contracts 10.3 has no `!` exclusion marker (TMF630 4.3.2, no keyword), so `!name` resolves as an unknown attribute (`UnknownField`, 400)"
+    note: "TMF688: both marker orders produce exact FieldsConflict Error bodies with 409 on all six pinned GET operations; the top-level hub GET extension uses 400 under the existing operation-status policy (Contracts 11.1, decision 0033 judgment 3). An empty filtered topic list also rejects a conflict. The generic HTTP test 'fields selects attributes and paths; none, !name and conflicts' asserts 409 FieldsConflict but its dbTest.effect registration is not recognized by the current title scanner. Pending until exact maintained evidence is registered across the applicable interfaces; no status-policy exclusion is added."
   - id: TMF630@5.0.0/P1/4.3.4/fields-name-conflict-dot
     source: TMF630 v5.0.0 P1 §4.3.4 p.56
     level: mandatory
