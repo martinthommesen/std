@@ -37,11 +37,12 @@ import { asActor, inRequestTransaction } from "../request-scope.ts";
 import { recordServedRevision } from "../schema-revision-header.ts";
 import { checkRequestRevision } from "../stale-request.ts";
 import { bodyNames, translateBody } from "./body.ts";
+import { parseReadQuery, parseSelection } from "./query.ts";
 import { readDelete, readPatch } from "./record-changes.ts";
 import { savedAnswer, withoutTypeMembers } from "./records.ts";
 import type { RouteInput } from "./records.ts";
 import { checkedCreate } from "./request-schemas.ts";
-import { jsonBodyOf, mediaTypeOf } from "./request.ts";
+import { jsonBodyOf, mediaTypeOf, queryOf } from "./request.ts";
 
 const MERGE_PATCH_TYPES = ["application/merge-patch+json", "application/json"];
 
@@ -74,7 +75,7 @@ const translatedBody = Effect.fn("Api.definitionBody")(function* translated(
 
   const access = yield* WriteAccess;
 
-  return yield* translateBody(
+  const columns = yield* translateBody(
     scope.snapshot,
     access.nameable({
       action,
@@ -83,6 +84,17 @@ const translatedBody = Effect.fn("Api.definitionBody")(function* translated(
     }),
     withoutTypeMembers(body)
   );
+
+  // The change set commits independently of savedAnswer's read transaction.
+  // Refuse invalid response selectors before it starts. Resolve them again
+  // after the write: a definition change can change the caller's read rights.
+  yield* parseSelection(
+    scope,
+    scope.view(classId),
+    yield* parseReadQuery(queryOf(input.request))
+  );
+
+  return columns;
 });
 
 // The request as a definition write.
