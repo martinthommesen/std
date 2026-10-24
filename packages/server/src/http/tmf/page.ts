@@ -1,9 +1,12 @@
+import { FieldsConflict } from "@std/api/errors/fields-conflict";
 import { InvalidFilter } from "@std/api/errors/invalid-filter";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { UnknownField } from "@std/api/errors/unknown-field";
+import { parseTmfFields } from "@std/tmf/query";
+import { IDENTITY_ATTRIBUTES } from "@std/tmf/render";
 import { isJsonArray, isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect } from "effect";
+import { Effect, Result } from "effect";
 
 import { alternativesOf } from "../api/query.ts";
 import { jsonAnswer } from "../api/records.ts";
@@ -19,8 +22,7 @@ export const CONTROL: ReadonlySet<string> = new Set([
 ]);
 
 const COMPARISONS = new Set(["eq", "gt", "gte", "lt", "lte"]);
-const IDENTITY = new Set(["id", "href", "@type"]);
-const HUB_IDENTITY = new Set(["id", "href", "@type", "callback"]);
+const HUB_IDENTITY = new Set([...IDENTITY_ATTRIBUTES, "callback"]);
 
 /** A validated scalar filter on a published resource attribute. */
 export interface ResourceFilter {
@@ -32,31 +34,23 @@ export interface ResourceFilter {
 /**
  * Field selection after authorization preserves resource identity.
  * @param resource - Authorized representation.
- * @param fields - Requested attributes, or all.
+ * @param fields - Validated selected attributes, or all.
  * @returns The selected representation.
  */
 export const selectFields = (
   resource: JsonObject,
-  fields: string | null
+  fields: ReadonlySet<string> | null
 ): JsonObject => {
   if (fields === null) {
     return resource;
   }
 
-  const names = fields.split(",");
-  const required = resource["@type"] === "Hub" ? HUB_IDENTITY : IDENTITY;
-
-  const excluded = new Set(
-    names.flatMap((name) => (name.startsWith("!") ? [name.slice(1)] : []))
-  );
-
-  const included = new Set(names.filter((name) => !name.startsWith("!")));
+  const required =
+    resource["@type"] === "Hub" ? HUB_IDENTITY : IDENTITY_ATTRIBUTES;
 
   return Object.fromEntries(
     Object.entries(resource).filter(
-      ([name]) =>
-        required.has(name) ||
-        (!excluded.has(name) && (included.size === 0 || included.has(name)))
+      ([name]) => required.has(name) || fields.has(name)
     )
   );
 };
@@ -159,25 +153,38 @@ export const validateResourceFilters = Effect.fn(
   return filters;
 });
 
-/** Validate requested fields against the published resource attributes.
+/** Parse requested fields against the published resource attributes.
  * @param fields - Requested attributes.
  * @param allowed - Published attributes.
- * @returns A field error, or success.
+ * @returns The selected attributes (null: all), or a field error.
  */
-export const validateResourceFields = (
-  fields: string | null,
-  allowed: ReadonlySet<string>
-) => {
-  const unknown = (fields ?? "")
-    .split(",")
-    .filter(Boolean)
-    .map((name) => (name.startsWith("!") ? name.slice(1) : name))
-    .find((field) => field !== "none" && !allowed.has(field));
+export const resourceFields = Effect.fn("Tmf688.resourceFields")(
+  function* resourceFields(
+    fields: string | null,
+    allowed: ReadonlySet<string>
+  ) {
+    const parsed = parseTmfFields(fields ?? undefined, [...allowed]);
 
-  return unknown === undefined
-    ? Effect.void
-    : Effect.fail(new UnknownField({ field: unknown }));
-};
+    if (Result.isSuccess(parsed)) {
+      return parsed.success;
+    }
+
+    const issue = parsed.failure;
+
+    if (issue.kind === "unknownAttribute") {
+      return yield* new UnknownField({ field: issue.attribute });
+    }
+
+    if (issue.kind === "conflict") {
+      return yield* new FieldsConflict({ field: issue.attribute });
+    }
+
+    return yield* new InvalidRequest({
+      message: "fields lists attribute names.",
+      parameter: "fields",
+    });
+  }
+);
 
 /**
  * Whether an authorized representation satisfies all validated scalar filters.
@@ -215,9 +222,10 @@ export const selectedResource = Effect.fn("Tmf688.selectedResource")(
     fields: string | null,
     allowed: readonly string[]
   ) {
-    yield* validateResourceFields(fields, new Set(allowed));
-
-    return selectFields(resource, fields);
+    return selectFields(
+      resource,
+      yield* resourceFields(fields, new Set(allowed))
+    );
   }
 );
 
@@ -246,8 +254,7 @@ export const pageAnswer = Effect.fn("Tmf688.page")(function* pageAnswer(
 
   const allowed = new Set(attributes);
   const selected = yield* filteredResources(resources, params, allowed);
-  const fields = params.get("fields");
-  yield* validateResourceFields(fields, allowed);
+  const fields = yield* resourceFields(params.get("fields"), allowed);
 
   const page = selected
     .slice(bounds.offset, bounds.offset + bounds.limit)
