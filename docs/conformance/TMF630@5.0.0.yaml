@@ -1269,8 +1269,18 @@ rows:
     source: TMF630 v5.0.0 P1 §4.3.3 p.56
     level: mandatory
     requirement: If fields both includes and excludes (!) the same attribute, the server answers 409 Conflict.
-    status: pending
-    note: "Exact maintained evidence now registers without scanner changes: packages/server/test/tmf630-conformance.test.ts#same-attribute fields conflicts reject both marker orders on generic lists and reads (409, base/concrete collections and singles); packages/server/test/dead-letter-api.test.ts#same-attribute fields conflicts reject both marker orders on dead-delivery lists and reads (409); packages/server/test/tmf-framework.test.ts#same-attribute fields conflicts use declared 400 in both marker orders on mapped lists and reads; packages/server/test/tmf621.test.ts#same-attribute fields conflicts use declared 400 in both marker orders on shipped TMF621 lists and reads (both shipped resources); packages/server/test/tmf688.test.ts#TMF688 fields conflicts use exact errors and each operation's declared status (409 on six pinned GETs, 400 on the top-level hub GET extension). TMF status selection follows Contracts 11.1 and decision 0033. Pending: history list and entry own fields selection under Contracts 10.4 but history.ts fieldSelection only splits names; both marker orders of action,!action return 200 rather than 409. The fixed session, metadata, schema/OpenAPI and shared generic/TMF621 hub retrieval modules declare no fields selector. No new exclusion, optional requirement or whole-row pass is claimed."
+    status: tested
+    tests:
+      - "packages/server/test/tmf630-conformance.test.ts#same-attribute fields conflicts reject both marker orders on generic lists and reads"
+      - "packages/server/test/dead-letter-api.test.ts#same-attribute fields conflicts reject both marker orders on dead-delivery lists and reads"
+      - "packages/server/test/tmf-framework.test.ts#same-attribute fields conflicts use declared 400 in both marker orders on mapped lists and reads"
+      - "packages/server/test/tmf621.test.ts#same-attribute fields conflicts use declared 400 in both marker orders on shipped TMF621 lists and reads"
+      - "packages/server/test/tmf688.test.ts#TMF688 fields conflicts use exact errors and each operation's declared status"
+      - "packages/server/test/api-history.test.ts#same-attribute fields conflicts reject both marker orders on history lists and reads"
+      - "packages/server/test/selector-writes.test.ts#generic record and definition writes reject both fields marker orders with exact 409"
+      - "packages/server/test/selector-writes.test.ts#mapped create and patch responses reject both fields marker orders with exact declared 409"
+      - "packages/server/test/selector-writes.test.ts#shipped TMF621 create and patch responses reject both fields marker orders with exact declared 409"
+    note: "Exact maintained HTTP status and complete error-body assertions cover both marker orders on generic base/concrete list and single reads, dead deliveries, history (including empty filtered and past-end pages), the mapped framework, both shipped TMF621 resources, and all seven TMF688 selector GET forms. Enabled generic record/definition and mapped/TMF621 create and patch response selectors are also covered. Generic/history/dead-delivery and enabled writes use 409; mapped/TMF621 GETs and the TMF688 top-level hub extension use their declared 400 under Contracts 11.1 and decision 0033. Identity attributes remain mandatory and are not conflicting optional attributes. History keeps its whole authorized embedded changes/fields selection. Fixed session, metadata, schema/OpenAPI, task/journal and shared generic/TMF621 hub retrieval modules declare no fields selector; TMF688 writes do not project by fields. No new exclusion or other row is claimed. Definition-write atomicity is a separate known defect: selection errors can follow a committed change set; these status proofs do not certify rollback."
   - id: TMF630@5.0.0/P1/4.3.4/fields-name-conflict-dot
     source: TMF630 v5.0.0 P1 §4.3.4 p.56
     level: mandatory
