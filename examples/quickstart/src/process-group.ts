@@ -195,26 +195,26 @@ export const terminateGroup = Effect.fn("ProcessGroup.terminate")(
       options.grace ?? TERMINATE_GRACE
     );
 
-    if (afterTerm.length > 0) {
-      signalGroup(pgid, "SIGKILL");
+    if (afterTerm.length === 0) {
+      return yield* Effect.void;
     }
 
-    const left =
-      afterTerm.length === 0
-        ? afterTerm
-        : yield* waitForGroup(
-            pgid,
-            members,
-            options.killDeadline ?? KILL_DEADLINE
-          );
+    signalGroup(pgid, "SIGKILL");
+
+    const left = yield* waitForGroup(
+      pgid,
+      members,
+      options.killDeadline ?? KILL_DEADLINE
+    );
+
+    if (left.length === 0) {
+      return yield* Effect.void;
+    }
 
     const failure = new GroupNotEnded({ pgid, processes: left });
+    yield* Console.error(`cleanup: ${failure.message}`);
 
-    if (left.length > 0) {
-      yield* Console.error(`cleanup: ${failure.message}`);
-    }
-
-    return yield* left.length > 0 ? Effect.fail(failure) : Effect.void;
+    return yield* failure;
   }
 );
 

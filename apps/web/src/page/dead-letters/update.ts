@@ -137,7 +137,7 @@ export const update = (model: Model, message: Message) =>
 
       const dialogClose = closeDialog(
         modifyFields(model, {
-          operation: () => Operation.Executing({ action, delivery }),
+          operation: () => Operation.Executing(),
         })
       );
 

@@ -138,20 +138,24 @@ interface Answer {
  * @param method - The HTTP method.
  * @param resource - The path after the base, with its query.
  * @param payload - A JSON body, if any.
+ * @param expected - The expected HTTP status.
  * @returns The status and the body text (empty when there is none).
  */
-const call = (
+const call = Effect.fn("CtkCi.call")(function* call(
   base: string,
   token: Redacted.Redacted,
   method: string,
   resource: string,
-  payload: CtkPayload | null
-) =>
-  Effect.tryPromise({
+  payload: CtkPayload | null,
+  expected: number
+) {
+  const label = `${method} ${resource}`;
+
+  const answer = yield* Effect.tryPromise({
     catch: (cause) =>
       new PayloadCheckFailed({
         detail: `the request failed: ${String(cause)}`,
-        request: `${method} ${resource}`,
+        request: label,
       }),
     try: async (): Promise<Answer> => {
       const headers = new Headers({
@@ -177,26 +181,6 @@ const call = (
     },
   });
 
-/** What a created resource must answer. */
-const Created = Schema.fromJsonString(
-  Schema.Struct({ "@type": Schema.String, id: Schema.String })
-);
-
-/** What a list must answer. */
-const Listed = Schema.fromJsonString(Schema.Array(Schema.Struct({})));
-
-/**
- * Fails unless an answer has the expected status.
- * @param label - The request, for the message.
- * @param answer - The answer.
- * @param expected - The expected status.
- * @returns The answer.
- */
-const expectStatus = Effect.fn("CtkCi.expectStatus")(function* expectStatus(
-  label: string,
-  answer: Answer,
-  expected: number
-) {
   if (answer.status !== expected) {
     return yield* new PayloadCheckFailed({
       detail: `expected ${expected}, got ${answer.status}: ${answer.body}`,
@@ -206,6 +190,14 @@ const expectStatus = Effect.fn("CtkCi.expectStatus")(function* expectStatus(
 
   return answer;
 });
+
+/** What a created resource must answer. */
+const Created = Schema.fromJsonString(
+  Schema.Struct({ "@type": Schema.String, id: Schema.String })
+);
+
+/** What a list must answer. */
+const Listed = Schema.fromJsonString(Schema.Array(Schema.Struct({})));
 
 /** What a resource's self-check lists with `fields`. */
 interface Resource {
@@ -249,9 +241,12 @@ const selfCheck = Effect.fn("CtkCi.selfCheck")(function* selfCheck(
 ) {
   const collection = `/${resource.name}`;
 
-  const created = yield* expectStatus(
-    `POST ${collection}`,
-    yield* call(base, token, "POST", collection, resource.payload),
+  const created = yield* call(
+    base,
+    token,
+    "POST",
+    collection,
+    resource.payload,
     201
   );
 
@@ -276,20 +271,12 @@ const selfCheck = Effect.fn("CtkCi.selfCheck")(function* selfCheck(
 
   const item = `${collection}/${id}`;
 
-  yield* expectStatus(
-    `GET ${item}`,
-    yield* call(base, token, "GET", item, null),
-    200
-  );
+  yield* call(base, token, "GET", item, null, 200);
 
   for (const field of resource.fields) {
     const listPath = `${collection}?fields=${field}`;
 
-    const listed = yield* expectStatus(
-      `GET ${listPath}`,
-      yield* call(base, token, "GET", listPath, null),
-      200
-    );
+    const listed = yield* call(base, token, "GET", listPath, null, 200);
 
     yield* Schema.decodeEffect(Listed)(listed.body).pipe(
       Effect.mapError(
@@ -303,18 +290,10 @@ const selfCheck = Effect.fn("CtkCi.selfCheck")(function* selfCheck(
   }
 
   if (resource.patch !== null) {
-    yield* expectStatus(
-      `PATCH ${item}`,
-      yield* call(base, token, "PATCH", item, resource.patch),
-      200
-    );
+    yield* call(base, token, "PATCH", item, resource.patch, 200);
   }
 
-  yield* expectStatus(
-    `DELETE ${item}`,
-    yield* call(base, token, "DELETE", item, null),
-    204
-  );
+  yield* call(base, token, "DELETE", item, null, 204);
 
   return yield* Console.log(
     `payload self-check: ${resource.name} ${id} created, read, listed, ${resource.patch === null ? "" : "patched, "}deleted`

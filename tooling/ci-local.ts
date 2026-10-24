@@ -15,13 +15,14 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+import { DEFAULT_DATABASE_URL } from "@std/postgres/transport";
+
 import { report, runCheck } from "./lib/report.ts";
 import { runCommand } from "./lib/run.ts";
 import { repoRoot } from "./lib/workspace.ts";
 
 const checkName = "ci:local";
 const workflow = path.join(repoRoot, ".github", "workflows", "ci.yml");
-const defaultDatabaseUrl = "postgres://std:std@127.0.0.1:54329/std";
 
 /** One `run:` step of the workflow. */
 interface Step {
@@ -71,7 +72,7 @@ await runCheck(checkName, async () => {
 
   const env = {
     ...process.env,
-    STD_DATABASE_URL: process.env.STD_DATABASE_URL ?? defaultDatabaseUrl,
+    STD_DATABASE_URL: process.env.STD_DATABASE_URL ?? DEFAULT_DATABASE_URL,
   };
 
   const timings: string[] = [];

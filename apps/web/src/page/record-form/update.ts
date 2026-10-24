@@ -437,16 +437,19 @@ const restingPicker = (picker: Picker, text: string): Picker =>
  * @param model - The page.
  * @returns It, with the pickers at rest.
  */
-const resetPickerInputs = (model: Model): Model =>
-  modifyFields(model, {
+const resetPickerInputs = (model: Model): Model => {
+  const fields = new Map(fieldsOf(model).map((field) => [field.id, field]));
+
+  return modifyFields(model, {
     pickers: Record.map((picker, fieldId) =>
-      Option.match(fieldOf(model, fieldId), {
+      Option.match(Option.fromNullishOr(fields.get(fieldId)), {
         onNone: () => picker,
         onSome: (field) =>
           restingPicker(picker, restingLabelOf(inputOf(model, field))),
       })
     ),
   });
+};
 
 const reflectProposedPickers = (model: Model): Model => {
   const fields = new Map(fieldsOf(model).map((field) => [field.id, field]));
@@ -1313,13 +1316,8 @@ const editField = (
     {
       onNone: () => ({ model }),
       onSome: (field) =>
-        Update.combine(
-          recordFieldEdit(
-            model,
-            fieldId,
-            toInput(field, inputOf(model, field))
-          ),
-          [requestFormState]
+        requestFormState(
+          recordFieldEdit(model, fieldId, toInput(field, inputOf(model, field)))
         ),
     }
   );
@@ -1332,11 +1330,10 @@ const editField = (
  * @returns The page.
  */
 const forgetEdit = (model: Model, fieldId: string): PlainReturn =>
-  Update.combine(
+  requestFormState(
     forgetServerErrors(fieldId)(
       modifyFields(model, { edits: Record.remove(fieldId) })
-    ),
-    [requestFormState]
+    )
   );
 
 const MIDNIGHT = "00:00";
@@ -2977,9 +2974,7 @@ const receiveFormState = (
   }
 
   return sawRevision(
-    Update.combine(reflectProposedPickers(acceptFormState(model, verdict)), [
-      requestFormState,
-    ]),
+    requestFormState(reflectProposedPickers(acceptFormState(model, verdict))),
     maybeRevision
   );
 };

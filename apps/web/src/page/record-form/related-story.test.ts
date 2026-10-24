@@ -20,6 +20,7 @@ import {
   ticketWithRelated,
   TICKET_SELECTION,
   TASK_COLUMNS,
+  TASK_TABLE,
 } from "../../form-fixture.ts";
 import { REVISION_3, revision } from "../../table-fixture.ts";
 import {
@@ -38,8 +39,6 @@ const LIST = 1;
 
 const COLUMNS =
   "shortDescription,number,status,assignee,internalCost,customerEmail";
-
-const TASKS: MetaTable = { ...ticketTable, label: "Task", name: "help.task" };
 
 const page = (next: string | null) => ({
   maybeCount: Option.some(12),
@@ -75,7 +74,7 @@ const onFirstPage = formAfter(
     generation: 1,
     listId: LIST,
     revision: REVISION_5,
-    table: TASKS,
+    table: TASK_TABLE,
   }),
   Message.SucceededLoadRelatedRecords({
     generation: 1,
@@ -166,7 +165,7 @@ describe("a related list's cursor", () => {
 
 /** Tasks with nothing a cell shows: no display field, a json field only. */
 const BARE_TASKS: MetaTable = {
-  ...TASKS,
+  ...TASK_TABLE,
   displayField: null,
   fields: ticketTable.fields.filter((field) => field.type.kind === "json"),
   layouts: { form: null, list: null },
@@ -306,7 +305,7 @@ describe("a related list that is removed and made again (review round 3)", () =>
         generation: 1,
         listId: made?.id ?? 0,
         revision: REVISION_6,
-        table: TASKS,
+        table: TASK_TABLE,
       })
     );
 
@@ -370,7 +369,7 @@ describe("a related list's page refused with SchemaChanged", () => {
         generation: 2,
         listId: LIST,
         revision: REVISION_6,
-        table: TASKS,
+        table: TASK_TABLE,
       })
     );
 
@@ -402,7 +401,7 @@ describe("a related list's page refused with SchemaChanged", () => {
         generation: 2,
         listId: LIST,
         revision: REVISION_6,
-        table: TASKS,
+        table: TASK_TABLE,
       })
     );
 
@@ -434,7 +433,7 @@ describe("a related list's page refused with SchemaChanged", () => {
           generation: 3,
           listId: LIST,
           revision: REVISION_6,
-          table: TASKS,
+          table: TASK_TABLE,
         })
       ),
       Command.resolve(
@@ -486,7 +485,7 @@ describe("a related list's page refused with SchemaChanged", () => {
         generation: 2,
         listId: LIST,
         revision: REVISION_6,
-        table: TASKS,
+        table: TASK_TABLE,
       }),
       Message.FailedLoadFormMetadata({ error: "Unavailable" })
     );
@@ -536,7 +535,7 @@ describe("a related list's page refused with SchemaChanged", () => {
           generation: 2,
           listId: LIST,
           revision: REVISION_6,
-          table: TASKS,
+          table: TASK_TABLE,
         })
       ),
       // The endpoint's metadata is still loading: no page yet.

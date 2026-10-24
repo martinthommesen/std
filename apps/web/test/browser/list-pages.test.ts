@@ -20,34 +20,28 @@ import { ACME } from "@std/testing/acme-ids";
 import { TestDatabase } from "@std/testing/test-database";
 import type { JsonValue } from "@std/values/json-value";
 import { Context, Effect, Layer, Schema } from "effect";
-import type { Browser, Page } from "playwright";
+import type { Browser } from "playwright";
 import { inject } from "vitest";
 
 import {
   API_PREFIX,
-  addCondition,
-  apiPages,
+  uiAndApi,
   apiCall,
-  applyFilter,
   assertHiddenValuesAbsent,
   bearerToken,
-  buildCondition,
   captureApiBodies,
   captureResponses,
-  clickSort,
   collectionOf,
   isListResponse,
   inOrder,
   listColumnCells,
-  listedPages,
   navigationTables,
   openTableList,
-  setMatch,
   setPageSize,
   signIn,
   valuesHiddenFrom,
 } from "./app.ts";
-import type { ConditionStep, Visitor } from "./app.ts";
+import type { ConditionStep, Visitor, ListScenario } from "./app.ts";
 import { launchBrowser, stdServe } from "./support.ts";
 
 const ASSETS = "acme.asset";
@@ -181,35 +175,39 @@ const seed = async (origin: string, fixture: AcmeData): Promise<void> => {
   const bobAges = [5, 20, 45, 80, 120, 200, 300, 380, 420, 500, 700, 1000];
   const tiers = ["bronze", "gold", "silver", null] as const;
 
-  await inOrder(bobAges, async (age, index) => {
-    const number = index + 1;
+  await Promise.all(
+    bobAges.map(async (age, index) => {
+      const number = index + 1;
 
-    await post(origin, token, `/${collectionOf(ASSETS)}`, {
-      cost: number % 3 === 0 ? "2600" : String(100 * number),
-      dockedTo: refTo(dockOf(number, fixture)),
-      name: `B${String(number).padStart(2, "0")}`,
-      owner: { id: fixture.bob.id },
-      purchasedOn: number === 4 ? HIDDEN_PURCHASE_DATE : daysAgo(age),
-      status: number % 4 === 0 ? "lost" : "in_use",
-      tier: tiers[number % 4] ?? null,
-    });
-  });
+      await post(origin, token, `/${collectionOf(ASSETS)}`, {
+        cost: number % 3 === 0 ? "2600" : String(100 * number),
+        dockedTo: refTo(dockOf(number, fixture)),
+        name: `B${String(number).padStart(2, "0")}`,
+        owner: { id: fixture.bob.id },
+        purchasedOn: number === 4 ? HIDDEN_PURCHASE_DATE : daysAgo(age),
+        status: number % 4 === 0 ? "lost" : "in_use",
+        tier: tiers[number % 4] ?? null,
+      });
+    })
+  );
 
   const aliceAges = [10, 60, 150, 390, 450, 800, 30, 365];
 
-  await inOrder(aliceAges, async (age, index) => {
-    const number = index + 1;
+  await Promise.all(
+    aliceAges.map(async (age, index) => {
+      const number = index + 1;
 
-    await post(origin, token, `/${collectionOf(ASSETS)}`, {
-      cost: String(250 * number),
-      dockedTo: refTo(number % 2 === 0 ? fixture.records.AM : null),
-      name: `A${String(number).padStart(2, "0")}`,
-      owner: { id: fixture.alice.id },
-      purchasedOn: daysAgo(age),
-      status: number % 3 === 0 ? "lost" : "in_use",
-      tier: tiers[(number + 1) % 4] ?? null,
-    });
-  });
+      await post(origin, token, `/${collectionOf(ASSETS)}`, {
+        cost: String(250 * number),
+        dockedTo: refTo(number % 2 === 0 ? fixture.records.AM : null),
+        name: `A${String(number).padStart(2, "0")}`,
+        owner: { id: fixture.alice.id },
+        purchasedOn: daysAgo(age),
+        status: number % 3 === 0 ? "lost" : "in_use",
+        tier: tiers[(number + 1) % 4] ?? null,
+      });
+    })
+  );
 };
 
 /** The running server after the suite's list fixtures have been seeded. */
@@ -231,20 +229,6 @@ class SeededAcme extends Context.Service<
       return SeededAcme.of({ origin: server.origin });
     })
   );
-}
-
-/** One list the UI builds and the API is asked for directly. */
-interface Scenario {
-  readonly name: string;
-  /** The builder steps: each entry adds a condition and runs its steps. */
-  readonly conditions: readonly (readonly ConditionStep[])[];
-  /** `any of these` for the outermost group, if not `all of these`. */
-  readonly anyOf?: boolean;
-  /** Column headers to click, in order. */
-  readonly sortClicks: readonly string[];
-  /** The same list in the API's terms. */
-  readonly filter?: string;
-  readonly sort?: string;
 }
 
 const relativeDate = (offset: string): readonly ConditionStep[] => [
@@ -284,7 +268,7 @@ const dockedToName = (
   { kind: "value", text },
 ];
 
-const ADMIN_SCENARIOS: readonly Scenario[] = [
+const ADMIN_SCENARIOS: readonly ListScenario[] = [
   {
     conditions: [],
     name: "no filter, by name",
@@ -336,7 +320,7 @@ const ADMIN_SCENARIOS: readonly Scenario[] = [
   },
 ];
 
-const BOB_SCENARIOS: readonly Scenario[] = [
+const BOB_SCENARIOS: readonly ListScenario[] = [
   {
     conditions: [],
     name: "no filter, by name descending",
@@ -387,49 +371,11 @@ const BOB_SCENARIOS: readonly Scenario[] = [
   },
 ];
 
-/**
- * Builds a scenario's list in the UI and reads the same list through the
- * API: both, page by page.
- *
- * @param page - A signed-in page on the table's list, without a filter.
- * @param origin - The server.
- * @param scenario - The list.
- * @returns The UI's pages and the API's pages.
- */
-const uiAndApi = async (page: Page, origin: string, scenario: Scenario) => {
-  await inOrder(scenario.conditions, async (steps, index) => {
-    await addCondition(page);
-    await buildCondition(page, index + 1, steps);
-  });
-
-  if (scenario.anyOf === true) {
-    await setMatch(page, 1, "any of these");
-  }
-
-  if (scenario.conditions.length > 0) {
-    await applyFilter(page);
-  }
-
-  await inOrder(scenario.sortClicks, async (label) => {
-    await clickSort(page, label);
-  });
-
-  const shown = await listedPages(page);
-
-  const answered = await apiPages(page, origin, ASSETS, {
-    filter: scenario.filter,
-    limit: PAGE_SIZE,
-    sort: scenario.sort,
-  });
-
-  return { answered, shown };
-};
-
 const sameListsAsApi = async (
   browser: Browser,
   origin: string,
   visitor: Visitor,
-  scenarios: readonly Scenario[]
+  scenarios: readonly ListScenario[]
 ) => {
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -441,7 +387,13 @@ const sameListsAsApi = async (
     await openTableList(page, origin, ASSETS);
     await setPageSize(page, PAGE_SIZE);
 
-    const { answered, shown } = await uiAndApi(page, origin, scenario);
+    const { answered, shown } = await uiAndApi(
+      page,
+      origin,
+      ASSETS,
+      PAGE_SIZE,
+      scenario
+    );
 
     assert.deepStrictEqual(
       shown,

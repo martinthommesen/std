@@ -1,12 +1,15 @@
 import { SCHEMA_REVISION_HEADER } from "@std/api/api";
-import { makeStdClient } from "@std/api/client";
+import { isTmfError, makeStdClient } from "@std/api/client";
 import type { StdClient } from "@std/api/client";
 import { Context, Effect, Layer, Option } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import type { HttpClientResponse } from "effect/http";
 import { Http } from "foldkit";
 
-import { parseSchemaRevision } from "./domain/schema-revision.ts";
+import {
+  MissingRevision,
+  parseSchemaRevision,
+} from "./domain/schema-revision.ts";
 import type { SchemaRevision } from "./domain/schema-revision.ts";
 
 /**
@@ -100,3 +103,45 @@ export class StdApi extends Context.Service<StdApi, StdClient>()(
     Layer.provide(Http.layer)
   );
 }
+
+const requireRevision = (maybeRevision: Option.Option<SchemaRevision>) =>
+  Option.match(maybeRevision, {
+    onNone: () => Effect.fail(new MissingRevision()),
+    onSome: Effect.succeed,
+  });
+
+/**
+ * Fetches one table's metadata (`GET tableMetadata/{collection}`) at the
+ * given revision, for the list page and the form page. A revision the
+ * server says the database never had (after a restore, Contracts 6.4) is
+ * dropped and the metadata asked for again without one.
+ *
+ * @param collection - The table's collection (`collectionOf`).
+ * @param maybeRevision - The revision to send.
+ * @returns The metadata and the revision the response stated.
+ */
+export const fetchTableMetadata = (
+  collection: string,
+  maybeRevision: Option.Option<SchemaRevision>
+) => {
+  const fetchAt = (revision: Option.Option<SchemaRevision>) =>
+    Effect.gen(function* fetchMetadata() {
+      const client = yield* StdApi;
+
+      const [table, response] = yield* client.tableMetadata
+        .get({
+          params: { table: collection },
+          responseMode: "decoded-and-response",
+        })
+        .pipe(atRevision(revision));
+
+      return {
+        revision: yield* requireRevision(responseRevision(response)),
+        table,
+      };
+    });
+
+  return fetchAt(maybeRevision).pipe(
+    Effect.catchIf(isTmfError("SchemaChanged"), () => fetchAt(Option.none()))
+  );
+};

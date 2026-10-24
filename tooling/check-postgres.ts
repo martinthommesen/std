@@ -7,6 +7,7 @@
  * Usage: `node tooling/check-postgres.ts`.
  */
 import {
+  DEFAULT_DATABASE_URL,
   databaseTransport,
   databaseTlsConfig,
   loadDatabaseTls,
@@ -18,7 +19,6 @@ import { parsePgUrl, queryOnce } from "./lib/pg-wire.ts";
 import { report, runCheck } from "./lib/report.ts";
 
 const checkName = "check-postgres";
-const defaultUrl = "postgres://std:std@127.0.0.1:54329/std";
 const minimumVersion = 180_000;
 const maximumVersion = 190_000;
 
@@ -31,7 +31,10 @@ const facts = `
    WHERE d.datname = current_database()`;
 
 await runCheck(checkName, async () => {
-  const settings = parsePgUrl(process.env.STD_DATABASE_URL ?? defaultUrl);
+  const settings = parsePgUrl(
+    process.env.STD_DATABASE_URL ?? DEFAULT_DATABASE_URL
+  );
+
   const where = `${settings.user}@${settings.host}:${settings.port}/${settings.database}`;
   let rows: (string | null)[][];
 

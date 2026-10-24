@@ -8,7 +8,9 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 import { runCommand } from "../lib/run.ts";
 import { repoRoot } from "../lib/workspace.ts";
@@ -18,18 +20,37 @@ const workflow = readFileSync(
   "utf-8"
 );
 
-const gate =
-  / {6}- name: Release gate[\s\S]*? {8}run: \|\n(?<script>(?: {10}.*\n)+)/u.exec(
-    workflow
-  )?.groups?.script;
+const ReleaseWorkflow = Schema.Struct({
+  jobs: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      steps: Schema.optionalKey(
+        Schema.Array(
+          Schema.Struct({
+            name: Schema.optionalKey(Schema.String),
+            run: Schema.optionalKey(Schema.String),
+          })
+        )
+      ),
+    })
+  ),
+});
 
-if (gate === undefined) {
-  throw new Error("Release workflow has no executable gate");
-}
-
-const script = gate.replaceAll(/^ {10}/gmu, "");
+const parsedWorkflow: unknown = parse(workflow);
+const { jobs } = Schema.decodeUnknownSync(ReleaseWorkflow)(parsedWorkflow);
+const script = path.join(repoRoot, "docker/release-gate.sh");
 
 describe("release-version", () => {
+  it("wires the release workflow to the tested gate", () => {
+    const gates = Object.values(jobs)
+      .flatMap((job) => job.steps ?? [])
+      .filter((step) => step.name === "Release gate");
+
+    expect(gates.map((gate) => gate.run)).toStrictEqual([
+      "bash docker/release-gate.sh",
+    ]);
+  });
+
   it.each([
     ["0.0.3", "v0.0.3", "tag", 0],
     ["0.0.3", "v0.0.2", "tag", 1],
@@ -50,7 +71,7 @@ describe("release-version", () => {
           JSON.stringify({ version })
         );
 
-        const result = await runCommand("/bin/bash", ["-c", script], {
+        const result = await runCommand("/bin/bash", [script], {
           cwd: scratch,
           env: {
             ...process.env,

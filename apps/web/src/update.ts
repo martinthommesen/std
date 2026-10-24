@@ -1,5 +1,5 @@
 import { Dialog, Menu } from "@foldkit/ui";
-import { Equivalence, Match, Option, pipe } from "effect";
+import { Equivalence, Match, Option, Result, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 import { toString as urlToString } from "foldkit/url";
@@ -313,22 +313,7 @@ const toGotTableListMessage =
  * @returns It, failed.
  */
 const failTables = (tables: TablesState): TablesState =>
-  Option.match(AsyncData.getData(tables), {
-    onNone: () => Tables.Failure({ error: "Unavailable" }),
-    onSome: (data) => Tables.Stale({ data, error: "Unavailable" }),
-  });
-
-/**
- * The table list while it reloads: the last list stays on screen.
- *
- * @param tables - The table list.
- * @returns It, refreshing.
- */
-const reloadTables = (tables: TablesState): TablesState =>
-  Option.match(AsyncData.getData(tables), {
-    onNone: () => Tables.Loading(),
-    onSome: (data) => Tables.Refreshing({ data }),
-  });
+  AsyncData.settle(tables, Result.fail("Unavailable"));
 
 /**
  * Reloads the table list at the app's revision, keeping it on screen.
@@ -336,18 +321,24 @@ const reloadTables = (tables: TablesState): TablesState =>
  * @param model - The state.
  * @returns It, reloading.
  */
-const reloadTableList: Step = (model) =>
-  Model.guards.SignedIn(model) && !AsyncData.isPending(model.tables)
-    ? {
-        commands: [
-          LoadTables({
-            maybeRevision: model.maybeRevision,
-            sessionId: model.sessionId,
-          }),
-        ],
-        model: modifyFields(model, { tables: reloadTables }),
-      }
-    : { model };
+const reloadTableList: Step = (model) => {
+  if (!Model.guards.SignedIn(model)) {
+    return { model };
+  }
+
+  return Option.match(AsyncData.revalidateOrLoad(model.tables), {
+    onNone: () => ({ model }),
+    onSome: (tables) => ({
+      commands: [
+        LoadTables({
+          maybeRevision: model.maybeRevision,
+          sessionId: model.sessionId,
+        }),
+      ],
+      model: modifyFields(model, { tables: () => tables }),
+    }),
+  });
+};
 
 /**
  * Keeps the latest revision a response stated, and reloads the table list
@@ -907,17 +898,14 @@ const settleSession = (
   return Option.match(maybeUser, {
     onNone: () => landSignedOut(checking.route, initSignedOut(carried)),
     onSome: (user) =>
-      Update.combine(
-        initSignedIn(user, maybeRevision, carried)(AppRoute.Home()),
-        [
-          () =>
-            landSignedIn(
-              checking.route,
-              initSignedIn(user, maybeRevision, carried)
-            ),
-          enterSignedIn,
-        ]
-      ),
+      Update.combine(checking, [
+        () =>
+          landSignedIn(
+            checking.route,
+            initSignedIn(user, maybeRevision, carried)
+          ),
+        enterSignedIn,
+      ]),
   });
 };
 

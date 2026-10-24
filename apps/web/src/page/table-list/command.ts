@@ -4,8 +4,8 @@ import { Command } from "foldkit";
 import { replaceUrl } from "foldkit/navigation";
 
 import { calendarToday } from "../../calendar.ts";
-import { SchemaRevision } from "../../domain/schema-revision.ts";
 import type { SchemaRevision as Revision } from "../../domain/schema-revision.ts";
+import { SchemaRevision } from "../../domain/schema-revision.ts";
 import {
   WireField,
   collectionOf,
@@ -14,58 +14,14 @@ import {
   recordOfResource,
   totalCountOf,
 } from "../../domain/wire.ts";
-import { StdApi, atRevision, responseRevision } from "../../std-client.ts";
+import {
+  StdApi,
+  atRevision,
+  responseRevision,
+  fetchTableMetadata,
+} from "../../std-client.ts";
 import { Message } from "./message.ts";
 import type { ListError } from "./model.ts";
-
-/** A response without `STD-Schema-Revision`, which every API response has. */
-// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
-class MissingRevision extends Schema.TaggedError<
-  MissingRevision,
-  { readonly brand: unique symbol }
->()("MissingRevision", {}) {}
-
-const requireRevision = (maybeRevision: Option.Option<Revision>) =>
-  Option.match(maybeRevision, {
-    onNone: () => Effect.fail(new MissingRevision()),
-    onSome: Effect.succeed,
-  });
-
-/**
- * Fetches one table's metadata (`GET tableMetadata/{collection}`) at the
- * given revision, for the list page and the form page. A revision the
- * server says the database never had (after a restore, Contracts 6.4) is
- * dropped and the metadata asked for again without one.
- *
- * @param collection - The table's collection (`collectionOf`).
- * @param maybeRevision - The revision to send.
- * @returns The metadata and the revision the response stated.
- */
-export const fetchTableMetadata = (
-  collection: string,
-  maybeRevision: Option.Option<Revision>
-) => {
-  const fetchAt = (revision: Option.Option<Revision>) =>
-    Effect.gen(function* fetchMetadata() {
-      const client = yield* StdApi;
-
-      const [table, response] = yield* client.tableMetadata
-        .get({
-          params: { table: collection },
-          responseMode: "decoded-and-response",
-        })
-        .pipe(atRevision(revision));
-
-      return {
-        revision: yield* requireRevision(responseRevision(response)),
-        table,
-      };
-    });
-
-  return fetchAt(maybeRevision).pipe(
-    Effect.catchIf(isTmfError("SchemaChanged"), () => fetchAt(Option.none()))
-  );
-};
 
 /**
  * Loads the list's table metadata. `UnknownTable` is the not-found

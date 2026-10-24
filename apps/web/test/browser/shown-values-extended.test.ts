@@ -81,7 +81,6 @@ import {
   shownRows,
   valueText,
   visibleTextOf,
-  visitorOf,
 } from "./shown.ts";
 import type { Described, LocalField, Seen } from "./shown.ts";
 import { launchBrowser, stdServe } from "./support.ts";
@@ -196,7 +195,7 @@ interface Seeded {
  * @returns The incidents.
  */
 const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
-  const token = await bearerToken(origin, visitorOf(fixture.admin));
+  const token = await bearerToken(origin, fixture.admin);
 
   const ids = await addLocalFields(
     origin,
@@ -285,7 +284,7 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
   });
 
   // As the agent the incident is assigned to.
-  const agentToken = await bearerToken(origin, visitorOf(fixture.agent));
+  const agentToken = await bearerToken(origin, fixture.agent);
 
   await patchIncident(origin, agentToken, full, {
     description: AGENT_DESCRIPTION,
@@ -712,7 +711,7 @@ const uiShowsTheApiValues = async (
     await checkPlaintext(`${user.login}: ${step}`);
   };
 
-  await signIn(page, origin, visitorOf(user));
+  await signIn(page, origin, user);
   await listShowsTheApiValues(page, origin, seen);
   await noPlaintextAfter("the list");
   await formShowsTheApiValues(page, origin, seeded.child, seen);

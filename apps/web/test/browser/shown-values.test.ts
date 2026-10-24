@@ -57,7 +57,6 @@ import {
   definitionPath,
   patchDefinition,
   timeInputText,
-  visitorOf,
 } from "./shown.ts";
 import type { LocalField, Seen } from "./shown.ts";
 import { launchBrowser, stdServe } from "./support.ts";
@@ -98,7 +97,7 @@ interface Seeded {
  * @returns The incidents.
  */
 const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
-  const token = await bearerToken(origin, visitorOf(fixture.admin));
+  const token = await bearerToken(origin, fixture.admin);
 
   const ids = await addLocalFields(
     origin,
@@ -182,7 +181,7 @@ const uiShowsTheApiValues = async (
   const page = await context.newPage();
   const seen: Seen = new Set();
 
-  await signIn(page, origin, visitorOf(user));
+  await signIn(page, origin, user);
   await listShowsTheApiValues(page, origin, seen);
   await formShowsTheApiValues(page, origin, seeded.full, seen);
   await context.close();

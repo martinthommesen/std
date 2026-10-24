@@ -711,11 +711,13 @@ const saveText = (model: Model): string => {
  * @param h - The builder.
  * @returns The bar.
  */
-const actionBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
-  h.div(
+const actionBarView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  const isReadOnly = isReadOnlyForm(model);
+
+  return h.div(
     [
       h.Class("action-bar"),
-      h.DataAttribute("read-only", String(isReadOnlyForm(model))),
+      h.DataAttribute("read-only", String(isReadOnly)),
       h.OnMount(KeepFocusClearOfActionBar()),
     ],
     [
@@ -726,7 +728,7 @@ const actionBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
       h.div([h.Class(VIEWPORT_PROBE_CLASS), h.AriaHidden(true)]),
       // NOTE: a read-only form has nothing to save, so its bar keeps only
       // the way back and Delete.
-      isReadOnlyForm(model) ? h.empty : actionStatusView(model, h),
+      isReadOnly ? h.empty : actionStatusView(model, h),
       h.div(
         [h.Class("form-actions")],
         [
@@ -745,7 +747,7 @@ const actionBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
                 },
                 h
               ),
-          isReadOnlyForm(model)
+          isReadOnly
             ? h.empty
             : Button.view(
                 {
@@ -768,6 +770,7 @@ const actionBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
       ),
     ]
   );
+};
 
 /**
  * Ctrl+S, or Cmd+S on a Mac, anywhere in the form saves it, as "Save"

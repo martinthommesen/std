@@ -118,31 +118,6 @@ const testBodyOf = (node: CallExpression): TestBody | undefined => {
   return undefined;
 };
 
-// The local names under which `describe` and `it` are imported.
-const testImports = (
-  declarations: readonly ImportDeclaration[]
-): Map<string, string> => {
-  const locals = new Map<string, string>();
-
-  for (const declaration of declarations) {
-    if (testModules.has(declaration.source.value)) {
-      for (const specifier of declaration.specifiers) {
-        const imported =
-          specifier.type === "ImportSpecifier" &&
-          specifier.imported.type === "Identifier"
-            ? specifier.imported.name
-            : undefined;
-
-        if (imported !== undefined && testExports.has(imported)) {
-          locals.set(specifier.local.name, imported);
-        }
-      }
-    }
-  }
-
-  return locals;
-};
-
 type PatternNode =
   | BindingPattern
   | BindingProperty
@@ -195,11 +170,11 @@ interface FileFacts {
   readonly calls: CallExpression[];
   /** Every bound name except those of imports from the test modules. */
   readonly declared: string[];
-  readonly imports: ImportDeclaration[];
+  readonly locals: Map<string, string>;
 }
 
 const collectFacts = (program: Program): FileFacts => {
-  const facts: FileFacts = { calls: [], declared: [], imports: [] };
+  const facts: FileFacts = { calls: [], declared: [], locals: new Map() };
 
   const declareId = (node: { readonly id?: PatternNode | null }): void => {
     facts.declared.push(...patternNames(node.id));
@@ -218,10 +193,22 @@ const collectFacts = (program: Program): FileFacts => {
   };
 
   const onImport = (node: ImportDeclaration): void => {
-    facts.imports.push(node);
+    for (const specifier of node.specifiers) {
+      const imported =
+        specifier.type === "ImportSpecifier" &&
+        specifier.imported.type === "Identifier"
+          ? specifier.imported.name
+          : undefined;
 
-    if (!testModules.has(node.source.value)) {
-      facts.declared.push(...node.specifiers.map((item) => item.local.name));
+      if (
+        testModules.has(node.source.value) &&
+        imported !== undefined &&
+        testExports.has(imported)
+      ) {
+        facts.locals.set(specifier.local.name, imported);
+      } else {
+        facts.declared.push(specifier.local.name);
+      }
     }
   };
 
@@ -243,25 +230,6 @@ const collectFacts = (program: Program): FileFacts => {
 
   return facts;
 };
-
-// Imports from the test modules under a non-test name, such as
-// `import { test as it }`, also bind a local name.
-const nonTestImportNames = (imports: readonly ImportDeclaration[]): string[] =>
-  imports.flatMap((declaration) =>
-    testModules.has(declaration.source.value)
-      ? declaration.specifiers.flatMap((specifier) => {
-          const imported =
-            specifier.type === "ImportSpecifier" &&
-            specifier.imported.type === "Identifier"
-              ? specifier.imported.name
-              : undefined;
-
-          return imported !== undefined && testExports.has(imported)
-            ? []
-            : [specifier.local.name];
-        })
-      : []
-  );
 
 /** A test call with its resolved chain. */
 interface TestCall {
@@ -309,9 +277,9 @@ export const readTestTitles = (
 ): TestTitles => {
   const parsed = parseSync(fileName, source, { sourceType: "module" });
   const facts = collectFacts(parsed.program);
-  const locals = testImports(facts.imports);
+  const { locals } = facts;
   const errors = parsed.errors.map((error) => error.message);
-  const bound = [...facts.declared, ...nonTestImportNames(facts.imports)];
+  const bound = facts.declared;
 
   for (const name of new Set(bound)) {
     if (locals.has(name)) {

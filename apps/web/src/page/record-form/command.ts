@@ -41,8 +41,12 @@ import {
   typeOf,
   wireFieldOf,
 } from "../../domain/wire.ts";
-import { StdApi, atRevision, responseRevision } from "../../std-client.ts";
-import { fetchTableMetadata } from "../table-list/command.ts";
+import {
+  StdApi,
+  atRevision,
+  responseRevision,
+  fetchTableMetadata,
+} from "../../std-client.ts";
 import type { RecordPage } from "../table-list/model.ts";
 import { Message, ReadPurpose, UnreadSavedRecord } from "./message.ts";
 import { WriteError } from "./model.ts";

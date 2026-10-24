@@ -308,12 +308,16 @@ const check = (
     const visible = state === "proposed" || row?.visible === true;
     const passes = row !== undefined && visible && row.allowed;
 
-    const refusal = new WriteFailed({
-      kind: "refused",
-      reason: `${state} state refused on ${target.cls}`,
-    });
+    if (passes) {
+      return Effect.void;
+    }
 
-    return passes ? Effect.void : Effect.fail(refusal);
+    return Effect.fail(
+      new WriteFailed({
+        kind: "refused",
+        reason: `${state} state refused on ${target.cls}`,
+      })
+    );
   });
 };
 

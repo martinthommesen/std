@@ -33,6 +33,7 @@ import { dateToCivil, parseDate } from "@std/values/date";
 import { formatDateTime, parseDateTime } from "@std/values/date-time";
 import { formatDecimal, parseDecimal } from "@std/values/decimal";
 import type { Decoded } from "@std/values/field-error";
+import { isTextKind } from "@std/values/field-type";
 import type { FieldKind } from "@std/values/field-type";
 import {
   isJsonBoolean,
@@ -209,13 +210,14 @@ export const literalFromText = (
 ): Converted<JsonValue> => {
   const { kind } = field.type;
 
+  if (isTextKind(kind)) {
+    return Result.map(String)(fromDecoded(convertLiteral(kind, text)));
+  }
+
   const canonical = Match.value(kind).pipe(
     Match.withReturnType<Converted<JsonValue>>(),
     Match.when(Match.is("integer", "bigInteger", "decimal"), (numberKind) =>
       numberLiteral(numberKind, text)
-    ),
-    Match.when(Match.is("text", "longText"), (textKind) =>
-      Result.map(String)(fromDecoded(convertLiteral(textKind, text)))
     ),
     Match.when(Match.is("uuid", "reference"), () =>
       fromDecoded(parseUuid(text.trim()))
@@ -331,8 +333,6 @@ const comparisonValue = (
     Match.orElse(() => Result.fail("Choose a value."))
   );
 
-const PATTERN_KINDS: ReadonlySet<FieldKind> = new Set(["text", "longText"]);
-
 const needle = (
   field: MetaField,
   operator: PatternOperatorName,
@@ -340,14 +340,14 @@ const needle = (
 ): Converted<string> => {
   const { kind } = field.type;
 
-  if (!Operand.guards.Typed(operand) || !PATTERN_KINDS.has(kind)) {
+  if (!Operand.guards.Typed(operand) || !isTextKind(kind)) {
     return Result.fail("Enter the text to look for.");
   }
 
   return fromDecoded(
     convertNeedleLiteral(
       operator === "notContains" ? "contains" : operator,
-      kind === "longText" ? "longText" : "text",
+      kind,
       operand.text
     )
   );

@@ -7,7 +7,6 @@
 import { validateRecord } from "@std/definitions/record-schema";
 import type { JsonValue } from "@std/values/json-value";
 import { Match, Option, Record, Redacted, Result, pipe } from "effect";
-import { reduce } from "effect/Array";
 import {
   array as arrayOf,
   assert as assertProperty,
@@ -32,6 +31,7 @@ import {
   ticketRecord,
   ticketTable,
 } from "../form-fixture.ts";
+import { formAfter } from "../page/record-form/fixture.ts";
 import {
   checkForm,
   editedFieldsOf,
@@ -41,7 +41,7 @@ import {
 import { Message } from "../page/record-form/message.ts";
 import { FormMode } from "../page/record-form/model.ts";
 import type { Model } from "../page/record-form/model.ts";
-import { init, update } from "../page/record-form/update.ts";
+import { init } from "../page/record-form/update.ts";
 import { REVISION_3 } from "../table-fixture.ts";
 import {
   REQUIRED_SECTION,
@@ -467,13 +467,6 @@ describe("values as text", () => {
 
 // THE CLIENT VERDICT
 
-const after = (start: Model, ...messages: readonly Message[]): Model =>
-  reduce(
-    messages,
-    start,
-    (current, nextMessage) => update(current, nextMessage).model
-  );
-
 const openForm = (
   mode: FormMode,
   record: Option.Option<typeof ticketRecord>
@@ -485,7 +478,7 @@ const openForm = (
     table: TICKET,
   });
 
-  const withMeta = after(
+  const withMeta = formAfter(
     opened.model,
     Message.SucceededLoadFormMetadata({
       revision: REVISION_5,
@@ -496,7 +489,7 @@ const openForm = (
   return Option.match(record, {
     onNone: () => withMeta,
     onSome: (read) =>
-      after(
+      formAfter(
         withMeta,
         Message.SucceededLoadRecord({
           generation: 1,
@@ -677,7 +670,7 @@ describe("the client verdict", () => {
     ({ form }) => {
       assertProperty(
         property(editsOf(fieldsOf(form)), (messages) => {
-          const edited = after(form, ...messages);
+          const edited = formAfter(form, ...messages);
 
           expect(checkForm(edited).problems).toStrictEqual(
             verdictOfSentBody(edited)
@@ -689,7 +682,7 @@ describe("the client verdict", () => {
   );
 
   it("finds problems in generated forms (the property is not vacuous)", () => {
-    const edited = after(
+    const edited = formAfter(
       openForm(
         FormMode.Edit({ recordId: ticketRecord.id }),
         Option.some(ticketRecord)

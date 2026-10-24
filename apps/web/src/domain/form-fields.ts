@@ -80,14 +80,13 @@ export const formFieldsOf = (
     },
   });
 
-const byId = (fields: readonly MetaField[], fieldId: string) =>
-  Option.fromNullishOr(fields.find((field) => field.id === fieldId));
-
 const layoutSections = (
   table: MetaTable,
   fields: readonly MetaField[]
 ): Option.Option<readonly FormSection[]> =>
   Option.map(Option.fromNullishOr(table.layouts.form), (elements) => {
+    const fieldsById = new Map(fields.map((field) => [field.id, field]));
+
     const starts = elements.flatMap((element, index) =>
       element.kind === "section" ? [index] : []
     );
@@ -97,7 +96,9 @@ const layoutSections = (
         .slice(from, to)
         .flatMap((element) =>
           element.kind === "field"
-            ? Option.toArray(byId(fields, element.fieldId))
+            ? Option.toArray(
+                Option.fromNullishOr(fieldsById.get(element.fieldId))
+              )
             : []
         );
 

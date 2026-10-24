@@ -69,11 +69,9 @@ interface Subject {
 
 const checkLockfile = ({ locked, record, source }: Subject): string[] => {
   if (locked.length === 0) {
-    return source.requiredInLockfile
-      ? [
-          `pnpm-lock.yaml: ${source.package} is not resolved, but ${source.prefix} needs it`,
-        ]
-      : [];
+    return [
+      `pnpm-lock.yaml: ${source.package} is not resolved, but ${source.prefix} needs it`,
+    ];
   }
 
   return locked.length === 1 && locked[0] === record.version

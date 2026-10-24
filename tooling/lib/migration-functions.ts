@@ -1,15 +1,10 @@
+import { isJsonArray, isJsonObject } from "@std/values/json-value";
 /** Function-body checks over PostgreSQL and PL/pgSQL parse trees. */
 import { Schema } from "effect";
 import { parsePlPgSQLSync, parseSync } from "libpg-query";
 import type { CreateFunctionStmt, Node } from "libpg-query";
 
 type ParseTree = Schema.Json;
-
-const isObject = (value: ParseTree): value is Schema.JsonObject =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
-
-const isArray = (value: ParseTree): value is Schema.JsonArray =>
-  Array.isArray(value);
 
 const Expression = Schema.Struct({
   parseMode: Schema.optionalKey(Schema.Finite),
@@ -47,15 +42,15 @@ const allowedPlStatements = new Set([
 ]);
 
 const children = (value: ParseTree): readonly ParseTree[] => {
-  if (isArray(value)) {
+  if (isJsonArray(value)) {
     return value;
   }
 
-  return isObject(value) ? Object.values(value) : [];
+  return isJsonObject(value) ? Object.values(value) : [];
 };
 
 const unsafeSql = (value: ParseTree): boolean => {
-  if (isObject(value)) {
+  if (isJsonObject(value)) {
     const unsafeStatement = Object.keys(value).some(
       (key) => key.endsWith("Stmt") && !allowedSqlStatements.has(key)
     );
@@ -103,7 +98,7 @@ const checkPlKeys = (tree: Schema.JsonObject): void => {
 };
 
 const checkPlTree = (tree: ParseTree): void => {
-  if (isObject(tree)) {
+  if (isJsonObject(tree)) {
     checkPlKeys(tree);
 
     if (tree.PLpgSQL_expr !== undefined) {

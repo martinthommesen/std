@@ -1,3 +1,4 @@
+import { isJsonArray, isJsonObject } from "@std/values/json-value";
 /**
  * Validates a JSON value against a Kubernetes structural schema (the
  * `openAPIV3Schema` of a CustomResourceDefinition version), for the keywords
@@ -92,10 +93,6 @@ export const decodeStructuralSchema = Schema.decodeUnknownSync(
 
 const normalizeRule = (rule: string): string => rule.replaceAll(/\s+/gu, "");
 
-const isJsonArray = (
-  value: Schema.Json | undefined
-): value is Schema.JsonArray => Array.isArray(value);
-
 const kindOf = (value: Schema.Json): string => {
   if (value === null) {
     return "null";
@@ -120,9 +117,6 @@ const kindOf = (value: Schema.Json): string => {
   return "object";
 };
 
-const isJsonObject = (value: Schema.Json): value is Schema.JsonObject =>
-  kindOf(value) === "object";
-
 const asObject = (
   value: Schema.Json | undefined
 ): Schema.JsonObject | undefined =>
@@ -133,7 +127,9 @@ const firstSpecification = (
 ): Schema.JsonObject | undefined => {
   const specifications = self.specification;
 
-  return isJsonArray(specifications) ? asObject(specifications[0]) : undefined;
+  return specifications !== undefined && isJsonArray(specifications)
+    ? asObject(specifications[0])
+    : undefined;
 };
 
 const hasAll = (

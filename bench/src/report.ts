@@ -515,6 +515,34 @@ export const renderMarkdown = (report: BenchReport): string => {
 };
 
 /**
+ * Writes one report's Markdown and JSON files, translating filesystem failures.
+ * @param out - The output directory, relative to the benchmark package or absolute.
+ * @param stem - The shared filename without an extension.
+ * @param markdown - The report's Markdown renderer.
+ * @param json - The report's JSON renderer.
+ * @returns The two written file paths.
+ */
+export const writeReportFiles = (
+  out: string,
+  stem: string,
+  markdown: () => string,
+  json: () => string
+): Effect.Effect<readonly string[], BenchError> =>
+  Effect.tryPromise({
+    catch: (cause) =>
+      new BenchError({ message: `cannot write results: ${String(cause)}` }),
+    try: async () => {
+      const directory = path.isAbsolute(out) ? out : path.join(packageDir, out);
+      const base = path.join(directory, stem);
+      await mkdir(directory, { recursive: true });
+      await writeFile(`${base}.md`, markdown());
+      await writeFile(`${base}.json`, `${json()}\n`);
+
+      return [`${base}.md`, `${base}.json`];
+    },
+  });
+
+/**
  * Writes the Markdown and JSON files.
  *
  * @param report - The results.
@@ -525,26 +553,9 @@ export const writeReport = (
   report: BenchReport,
   options: Options
 ): Effect.Effect<readonly string[], BenchError> =>
-  Effect.tryPromise({
-    catch: (cause) =>
-      new BenchError({ message: `cannot write results: ${String(cause)}` }),
-    try: async () => {
-      const directory = path.isAbsolute(options.out)
-        ? options.out
-        : path.join(packageDir, options.out);
-
-      const base = path.join(
-        directory,
-        `${report.date.slice(0, 10)}-${fileName(options)}`
-      );
-
-      await mkdir(directory, { recursive: true });
-      await writeFile(`${base}.md`, renderMarkdown(report));
-      await writeFile(
-        `${base}.json`,
-        `${JSON.stringify(report, undefined, 2)}\n`
-      );
-
-      return [`${base}.md`, `${base}.json`];
-    },
-  });
+  writeReportFiles(
+    options.out,
+    `${report.date.slice(0, 10)}-${fileName(options)}`,
+    () => renderMarkdown(report),
+    () => JSON.stringify(report, undefined, 2)
+  );

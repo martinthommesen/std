@@ -20,7 +20,7 @@ export const Action = Schema.Literals(["retry", "discard"]);
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md)
 export const Operation = defineTaggedUnion({
   Confirming: { action: Action, delivery: DeadDelivery },
-  Executing: { action: Action, delivery: DeadDelivery },
+  Executing: {},
   Failed: { error: Schema.String },
   Idle: {},
 });

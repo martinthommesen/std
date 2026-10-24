@@ -754,13 +754,9 @@ const receiveMetadata = (
 const failMetadata = (model: Model, error: MetaError): UpdateReturn => ({
   model: modifyFields(model, {
     metadata: (metadata) =>
-      Option.match(AsyncData.getData(metadata), {
-        onNone: () => Metadata.Failure({ error }),
-        onSome: (data) =>
-          error === "UnknownTable"
-            ? Metadata.Failure({ error })
-            : Metadata.Stale({ data, error }),
-      }),
+      error === "UnknownTable"
+        ? Metadata.Failure({ error })
+        : AsyncData.settle(metadata, Result.fail(error)),
   }),
 });
 
@@ -780,16 +776,13 @@ const failedTarget = (
   table: string,
   error: MetaError
 ): TargetMetadata =>
-  Option.match(
-    pipe(Record.get(model.targets, table), Option.flatMap(AsyncData.getData)),
-    {
-      onNone: () => TargetMetadata.Failure({ error }),
-      onSome: (data) =>
-        error === "UnknownTable"
-          ? TargetMetadata.Failure({ error })
-          : TargetMetadata.Stale({ data, error }),
-    }
-  );
+  Option.match(Record.get(model.targets, table), {
+    onNone: () => TargetMetadata.Failure({ error }),
+    onSome: (previous) =>
+      error === "UnknownTable"
+        ? TargetMetadata.Failure({ error })
+        : AsyncData.settle(previous, Result.fail(error)),
+  });
 
 /**
  * A target table's answer: taken only when it answers the table's latest
@@ -845,12 +838,6 @@ const receiveRecords = (
   });
 };
 
-const failed = (records: Records, error: ListError): Records =>
-  Option.match(AsyncData.getData(records), {
-    onNone: () => Records.Failure({ error }),
-    onSome: (data) => Records.Stale({ data, error }),
-  });
-
 const failRecords = (
   model: Model,
   generation: number,
@@ -865,7 +852,7 @@ const failRecords = (
   // the position at the page on screen.
   const refused = modifyFields(model, {
     maybePendingCursors: () => Option.none(),
-    records: (records) => failed(records, error),
+    records: (records) => AsyncData.settle(records, Result.fail(error)),
   });
 
   if (error !== "SchemaChanged") {

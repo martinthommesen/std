@@ -2471,3 +2471,63 @@ export const receivedRecords = (body: string): readonly ReceivedRecord[] =>
     ),
     () => []
   ).map(receivedRecordOf);
+
+/** One list the UI builds and the API is asked for directly. */
+export interface ListScenario {
+  readonly name: string;
+  /** The builder steps: each entry adds a condition and runs its steps. */
+  readonly conditions: readonly (readonly ConditionStep[])[];
+  /** `any of these` for the outermost group, if not `all of these`. */
+  readonly anyOf?: boolean;
+  /** Column headers to click, in order. */
+  readonly sortClicks: readonly string[];
+  /** The same list in the API's terms. */
+  readonly filter?: string;
+  readonly sort?: string;
+}
+
+/**
+ * Builds a scenario's list in the UI and reads the same list through the
+ * API: both, page by page.
+ *
+ * @param page - A signed-in page on the table's list, without a filter.
+ * @param origin - The server.
+ * @param table - The collection table.
+ * @param pageSize - The page size.
+ * @param scenario - The list.
+ * @returns The UI's pages and the API's pages.
+ */
+export const uiAndApi = async (
+  page: Page,
+  origin: string,
+  table: string,
+  pageSize: number,
+  scenario: ListScenario
+) => {
+  await inOrder(scenario.conditions, async (steps, index) => {
+    await addCondition(page);
+    await buildCondition(page, index + 1, steps);
+  });
+
+  if (scenario.anyOf === true) {
+    await setMatch(page, 1, "any of these");
+  }
+
+  if (scenario.conditions.length > 0) {
+    await applyFilter(page);
+  }
+
+  await inOrder(scenario.sortClicks, async (label) => {
+    await clickSort(page, label);
+  });
+
+  const shown = await listedPages(page);
+
+  const answered = await apiPages(page, origin, table, {
+    filter: scenario.filter,
+    limit: pageSize,
+    sort: scenario.sort,
+  });
+
+  return { answered, shown };
+};

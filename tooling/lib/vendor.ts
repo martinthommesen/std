@@ -23,11 +23,6 @@ export interface VendoredSource {
   readonly recordPath: string;
   /** The repository named by the package's npm metadata (without `.git`). */
   readonly repository: string;
-  /**
-   * Whether the lockfile must resolve the package. Both are installed now:
-   * Effect from the start, Foldkit with the web app (`apps/web`).
-   */
-  readonly requiredInLockfile: boolean;
 }
 
 /** Effect's repository, at the tag of the lockfile's `effect`. */
@@ -38,7 +33,6 @@ export const effectSource: VendoredSource = {
   prefix: "repos/effect",
   recordPath: "repos/effect-version.json",
   repository: "https://github.com/Effect-TS/effect",
-  requiredInLockfile: true,
 };
 
 /** Foldkit's repository, at the tag of the lockfile's `foldkit`. */
@@ -49,7 +43,6 @@ export const foldkitSource: VendoredSource = {
   prefix: "repos/foldkit",
   recordPath: "repos/foldkit-version.json",
   repository: "https://github.com/foldkit/foldkit",
-  requiredInLockfile: true,
 };
 
 /** Every vendored source, in the order the checks report them. */

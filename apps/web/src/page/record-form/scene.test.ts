@@ -32,6 +32,7 @@ import {
   ticketRecord,
   ticketTable,
   ticketWithRelated,
+  TASK_TABLE,
   TICKET_WIRE,
   TICKET_SELECTION,
 } from "../../form-fixture.ts";
@@ -50,7 +51,7 @@ import type { Model } from "./model.ts";
 import { init, update } from "./update.ts";
 import { view } from "./view.ts";
 
-const openTicket = (record: typeof ticketRecord): Model =>
+const openTicket = (record: typeof ticketRecord, table = ticketTable): Model =>
   formAfter(
     init({
       id: 1,
@@ -60,7 +61,7 @@ const openTicket = (record: typeof ticketRecord): Model =>
     }).model,
     Message.SucceededLoadFormMetadata({
       revision: REVISION_5,
-      table: ticketTable,
+      table,
     }),
     Message.SucceededLoadRecord({
       generation: 1,
@@ -801,29 +802,13 @@ describe("a related list's cells", () => {
   const TASK_ID = "019a0000-0000-7000-8000-0000000f2002";
 
   const shown = formAfter(
-    init({
-      id: 1,
-      maybeAppRevision: Option.none(),
-      mode: FormMode.Edit({ recordId: TICKET_ID }),
-      table: TICKET,
-    }).model,
-    Message.SucceededLoadFormMetadata({
-      revision: REVISION_5,
-      table: ticketWithRelated,
-    }),
-    Message.SucceededLoadRecord({
-      generation: 1,
-      maybeRevision: Option.none(),
-      purpose: "Open",
-      record: ticketRecord,
-    }),
-    Message.SucceededLoadTarget({ request: 1, table: userTable }),
+    openTicket(ticketRecord, ticketWithRelated),
     Message.ToggledRelatedList({ isOpen: true, listId: 1 }),
     Message.SucceededLoadRelatedMetadata({
       generation: 1,
       listId: 1,
       revision: REVISION_5,
-      table: { ...ticketTable, label: "Task", name: "help.task" },
+      table: TASK_TABLE,
     }),
     Message.SucceededLoadRelatedRecords({
       generation: 1,
@@ -885,23 +870,7 @@ describe("a related list without columns", () => {
   const TASK_ID = "019a0000-0000-7000-8000-0000000f2001";
 
   const shown = formAfter(
-    init({
-      id: 1,
-      maybeAppRevision: Option.none(),
-      mode: FormMode.Edit({ recordId: TICKET_ID }),
-      table: TICKET,
-    }).model,
-    Message.SucceededLoadFormMetadata({
-      revision: REVISION_5,
-      table: ticketWithRelated,
-    }),
-    Message.SucceededLoadRecord({
-      generation: 1,
-      maybeRevision: Option.none(),
-      purpose: "Open",
-      record: ticketRecord,
-    }),
-    Message.SucceededLoadTarget({ request: 1, table: userTable }),
+    openTicket(ticketRecord, ticketWithRelated),
     Message.ToggledRelatedList({ isOpen: true, listId: 1 }),
     Message.SucceededLoadRelatedMetadata({
       generation: 1,
@@ -949,7 +918,7 @@ describe("a related list loading another page", () => {
       generation: 1,
       listId: LIST,
       revision: REVISION_5,
-      table: { ...ticketTable, label: "Task", name: "help.task" },
+      table: TASK_TABLE,
     }),
     Message.SucceededLoadRelatedRecords({
       generation: 1,

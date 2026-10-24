@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 /**
  * `pnpm bench --rewrites`: can STD's read compiler meet the Q6 and Q7
  * budgets on class-table storage? Measures the plain form of Q6 and Q7
@@ -8,11 +9,6 @@
  * the ordered ticket scan, custom plans instead of the generic plan of the
  * prepared statement, and a covering index for the item probe.
  */
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-import { Effect } from "effect";
 
 import type { Options } from "./cli.ts";
 import { compileBranchedList } from "./compile.ts";
@@ -32,7 +28,7 @@ import { execute } from "./execute.ts";
 import type { ReadResult, ReadVariant } from "./measure.ts";
 import { measureRead } from "./measure.ts";
 import { prepareModel, samplesPerRun } from "./pipeline.ts";
-import { planBlock } from "./report.ts";
+import { writeReportFiles, planBlock } from "./report.ts";
 import type { Compiled } from "./sql-text.ts";
 import { q, table } from "./sql-text.ts";
 import type { ModelContext, StorageModel } from "./storage-model.ts";
@@ -44,7 +40,6 @@ const equivalenceInstances = 200;
 
 // Reuse the rewrites pool's existing capacity for unmeasured request setup.
 const maxConnections = 2;
-const packageDir = fileURLToPath(new URL("..", import.meta.url));
 
 /** The extra index the "what would be needed" variant measures. */
 export const coveringIndexName = "item_rule_probe_idx";
@@ -245,26 +240,12 @@ const writeRewrites = (
   report: RewritesReport,
   options: Options
 ): Effect.Effect<readonly string[], BenchError> =>
-  Effect.tryPromise({
-    catch: (cause) =>
-      new BenchError({ message: `cannot write results: ${String(cause)}` }),
-    try: async () => {
-      const directory = path.isAbsolute(options.out)
-        ? options.out
-        : path.join(packageDir, options.out);
-
-      const base = path.join(directory, `${report.date.slice(0, 10)}-rewrites`);
-
-      await mkdir(directory, { recursive: true });
-      await writeFile(`${base}.md`, renderRewrites(report));
-      await writeFile(
-        `${base}.json`,
-        `${JSON.stringify(report, undefined, 2)}\n`
-      );
-
-      return [`${base}.md`, `${base}.json`];
-    },
-  });
+  writeReportFiles(
+    options.out,
+    `${report.date.slice(0, 10)}-rewrites`,
+    () => renderRewrites(report),
+    () => JSON.stringify(report, undefined, 2)
+  );
 
 const measureAll = Effect.fn("bench.measureAll")(function* measureRewrites(
   model: StorageModel,

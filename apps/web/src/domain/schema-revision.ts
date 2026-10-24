@@ -73,3 +73,10 @@ export const latestRevision = (
     onNone: () => seen,
     onSome: (held) => (isNewerRevision(seen, held) ? seen : held),
   });
+
+/** A response without `STD-Schema-Revision`, which every API response has. */
+// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
+export class MissingRevision extends Schema.TaggedError<
+  MissingRevision,
+  { readonly brand: unique symbol }
+>()("MissingRevision", {}) {}

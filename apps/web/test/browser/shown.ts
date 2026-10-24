@@ -40,7 +40,6 @@
 import { randomUUID } from "node:crypto";
 
 import { assert } from "@effect/vitest";
-import type { HelpdeskUser } from "@std/testing/helpdesk-fixture";
 import { Option, Predicate, Schema } from "effect";
 import type { Locator, Page } from "playwright";
 
@@ -48,30 +47,16 @@ import {
   API_PREFIX,
   apiCall,
   collectionOf,
-  inOrder,
   isListResponse,
   openRecordForm,
   openTableList,
 } from "./app.ts";
-import type { Visitor } from "./app.ts";
 
 /** The helpdesk's incident table. */
 export const INCIDENTS = "helpdesk.incident";
 
 /** A zone fourteen hours from UTC, for the browser's device. */
 export const FAR_ZONE = "Pacific/Kiritimati";
-
-/**
- * A helpdesk user as the sign-in helpers take it.
- *
- * @param user - The fixture's user.
- * @returns The visitor.
- */
-export const visitorOf = (user: HelpdeskUser): Visitor => ({
-  login: user.login,
-  name: user.name,
-  password: user.password,
-});
 
 // THE API'S ANSWERS
 
@@ -1011,37 +996,39 @@ export const formShowsTheApiValues = async (
     "the form shows the form layout's fields"
   );
 
-  await inOrder(fields, async (field) => {
-    const row = page.locator(`.form-row[data-field="${field.name}"]`);
-    const expected = expectedFormField(field, record);
-    const about = `the form, ${id}, ${field.name} (${field.type.kind}): the API's value ${JSON.stringify(record.values[field.name])}`;
+  await Promise.all(
+    fields.map(async (field) => {
+      const row = page.locator(`.form-row[data-field="${field.name}"]`);
+      const expected = expectedFormField(field, record);
+      const about = `the form, ${id}, ${field.name} (${field.type.kind}): the API's value ${JSON.stringify(record.values[field.name])}`;
 
-    const state =
-      (await row.locator("[data-field-state]").count()) === 0
-        ? "control"
-        : await row
-            .locator("[data-field-state]")
-            .first()
-            .getAttribute("data-field-state");
+      const state =
+        (await row.locator("[data-field-state]").count()) === 0
+          ? "control"
+          : await row
+              .locator("[data-field-state]")
+              .first()
+              .getAttribute("data-field-state");
 
-    if (expected.state === "control") {
-      assert.strictEqual(state, "control", about);
+      if (expected.state === "control") {
+        assert.strictEqual(state, "control", about);
 
-      const control = expectedControl(field, record);
+        const control = expectedControl(field, record);
 
-      assert.strictEqual(await shownControl(row, field), control, about);
-      seen.add(`form ${field.type.kind}:control`);
-      seen.add(control);
+        assert.strictEqual(await shownControl(row, field), control, about);
+        seen.add(`form ${field.type.kind}:control`);
+        seen.add(control);
 
-      return;
-    }
+        return;
+      }
 
-    const text = await visibleTextOf(row.locator(".form-value"));
+      const text = await visibleTextOf(row.locator(".form-value"));
 
-    assert.deepStrictEqual({ state, text }, expected, about);
-    seen.add(`form ${field.type.kind}:${expected.state}`);
-    seen.add(expected.text);
-  });
+      assert.deepStrictEqual({ state, text }, expected, about);
+      seen.add(`form ${field.type.kind}:${expected.state}`);
+      seen.add(expected.text);
+    })
+  );
 };
 
 // SETTING UP DATA, AS THE ADMINISTRATOR
@@ -1144,7 +1131,7 @@ export const appendToLayout = async (
     await adminCall(origin, token, { method: "GET", path })
   );
 
-  await adminCall(origin, token, {
+  const patched = await apiCall(origin, token, {
     body: {
       elements: [
         ...read.elements,
@@ -1155,6 +1142,8 @@ export const appendToLayout = async (
     path,
     version: read.revision,
   });
+
+  assert.strictEqual(patched.status, 200, patched.text);
 };
 
 /**
@@ -1210,12 +1199,14 @@ export const patchDefinition = async (
     await adminCall(origin, token, { method: "GET", path })
   );
 
-  await adminCall(origin, token, {
+  const patched = await apiCall(origin, token, {
     body,
     method: "PATCH",
     path,
     version: read.revision,
   });
+
+  assert.strictEqual(patched.status, 200, patched.text);
 };
 
 /**

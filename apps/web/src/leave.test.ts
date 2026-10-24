@@ -6,7 +6,6 @@ import { Option } from "effect";
  * "Keep editing" stays, and the page asks the browser to confirm an
  * unload only while edits are unsaved.
  */
-import { reduce } from "effect/Array";
 import { UrlRequest } from "foldkit/navigation";
 import { Command, given, message, model, story } from "foldkit/story";
 import { modifyFields } from "foldkit/struct";
@@ -27,26 +26,14 @@ import { subscriptions } from "./main.ts";
 import { Message } from "./message.ts";
 import { LeaveIntent } from "./model.ts";
 import type { SignedInModel } from "./model.ts";
+import { formAfter } from "./page/record-form/fixture.ts";
 import { Message as RecordFormMessage } from "./page/record-form/message.ts";
 import { FormMode } from "./page/record-form/model.ts";
 import type { Model as RecordFormModel } from "./page/record-form/model.ts";
-import {
-  init as recordFormInit,
-  update as recordFormUpdate,
-} from "./page/record-form/update.ts";
+import { init as recordFormInit } from "./page/record-form/update.ts";
 import { AppRoute, PLAIN_LIST } from "./route.ts";
 import { userTable } from "./table-fixture.ts";
 import { update } from "./update.ts";
-
-const formAfter = (
-  start: RecordFormModel,
-  ...messages: readonly RecordFormMessage[]
-): RecordFormModel =>
-  reduce(
-    messages,
-    start,
-    (current, nextMessage) => recordFormUpdate(current, nextMessage).model
-  );
 
 const loadedTicket = formAfter(
   recordFormInit({

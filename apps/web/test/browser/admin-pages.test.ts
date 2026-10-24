@@ -50,7 +50,6 @@ import {
   setPageSize,
   signIn,
 } from "./app.ts";
-import type { Visitor } from "./app.ts";
 import { launchBrowser, stdServe } from "./support.ts";
 
 const ROLES = "core.role";
@@ -66,12 +65,6 @@ const ADMIN_TABLES = [
 ] as const;
 
 const INCIDENTS = "helpdesk.incident";
-
-const visitorOf = (user: HelpdeskUser): Visitor => ({
-  login: user.login,
-  name: user.name,
-  password: user.password,
-});
 
 /**
  * A signed-in page of its own browser context.
@@ -89,7 +82,7 @@ const signedInPage = async (
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  await signIn(page, origin, visitorOf(user));
+  await signIn(page, origin, user);
 
   return page;
 };
@@ -243,7 +236,7 @@ const reviewerSeesPriorityRestricted = async (
   const page = await context.newPage();
   const bodies = await captureApiBodies(page);
 
-  await signIn(page, origin, visitorOf(fixture.agent2));
+  await signIn(page, origin, fixture.agent2);
   await openTableList(page, origin, INCIDENTS);
   await setPageSize(page, 25);
 

@@ -424,61 +424,19 @@ describe("form Commands against the server", () => {
     }).toStrictEqual({ hasIfMatch: false, method: "POST" });
   });
 
-  it("a create answered with the record's identity only reads it again, and NotFound means it is no longer visible", async () => {
-    const identity = {
-      "@type": "HelpTicket",
-      href: `http://std.test${RECORD_PATH}`,
-      id: TICKET_ID,
-      revision: 1,
-    };
-
-    const api = fakeStdApi({
-      [`GET ${RECORD_PATH}`]: tmfError("NotFound", 404),
-      [`POST ${COLLECTION}`]: { body: identity, status: 201 },
-    });
-
-    const result = await Effect.runPromise(
-      CreateRecord({
-        fields: TICKET_WIRE,
-        generation: 1,
-        revision: REVISION_5,
-        secrets: {},
-        selected: TICKET_SELECTION,
-        table: TICKET,
-        values: { short_description: "Theirs now" },
-      }).effect.pipe(Effect.provide(api.layer))
-    );
-
-    expect(result).toStrictEqual(
-      Message.SucceededSaveRecord({
-        generation: 1,
-        maybeRevision: Option.none(),
-        saved: { id: TICKET_ID, version: 1 },
-      })
-    );
-    expect(
-      api.seen.map((seen) => [
-        seen.method,
-        seen.path,
-        seen.headers["std-schema-revision"],
-      ])
-    ).toStrictEqual([
-      ["POST", COLLECTION, REVISION_5],
-      ["GET", RECORD_PATH, REVISION_5],
-    ]);
-  });
-
   /**
    * Runs a create whose answer is `created`, with `reread` answering the
    * read after it.
    *
    * @param created - The create's answer body.
    * @param reread - The read's answer.
+   * @param shortDescription - The create input.
    * @returns The Command's Message and the requests sent.
    */
   const createThenRead = async (
     created: Readonly<Record<string, Schema.Json>>,
-    reread: FakeAnswer
+    reread: FakeAnswer,
+    shortDescription = "Mine"
   ) => {
     const api = fakeStdApi({
       [`GET ${RECORD_PATH}`]: reread,
@@ -493,7 +451,7 @@ describe("form Commands against the server", () => {
         secrets: {},
         selected: TICKET_SELECTION,
         table: TICKET,
-        values: { short_description: "Mine" },
+        values: { short_description: shortDescription },
       }).effect.pipe(Effect.provide(api.layer))
     );
 
@@ -506,6 +464,32 @@ describe("form Commands against the server", () => {
     id: TICKET_ID,
     revision: 1,
   };
+
+  it("a create answered with the record's identity only reads it again, and NotFound means it is no longer visible", async () => {
+    const created = await createThenRead(
+      identityOnly,
+      tmfError("NotFound", 404),
+      "Theirs now"
+    );
+
+    expect(created.result).toStrictEqual(
+      Message.SucceededSaveRecord({
+        generation: 1,
+        maybeRevision: Option.none(),
+        saved: { id: TICKET_ID, version: 1 },
+      })
+    );
+    expect(
+      created.seen.map((seen) => [
+        seen.method,
+        seen.path,
+        seen.headers["std-schema-revision"],
+      ])
+    ).toStrictEqual([
+      ["POST", COLLECTION, REVISION_5],
+      ["GET", RECORD_PATH, REVISION_5],
+    ]);
+  });
 
   const unread = Message.SucceededSaveRecord({
     generation: 1,

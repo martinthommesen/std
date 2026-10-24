@@ -493,29 +493,19 @@ const withUnit =
 
 const withOffset =
   (offset: string) =>
-  (operand: Operand): Operand => {
-    if (Operand.guards.Today(operand)) {
-      return Operand.Today({ offset, unit: operand.unit });
-    }
-
-    if (Operand.guards.FromNow(operand)) {
-      return Operand.FromNow({ offset, unit: operand.unit });
-    }
-
-    return Operand.guards.Period(operand)
-      ? Operand.Period({ offset, unit: operand.unit })
+  (operand: Operand): Operand =>
+    Operand.guards.Today(operand) ||
+    Operand.guards.FromNow(operand) ||
+    Operand.guards.Period(operand)
+      ? modifyFields(operand, { offset: () => offset })
       : operand;
-  };
 
 const withText =
   (text: string) =>
-  (operand: Operand): Operand => {
-    if (Operand.guards.Typed(operand)) {
-      return Operand.Typed({ text });
-    }
-
-    return Operand.guards.Lines(operand) ? Operand.Lines({ text }) : operand;
-  };
+  (operand: Operand): Operand =>
+    Operand.guards.Typed(operand) || Operand.guards.Lines(operand)
+      ? modifyFields(operand, { text: () => text })
+      : operand;
 
 const withChoiceToggled =
   (key: string, isChecked: boolean) =>
@@ -537,15 +527,10 @@ const withTime =
 
 const withDate =
   (maybeDate: Option.Option<CalendarDate>) =>
-  (operand: Operand): Operand => {
-    if (Operand.guards.Day(operand)) {
-      return Operand.Day({ ...operand, maybeDate });
-    }
-
-    return Operand.guards.Instant(operand)
-      ? Operand.Instant({ ...operand, maybeDate })
+  (operand: Operand): Operand =>
+    Operand.guards.Day(operand) || Operand.guards.Instant(operand)
+      ? modifyFields(operand, { maybeDate: () => maybeDate })
       : operand;
-  };
 
 const pickerOf = (operand: Operand): Option.Option<DatePicker.Model> => {
   if (Operand.guards.Day(operand) || Operand.guards.Instant(operand)) {
@@ -557,15 +542,10 @@ const pickerOf = (operand: Operand): Option.Option<DatePicker.Model> => {
 
 const withPicker =
   (picker: DatePicker.Model) =>
-  (operand: Operand): Operand => {
-    if (Operand.guards.Day(operand)) {
-      return Operand.Day({ ...operand, picker });
-    }
-
-    return Operand.guards.Instant(operand)
-      ? Operand.Instant({ ...operand, picker })
+  (operand: Operand): Operand =>
+    Operand.guards.Day(operand) || Operand.guards.Instant(operand)
+      ? modifyFields(operand, { picker: () => picker })
       : operand;
-  };
 
 const setDate =
   (conditionId: number, maybeDate: Option.Option<CalendarDate>): Step =>

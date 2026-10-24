@@ -31,6 +31,7 @@ import {
   TICKET_WIRE,
   TICKET_SELECTION,
   TASK_COLUMNS,
+  TASK_TABLE,
 } from "../../form-fixture.ts";
 import { REVISION_3, userTable } from "../../table-fixture.ts";
 import {
@@ -1609,7 +1610,7 @@ describe("related lists and history", () => {
           generation: 1,
           listId: LIST,
           revision: REVISION_5,
-          table: { ...ticketTable, label: "Task", name: "help.task" },
+          table: TASK_TABLE,
         })
       ),
       Command.expectExact(

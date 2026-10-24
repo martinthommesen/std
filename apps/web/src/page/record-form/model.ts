@@ -67,22 +67,14 @@ export const RecordError = Schema.Literals([
 export type RecordError = typeof RecordError.Type;
 
 /** The record as the server read it (Contracts 6.6). */
-// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const StoredRecord = AsyncData.Schema(RecordJsonSchema, RecordError);
-
-/** The record as the server read it. */
-export type StoredRecord = typeof StoredRecord.schema.Type;
 
 /**
  * The concrete class's metadata, when the record's class is not the
  * endpoint's. `UnknownTable` means the caller cannot open that table: the
  * form then leaves validation to the server.
  */
-// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const ClassMetadata = AsyncData.Schema(MetaTableSchema, MetaError);
-
-/** The concrete class's metadata. */
-export type ClassMetadata = typeof ClassMetadata.schema.Type;
 
 /**
  * Why a save or delete was refused, as the form shows it.
@@ -198,14 +190,10 @@ export const PickerError = Schema.Literals(["SchemaChanged", "Unavailable"]);
 export type PickerError = typeof PickerError.Type;
 
 /** A picker's search results. */
-// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const PickerResults = AsyncData.Schema(
   Schema.Array(PickerItem),
   PickerError
 );
-
-/** A picker's search results. */
-export type PickerResults = typeof PickerResults.schema.Type;
 
 /**
  * The reference picker of one field (Foldkit UI Combobox): its state, the
@@ -229,14 +217,10 @@ export const Picker = Schema.Struct({
 export type Picker = typeof Picker.Type;
 
 /** A related list's metadata, with the revision it was built at. */
-// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const RelatedMetadata = AsyncData.Schema(
   Schema.Struct({ revision: SchemaRevision, table: MetaTableSchema }),
   MetaError
 );
-
-/** A related list's metadata. */
-export type RelatedMetadata = typeof RelatedMetadata.schema.Type;
 
 /** Why a related list's page did not load. */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
@@ -251,11 +235,7 @@ export const RelatedError = Schema.Literals([
 export type RelatedError = typeof RelatedError.Type;
 
 /** A related list's current page. */
-// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const RelatedRecords = AsyncData.Schema(RecordPage, RelatedError);
-
-/** A related list's current page. */
-export type RelatedRecords = typeof RelatedRecords.schema.Type;
 
 /**
  * One related list (Contracts 6.3): the records of `entry.table` whose
@@ -298,14 +278,10 @@ export const HistoryError = Schema.Literals([
 export type HistoryError = typeof HistoryError.Type;
 
 /** The record's history entries, newest last as the server sends them. */
-// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const HistoryEntries = AsyncData.Schema(
   Schema.Array(HistoryEntrySchema),
   HistoryError
 );
-
-/** The record's history entries. */
-export type HistoryEntries = typeof HistoryEntries.schema.Type;
 
 /**
  * The history panel: open or closed, its entries (loaded when first

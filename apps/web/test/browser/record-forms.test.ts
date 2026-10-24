@@ -18,7 +18,7 @@ import {
 } from "@std/testing/helpdesk-fixture";
 import type { HelpdeskData, HelpdeskUser } from "@std/testing/helpdesk-fixture";
 import { TestDatabase } from "@std/testing/test-database";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import type { Browser, Page } from "playwright";
 import { inject } from "vitest";
 
@@ -53,10 +53,10 @@ import {
   valuesHiddenFrom,
   waitForForm,
 } from "./app.ts";
-import type { Visitor } from "./app.ts";
 import {
   addLocalFields,
   appendToLayout as appendShownLayout,
+  patchDefinition,
 } from "./shown.ts";
 import {
   callWhenConnected,
@@ -73,12 +73,6 @@ const HELPDESK_TABLES = ["helpdesk.ticket", INCIDENTS];
 
 /** The internal costs of the demo records; agents never read them. */
 const HELPDESK_COSTS = ["950.00", "800.00", "600.00", "20.00", "120.00"];
-
-const visitorOf = (user: HelpdeskUser): Visitor => ({
-  login: user.login,
-  name: user.name,
-  password: user.password,
-});
 
 const incident = (id: string) => ({ id, table: INCIDENTS });
 
@@ -104,7 +98,7 @@ const signedInPage = async (
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  await signIn(page, origin, visitorOf(user));
+  await signIn(page, origin, user);
 
   return page;
 };
@@ -284,8 +278,8 @@ const openRestrictedIncident = async (
   fixture: HelpdeskData
 ) => {
   const hidden = await valuesHiddenFrom(origin, HELPDESK_TABLES, {
-    reader: await bearerToken(origin, visitorOf(fixture.admin)),
-    viewer: await bearerToken(origin, visitorOf(fixture.agent)),
+    reader: await bearerToken(origin, fixture.admin),
+    viewer: await bearerToken(origin, fixture.agent),
   });
 
   // The derivation finds the other agent's customer emails and every
@@ -305,7 +299,7 @@ const openRestrictedIncident = async (
 
   const nothingHiddenAfter = hiddenValuesChecker(page, everything, hidden);
 
-  await signIn(page, origin, visitorOf(fixture.agent));
+  await signIn(page, origin, fixture.agent);
   await nothingHiddenAfter("sign-in");
   // The password incident is the other agent's: its customer email is
   // withheld; the internal cost is never readable for agents.
@@ -388,7 +382,7 @@ const restrictedFieldAndFormStateNeverReachTheBrowser = async (
 ) => {
   await appendShownLayout(
     origin,
-    await bearerToken(origin, visitorOf(fixture.admin)),
+    await bearerToken(origin, fixture.admin),
     HELPDESK.layouts.incidentForm,
     [HELPDESK.fields.customerEmail]
   );
@@ -493,10 +487,7 @@ const childDenialShowsThroughTheParent = async (
   origin: string,
   fixture: HelpdeskData
 ) => {
-  await denyEmailOnIncidents(
-    origin,
-    await bearerToken(origin, visitorOf(fixture.admin))
-  );
+  await denyEmailOnIncidents(origin, await bearerToken(origin, fixture.admin));
 
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -504,7 +495,7 @@ const childDenialShowsThroughTheParent = async (
   const laptop = { id: fixture.records.laptop, table: "helpdesk.ticket" };
   const email = ["jo@example.com"];
 
-  await signIn(page, origin, visitorOf(fixture.agent));
+  await signIn(page, origin, fixture.agent);
   await openRecordForm(page, origin, laptop);
 
   assert.strictEqual(
@@ -547,7 +538,7 @@ const versionConflictKeepsTheInput = async (
   await fillField(page, "Description", "Mine: the jam is in tray 2.");
 
   // Another session saves first.
-  const token = await bearerToken(origin, visitorOf(fixture.agent));
+  const token = await bearerToken(origin, fixture.agent);
 
   const theirs = await apiCall(origin, token, {
     body: { description: "Theirs: replace the roller." },
@@ -610,15 +601,6 @@ const CORE_USER_CLASS = "da385db7-b2b7-4a1d-a1a9-42e8e0bb7992";
 
 const CORE_USER_LOGIN = "b3cabaa4-77cb-4845-9221-2105b21425eb";
 
-const decodeLayout = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      elements: Schema.Array(Schema.Unknown),
-      revision: Schema.Number,
-    })
-  )
-);
-
 /**
  * Adds a local reference field to incidents, `escalation_contact`, whose
  * allowed-records condition admits every user but `agent2` (decision
@@ -652,21 +634,9 @@ const addEscalationContact = async (origin: string, token: string) => {
     throw new Error("No ID returned for local field escalation_contact");
   }
 
-  const path = `/${collectionOf("core.layout")}/${HELPDESK.layouts.incidentForm}`;
-
-  const read = await apiCall(origin, token, { method: "GET", path });
-  const layout = decodeLayout(read.text);
-
-  const placed = await apiCall(origin, token, {
-    body: {
-      elements: [...layout.elements, { fieldId, kind: "field" }],
-    },
-    method: "PATCH",
-    path,
-    version: layout.revision,
-  });
-
-  assert.strictEqual(placed.status, 200, placed.text);
+  await appendShownLayout(origin, token, HELPDESK.layouts.incidentForm, [
+    fieldId,
+  ]);
 };
 
 const pickerOffersOnlyAllowedTargets = async (
@@ -674,7 +644,7 @@ const pickerOffersOnlyAllowedTargets = async (
   origin: string,
   fixture: HelpdeskData
 ) => {
-  const token = await bearerToken(origin, visitorOf(fixture.admin));
+  const token = await bearerToken(origin, fixture.admin);
 
   await addEscalationContact(origin, token);
 
@@ -722,10 +692,6 @@ const pickerOffersOnlyAllowedTargets = async (
 
 // HISTORY
 
-const decodeVersion = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ revision: Schema.Number }))
-);
-
 const historyShowsTheOldChoiceLabel = async (
   browser: Browser,
   origin: string,
@@ -741,20 +707,10 @@ const historyShowsTheOldChoiceLabel = async (
   assert.strictEqual(saved.status, 200);
 
   // The administrator relabels the choice afterwards.
-  const token = await bearerToken(origin, visitorOf(fixture.admin));
+  const token = await bearerToken(origin, fixture.admin);
   const path = `/${collectionOf("core.choice")}/${HELPDESK.choices.onHold}`;
 
-  const read = await apiCall(origin, token, { method: "GET", path });
-  const choice = decodeVersion(read.text).revision;
-
-  const relabelled = await apiCall(origin, token, {
-    body: { label: "Paused" },
-    method: "PATCH",
-    path,
-    version: choice,
-  });
-
-  assert.strictEqual(relabelled.status, 200, relabelled.text);
+  await patchDefinition(origin, token, path, { label: "Paused" });
 
   await openRecordForm(page, origin, email);
 
@@ -816,7 +772,7 @@ const passwordIsWriteOnly = async (
   const page = await context.newPage();
   const responses = await captureApiBodies(page);
 
-  await signIn(page, origin, visitorOf(fixture.admin));
+  await signIn(page, origin, fixture.admin);
   await openRecordForm(page, origin, {
     id: fixture.agent2.id,
     table: "core.user",
@@ -842,7 +798,7 @@ const passwordIsWriteOnly = async (
   assert.notInclude(await page.content(), NEW_PASSWORD);
 
   await bearerToken(origin, {
-    ...visitorOf(fixture.agent2),
+    ...fixture.agent2,
     password: NEW_PASSWORD,
   });
   await context.close();
@@ -867,7 +823,7 @@ const typePasswordOnDevServer = async (
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  await signIn(page, devOrigin, visitorOf(fixture.admin));
+  await signIn(page, devOrigin, fixture.admin);
   await openRecordForm(page, devOrigin, {
     id: fixture.agent2.id,
     table: "core.user",

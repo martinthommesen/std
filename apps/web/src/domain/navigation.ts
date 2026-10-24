@@ -1,3 +1,5 @@
+import { Array as EffectArray } from "effect";
+
 /**
  * How the navigation groups the tables a user can open: the app tables
  * first, by namespace, then the platform's own tables under
@@ -46,24 +48,15 @@ export interface NavigationGroups {
 export const navigationGroupsOf = (
   tables: readonly MetaTableSummary[]
 ): NavigationGroups => {
-  const appTables = tables.filter(
-    (table) => namespaceOf(table.name) !== PLATFORM_NAMESPACE
+  const byNamespace = EffectArray.groupBy(tables, (table) =>
+    namespaceOf(table.name)
   );
 
-  const namespaces = [
-    ...new Set(appTables.map((table) => namespaceOf(table.name))),
-  ];
-
   return {
-    administration: tables.filter(
-      (table) => namespaceOf(table.name) === PLATFORM_NAMESPACE
+    administration: byNamespace[PLATFORM_NAMESPACE] ?? [],
+    apps: Object.entries(byNamespace).flatMap(([namespace, grouped]) =>
+      namespace === PLATFORM_NAMESPACE ? [] : [{ namespace, tables: grouped }]
     ),
-    apps: namespaces.map((namespace) => ({
-      namespace,
-      tables: appTables.filter(
-        (table) => namespaceOf(table.name) === namespace
-      ),
-    })),
   };
 };
 

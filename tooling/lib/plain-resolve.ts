@@ -323,12 +323,11 @@ const pathToEffect = (
 
 const checkEffect = (
   bare: BareSpecifier,
-  names: readonly ImportedName[],
-  via: string
+  names: readonly ImportedName[]
 ): string[] => {
   if (bare.name !== "effect") {
     return [
-      `${via}"${bare.name}" is not allowed in a plain package (only Schema from "effect")`,
+      `"${bare.name}" is not allowed in a plain package (only Schema from "effect")`,
     ];
   }
 
@@ -336,13 +335,13 @@ const checkEffect = (
     return allowedModules.has(bare.subpath)
       ? []
       : [
-          `${via}"effect/${bare.subpath}" is not allowed in a plain package (allowed: ${allowedText})`,
+          `"effect/${bare.subpath}" is not allowed in a plain package (allowed: ${allowedText})`,
         ];
   }
 
   if (names.length === 0) {
     return [
-      `${via}import "effect" without named modules is not allowed in a plain package`,
+      `import "effect" without named modules is not allowed in a plain package`,
     ];
   }
 
@@ -350,7 +349,7 @@ const checkEffect = (
     imported !== null && allowedModules.has(imported)
       ? []
       : [
-          `${via}${imported ?? "*"} from "effect" is not allowed in a plain package (allowed: ${allowedText})`,
+          `${imported ?? "*"} from "effect" is not allowed in a plain package (allowed: ${allowedText})`,
         ]
   );
 };
@@ -504,7 +503,7 @@ export const checkSpecifier = (
   }
 
   if (isEffectPackage(bare.name)) {
-    return checkEffect(bare, names, "");
+    return checkEffect(bare, names);
   }
 
   const sibling = context.workspace.get(bare.name);

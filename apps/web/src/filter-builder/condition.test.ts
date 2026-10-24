@@ -4,6 +4,8 @@ import { parseCondition } from "@std/conditions/syntax-parse";
 import { printCondition } from "@std/conditions/syntax-print";
 import { formatDateTime } from "@std/values/date-time";
 import { formatDecimal, makeDecimal } from "@std/values/decimal";
+import { comparisonClass, isOrdered } from "@std/values/field-type";
+import type { FieldKind } from "@std/values/field-type";
 import { convertNeedle, convertSingleLineText } from "@std/values/text";
 import { Option, Result } from "effect";
 import {
@@ -186,7 +188,7 @@ const rightOf = (fieldId: string, kind: string): Arbitrary<Value> => {
   return literal;
 };
 
-const paths: readonly (readonly [readonly string[], string, string])[] = [
+const paths: readonly (readonly [readonly string[], string, FieldKind])[] = [
   ...assetTable.fields
     .filter((field) => field.type.kind !== "json")
     .map((field) => [[field.id], field.id, field.type.kind] as const),
@@ -199,28 +201,6 @@ const paths: readonly (readonly [readonly string[], string, string])[] = [
     "date",
   ],
 ];
-
-const EQUALITY = new Set([
-  "text",
-  "longText",
-  "integer",
-  "bigInteger",
-  "decimal",
-  "boolean",
-  "date",
-  "dateTime",
-  "choice",
-  "reference",
-  "uuid",
-]);
-
-const ORDERED = new Set([
-  "integer",
-  "bigInteger",
-  "decimal",
-  "date",
-  "dateTime",
-]);
 
 const atom: Arbitrary<Expr> = constantFrom(...paths).chain(
   ([path, fieldId, kind]) => {
@@ -237,7 +217,7 @@ const atom: Arbitrary<Expr> = constantFrom(...paths).chain(
       choices.length = 0;
     }
 
-    if (EQUALITY.has(kind)) {
+    if (comparisonClass(kind) !== null) {
       choices.push(
         tuple(
           constantFrom("eq" as const, "ne" as const),
@@ -253,7 +233,7 @@ const atom: Arbitrary<Expr> = constantFrom(...paths).chain(
       );
     }
 
-    if (ORDERED.has(kind)) {
+    if (isOrdered(kind)) {
       choices.push(
         tuple(
           constantFrom(

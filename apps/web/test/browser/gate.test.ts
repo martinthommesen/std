@@ -42,6 +42,7 @@ import {
   collectionOf,
   sentAttributes,
   apiPages,
+  uiAndApi,
   apiRecord,
   applyFilter,
   applySavedFilter,
@@ -50,7 +51,6 @@ import {
   captureApiBodies,
   captureResponses,
   chooseOption,
-  clickSort,
   countRecordWrites,
   fillField,
   formControl,
@@ -70,13 +70,12 @@ import {
   revisionNumber,
   saveRecordForm,
   savedFilterLabels,
-  setMatch,
   setPageSize,
   signIn,
   valuesHiddenFrom,
   waitForForm,
 } from "./app.ts";
-import type { ConditionStep, SaveOutcome, Visitor } from "./app.ts";
+import type { SaveOutcome, ListScenario } from "./app.ts";
 import {
   addLocalFields,
   adminCall,
@@ -101,12 +100,6 @@ const TICKETS = "helpdesk.ticket";
 const PAGE_SIZE = 5;
 
 const DAY_MS = 86_400_000;
-
-const visitorOf = (user: HelpdeskUser): Visitor => ({
-  login: user.login,
-  name: user.name,
-  password: user.password,
-});
 
 /**
  * The attributes a save sent, by API name (a JSON Patch's values or a
@@ -258,7 +251,7 @@ const costOf = (index: number): string => `${900 + index}.37`;
  * @returns Nothing.
  */
 const seed = async (origin: string, fixture: HelpdeskData): Promise<void> => {
-  const token = await bearerToken(origin, visitorOf(fixture.admin));
+  const token = await bearerToken(origin, fixture.admin);
 
   const described = await adminCall(origin, token, {
     method: "GET",
@@ -288,28 +281,30 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<void> => {
   const assigneeOf = (who: "agent" | "agent2" | null) =>
     who === null ? null : { id: fixture[who].id };
 
-  await inOrder(SEEDED, async (row, index) => {
-    const [title, who, status, priority, category, dueOn] = row;
+  await Promise.all(
+    SEEDED.map(async (row, index) => {
+      const [title, who, status, priority, category, dueOn] = row;
 
-    await adminCall(origin, token, {
-      body: {
-        ...(v3
-          ? { assignedTo: assigneeOf(who), description: title }
-          : { assignee: assigneeOf(who) }),
-        category,
-        customerEmail: emailOf(index),
-        due: dueOn,
-        internalCost: costOf(index),
-        priority: v3
-          ? { critical: "1", high: "2", low: "4", moderate: "3" }[priority]
-          : priority,
-        shortDescription: title,
-        status,
-      },
-      method: "POST",
-      path: `/${collectionOf(INCIDENTS)}`,
-    });
-  });
+      await adminCall(origin, token, {
+        body: {
+          ...(v3
+            ? { assignedTo: assigneeOf(who), description: title }
+            : { assignee: assigneeOf(who) }),
+          category,
+          customerEmail: emailOf(index),
+          due: dueOn,
+          internalCost: costOf(index),
+          priority: v3
+            ? { critical: "1", high: "2", low: "4", moderate: "3" }[priority]
+            : priority,
+          shortDescription: title,
+          status,
+        },
+        method: "POST",
+        path: `/${collectionOf(INCIDENTS)}`,
+      });
+    })
+  );
 };
 
 /** The running server after the suite's list fixtures have been seeded. */
@@ -333,21 +328,7 @@ class SeededHelpdesk extends Context.Service<
   );
 }
 
-/** One list the UI builds and the API is asked for directly. */
-interface Scenario {
-  readonly name: string;
-  /** The builder steps: each entry adds a condition and runs its steps. */
-  readonly conditions: readonly (readonly ConditionStep[])[];
-  /** `any of these` for the outermost group. */
-  readonly anyOf?: boolean;
-  /** Column headers to click, in order. */
-  readonly sortClicks: readonly string[];
-  /** The same list in the API's terms. */
-  readonly filter?: string;
-  readonly sort?: string;
-}
-
-const SCENARIOS: readonly Scenario[] = [
+const SCENARIOS: readonly ListScenario[] = [
   {
     conditions: [],
     name: "no filter, by short description",
@@ -444,44 +425,6 @@ const SCENARIOS: readonly Scenario[] = [
   },
 ];
 
-/**
- * Builds a scenario's list in the UI and reads the same list through the
- * API with the page's own session: both, page by page.
- *
- * @param page - A signed-in page on the incident list, without a filter.
- * @param origin - The server.
- * @param scenario - The list.
- * @returns The UI's pages and the API's pages.
- */
-const uiAndApi = async (page: Page, origin: string, scenario: Scenario) => {
-  await inOrder(scenario.conditions, async (steps, index) => {
-    await addCondition(page);
-    await buildCondition(page, index + 1, steps);
-  });
-
-  if (scenario.anyOf === true) {
-    await setMatch(page, 1, "any of these");
-  }
-
-  if (scenario.conditions.length > 0) {
-    await applyFilter(page);
-  }
-
-  await inOrder(scenario.sortClicks, async (label) => {
-    await clickSort(page, label);
-  });
-
-  const shown = await listedPages(page);
-
-  const answered = await apiPages(page, origin, INCIDENTS, {
-    filter: scenario.filter,
-    limit: PAGE_SIZE,
-    sort: scenario.sort,
-  });
-
-  return { answered, shown };
-};
-
 const decodeSavedFilters = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
@@ -511,13 +454,19 @@ const listsMatchTheApi = async (
   const page = await context.newPage();
   const pageCounts: number[] = [];
 
-  await signIn(page, origin, visitorOf(user));
+  await signIn(page, origin, user);
 
   await inOrder(SCENARIOS, async (scenario) => {
     await openTableList(page, origin, INCIDENTS);
     await setPageSize(page, PAGE_SIZE);
 
-    const { answered, shown } = await uiAndApi(page, origin, scenario);
+    const { answered, shown } = await uiAndApi(
+      page,
+      origin,
+      INCIDENTS,
+      PAGE_SIZE,
+      scenario
+    );
 
     assert.deepStrictEqual(shown, answered, `${user.login}: ${scenario.name}`);
     assert.isAbove(shown.flat().length, 0, `${user.login}: ${scenario.name}`);
@@ -602,8 +551,8 @@ const hiddenFromTheAgent = async (
   fixture: HelpdeskData
 ): Promise<readonly string[]> => {
   const hidden = await valuesHiddenFrom(origin, [TICKETS, INCIDENTS], {
-    reader: await bearerToken(origin, visitorOf(fixture.admin)),
-    viewer: await bearerToken(origin, visitorOf(fixture.agent)),
+    reader: await bearerToken(origin, fixture.admin),
+    viewer: await bearerToken(origin, fixture.agent),
   });
 
   const seededHidden = SEEDED.flatMap(([, who], index) =>
@@ -665,7 +614,7 @@ const restrictedFieldsStayHidden = async (
 
   const nothingHiddenAfter = hiddenValuesChecker(page, everything, hidden);
 
-  await signIn(page, origin, visitorOf(fixture.agent));
+  await signIn(page, origin, fixture.agent);
   await nothingHiddenAfter("sign-in");
 
   // The capture holds every kind of response with its body: the document,
@@ -835,7 +784,7 @@ const devToolsNeverHoldRestrictedValues = Effect.fn(
   fixture: HelpdeskData
 ) {
   yield* Effect.promise(async () => {
-    await signIn(page, devOrigin, visitorOf(fixture.agent));
+    await signIn(page, devOrigin, fixture.agent);
     await openTableList(page, devOrigin, INCIDENTS);
     await setPageSize(page, 50);
   });
@@ -1018,7 +967,7 @@ const staleSaveKeepsInput = async (
   origin: string,
   fixture: HelpdeskData
 ) => {
-  const token = await bearerToken(origin, visitorOf(fixture.admin));
+  const token = await bearerToken(origin, fixture.admin);
 
   const vendorRef = await addLocalField(origin, token, {
     classId: HELPDESK.incident,
@@ -1036,7 +985,7 @@ const staleSaveKeepsInput = async (
   const writes = countRecordWrites(page);
   const printer = { id: fixture.records.printer, table: INCIDENTS };
 
-  await signIn(page, origin, visitorOf(fixture.admin));
+  await signIn(page, origin, fixture.admin);
   await openRecordForm(page, origin, printer);
   await fillField(page, "Short description", "Paper jam in tray 2");
   await chooseOption(page, "Category", "Network");
@@ -1127,12 +1076,12 @@ const labelOnlyChangeSaves = async (
   origin: string,
   fixture: HelpdeskData
 ) => {
-  const token = await bearerToken(origin, visitorOf(fixture.admin));
+  const token = await bearerToken(origin, fixture.admin);
   const context = await browser.newContext();
   const page = await context.newPage();
   const email = { id: fixture.records.email, table: INCIDENTS };
 
-  await signIn(page, origin, visitorOf(fixture.admin));
+  await signIn(page, origin, fixture.admin);
   await openRecordForm(page, origin, email);
   await fillField(page, "Description", "Outlook asks for the password again.");
 
@@ -1185,7 +1134,7 @@ const renameThenRecreate = async (
   origin: string,
   fixture: HelpdeskData
 ) => {
-  const token = await bearerToken(origin, visitorOf(fixture.admin));
+  const token = await bearerToken(origin, fixture.admin);
 
   const foo = await addLocalField(origin, token, {
     classId: HELPDESK.incident,
@@ -1201,7 +1150,7 @@ const renameThenRecreate = async (
   const writes = countRecordWrites(page);
   const laptop = { id: fixture.records.laptop, table: INCIDENTS };
 
-  await signIn(page, origin, visitorOf(fixture.admin));
+  await signIn(page, origin, fixture.admin);
   await openRecordForm(page, origin, laptop);
   await fillField(page, "Foo", "mine");
 
@@ -1359,10 +1308,7 @@ describe("step 2 gate (helpdesk)", () => {
           const mcp = yield* devToolsMcp;
 
           const page = yield* Effect.promise(async () => {
-            const token = await bearerToken(
-              devOrigin,
-              visitorOf(fixture.admin)
-            );
+            const token = await bearerToken(devOrigin, fixture.admin);
 
             const vendor = await addLocalField(devOrigin, token, {
               classId: HELPDESK.incident,
@@ -1380,7 +1326,7 @@ describe("step 2 gate (helpdesk)", () => {
             const context = await browser.newContext();
             const openedPage = await context.newPage();
             const writes = countRecordWrites(openedPage);
-            await signIn(openedPage, devOrigin, visitorOf(fixture.admin));
+            await signIn(openedPage, devOrigin, fixture.admin);
             await openRecordForm(openedPage, devOrigin, {
               id: fixture.records.laptop,
               table: INCIDENTS,

@@ -284,16 +284,12 @@ describe("vendored-foldkit-check", () => {
   });
 
   it("fails when the lockfile's foldkit is not the vendored tag", async () => {
-    const results = await Promise.all([
-      checkVendor(
-        await vendoredRepo("foldkit-upgraded", { lockedFoldkit: ["0.170.0"] })
-      ),
-      checkVendor(
-        await vendoredRepo("foldkit-two", {
-          lockedFoldkit: ["0.169.0", "0.170.0"],
-        })
-      ),
+    const roots = await Promise.all([
+      vendoredRepo("foldkit-upgraded", { lockedFoldkit: ["0.170.0"] }),
+      vendoredRepo("foldkit-two", { lockedFoldkit: ["0.169.0", "0.170.0"] }),
     ]);
+
+    const results = await Promise.all(roots.map(checkVendor));
 
     expect(results.map((result) => result.code)).toStrictEqual([1, 1]);
     expect(results[0]?.output).toContain(
