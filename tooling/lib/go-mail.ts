@@ -39,13 +39,7 @@ const isVchar = (char: string): boolean => {
 
 const isWsp = (char: string): boolean => char === " " || char === "\t";
 
-const isAtext = (char: string, dot: boolean): boolean => {
-  if (char === ".") {
-    return dot;
-  }
-
-  return !specials.has(char) && isVchar(char);
-};
+const isAtext = (char: string): boolean => !specials.has(char) && isVchar(char);
 
 const isQtext = (char: string): boolean =>
   char !== "\\" && char !== '"' && isVchar(char);
@@ -198,17 +192,13 @@ const consumeQuotedString = (input: Input): string => {
   return text;
 };
 
-const consumeAtom = (
-  input: Input,
-  dot: boolean,
-  permissive: boolean
-): string => {
+const consumeAtom = (input: Input, permissive: boolean): string => {
   let index = 0;
 
   for (;;) {
     const code = input.rest.codePointAt(index);
 
-    if (code === undefined || !isAtext(String.fromCodePoint(code), dot)) {
+    if (code === undefined || !isAtext(String.fromCodePoint(code))) {
       break;
     }
 
@@ -247,7 +237,7 @@ const consumeAddrSpec = (input: Input): string => {
     const localPart =
       firstChar(input) === '"'
         ? consumeQuotedString(input)
-        : consumeAtom(input, true, false);
+        : consumeAtom(input, false);
 
     if (localPart === "") {
       throw new ParseError("empty quoted string in addr-spec");
@@ -263,7 +253,7 @@ const consumeAddrSpec = (input: Input): string => {
       throw new ParseError("no domain in addr-spec");
     }
 
-    return `${localPart}@${consumeAtom(input, true, false)}`;
+    return `${localPart}@${consumeAtom(input, false)}`;
   } catch (error) {
     input.rest = saved;
     throw error;
@@ -291,7 +281,7 @@ const readWord = (input: Input): string => {
     return consumeQuotedString(input);
   }
 
-  const atom = consumeAtom(input, true, true);
+  const atom = consumeAtom(input, true);
 
   if (hasUnsupportedCharset(atom)) {
     throw new ParseError("charset not supported");

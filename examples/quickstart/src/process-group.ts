@@ -122,14 +122,23 @@ const processStat = (
  * @param pgid - The group's ID: its leader's PID.
  * @returns The members.
  */
-export const groupMembers: GroupMembers = (pgid) =>
-  readdirSync("/proc").flatMap((pid) => {
+export const groupMembers: GroupMembers = (pgid) => {
+  try {
+    process.kill(-pgid, 0);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ESRCH") {
+      return [];
+    }
+  }
+
+  return readdirSync("/proc").flatMap((pid) => {
     const stat = PID.test(pid) ? processStat(pid) : undefined;
 
     return stat !== undefined && stat.pgid === pgid && stat.state !== "Z"
       ? [{ command: stat.command, pid: Number(pid) }]
       : [];
   });
+};
 
 /**
  * Whether any process of a group can still run.

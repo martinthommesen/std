@@ -1,3 +1,14 @@
+/**
+ * A table's list page (plan Step 2, workstream 2B): the generic list over
+ * the table's metadata, with sorting, keyset paging, the count, restricted
+ * fields, and the filter builder.
+ *
+ * Revisions (Contracts 6.2, 6.4): the page keeps the revision its metadata
+ * was built at and sends it with every list request. A response stating a
+ * newer revision refreshes the metadata in the background; a
+ * `SchemaChanged` refusal refreshes it and asks again, since a read is
+ * safe to repeat; the app hears of every revision through `SawRevision`.
+ */
 import { ExprSchema } from "@std/conditions/ast";
 import type { Expr } from "@std/conditions/ast";
 import type { MetaSavedFilter } from "@std/definitions/table-metadata";
@@ -22,17 +33,6 @@ import type { MetaTable } from "../../domain/metadata.ts";
 import { isNewerRevision } from "../../domain/schema-revision.ts";
 import type { SchemaRevision } from "../../domain/schema-revision.ts";
 import type { TablesByName } from "../../domain/table-view.ts";
-/**
- * A table's list page (plan Step 2, workstream 2B): the generic list over
- * the table's metadata, with sorting, keyset paging, the count, restricted
- * fields, and the filter builder.
- *
- * Revisions (Contracts 6.2, 6.4): the page keeps the revision its metadata
- * was built at and sends it with every list request. A response stating a
- * newer revision refreshes the metadata in the background; a
- * `SchemaChanged` refusal refreshes it and asks again, since a read is
- * safe to repeat; the app hears of every revision through `SawRevision`.
- */
 import { fieldsParameterOf, wireFieldOf } from "../../domain/wire.ts";
 import { followedReferences } from "../../filter-builder/condition.ts";
 import type { ConditionScope } from "../../filter-builder/condition.ts";

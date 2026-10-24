@@ -42,7 +42,7 @@ export const percentile = (
  * @returns Count, mean, p50, p95, p99 and max.
  */
 export const summarize = (samples: readonly number[]): Summary => {
-  const sorted = [...samples].toSorted((left, right) => left - right);
+  const sorted = samples.toSorted((left, right) => left - right);
   const total = sorted.reduce((sum, sample) => sum + sample, 0);
 
   return {
@@ -75,12 +75,12 @@ export const longestGap = (
   let previous = from;
   let longest = 0;
 
-  for (const time of [...inside, to]) {
+  for (const time of inside) {
     longest = Math.max(longest, time - previous);
     previous = time;
   }
 
-  return longest;
+  return Math.max(longest, to - previous);
 };
 
 /**

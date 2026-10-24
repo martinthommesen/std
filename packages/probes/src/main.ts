@@ -21,7 +21,7 @@ import { forEach } from "effect/Effect";
 import { runAddClassProbe } from "./add-class.ts";
 import { runAddColumnProbe } from "./add-column.ts";
 import { runCasefoldProbe } from "./casefold.ts";
-import { now } from "./clock.ts";
+import { timedMillis } from "./clock.ts";
 import { runConfigPauseProbe } from "./config-pause.ts";
 import { readConditions, readEnvironment } from "./environment.ts";
 import { runKilledBuildScenario } from "./killed-index-build.ts";
@@ -70,9 +70,7 @@ const record = Effect.fn("record")(function* recordProbe<A, E>(
     yield* Console.log(`probe: ${title}`);
     const startedAt = new Date().toISOString();
     const before = yield* readConditions;
-    const started = yield* now;
-    const result = yield* probe;
-    const elapsedMs = (yield* now) - started;
+    const [elapsedMs, result] = yield* timedMillis(probe);
     const after = yield* readConditions;
     yield* Console.log(`probe: ${title} done in ${Math.round(elapsedMs)} ms`);
 

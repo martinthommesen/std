@@ -70,9 +70,9 @@ const factsOf = (file: string): FileFacts => {
 /** What the isolated fixture shows around one real `effect-tsgo patch`. */
 interface Observed {
   readonly after: FileFacts;
-  readonly before: FileFacts;
+  readonly before: Pick<FileFacts, "ino">;
   readonly fixtureTsc: string;
-  readonly movedAside: FileFacts;
+  readonly movedAside: Pick<FileFacts, "ino">;
   readonly patch: CommandResult;
   readonly storeAfter: FileFacts;
   readonly storeBefore: FileFacts;
@@ -111,7 +111,7 @@ const patchFixture = async (temporary: string): Promise<Observed> => {
   );
 
   const storeBefore = factsOf(store);
-  const before = factsOf(fixtureTsc);
+  const before = statSync(fixtureTsc);
 
   const patch = await runCommand(
     path.join(repoRoot, "node_modules", ".bin", "effect-tsgo"),
@@ -123,7 +123,7 @@ const patchFixture = async (temporary: string): Promise<Observed> => {
     after: factsOf(fixtureTsc),
     before,
     fixtureTsc,
-    movedAside: factsOf(path.join(fixtureNative, "lib", "tsc.original")),
+    movedAside: statSync(path.join(fixtureNative, "lib", "tsc.original")),
     patch,
     storeAfter: factsOf(store),
     storeBefore,

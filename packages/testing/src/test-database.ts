@@ -613,8 +613,8 @@ const migrateDatabase = (
   migrations: readonly PlatformMigration[],
   transport: DatabaseTransport
 ): Effect.Effect<void, UpgradeError> =>
-  Effect.scoped(
-    Layer.build(
+  runPlatformMigrations(migrations).pipe(
+    Effect.provide(
       SqlLayer.pipe(
         Layer.provideMerge(
           Layer.succeed(
@@ -630,12 +630,8 @@ const migrateDatabase = (
           )
         )
       )
-    ).pipe(
-      Effect.flatMap((context) =>
-        Effect.provideContext(runPlatformMigrations(migrations), context)
-      ),
-      Effect.asVoid
-    )
+    ),
+    Effect.asVoid
   );
 
 /**

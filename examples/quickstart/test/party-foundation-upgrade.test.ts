@@ -30,6 +30,7 @@ import { TestDatabase, testDatabaseLayer } from "@std/testing/test-database";
 import { Deferred, Effect, Fiber, Schedule, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { exitCode } from "../src/process-group.ts";
 import { cleanEnv, CURRENT, extractRelease, std } from "../src/release.ts";
 import { listeningAt, run, startServer } from "../src/steps.ts";
 
@@ -219,18 +220,14 @@ const startUpgrade = (url: string) =>
       })
     ),
     (child: ChildProcess) =>
-      Effect.callback<boolean>((resume) => {
+      Effect.gen(function* stopUpgrade() {
         if (child.exitCode !== null || child.signalCode !== null) {
-          resume(Effect.succeed(true));
-
           return;
         }
 
-        child.once("exit", () => {
-          resume(Effect.succeed(true));
-        });
         child.kill("SIGKILL");
-      }).pipe(Effect.asVoid)
+        yield* exitCode(child);
+      })
   );
 
 /**
