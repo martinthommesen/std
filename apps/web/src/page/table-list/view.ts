@@ -609,7 +609,8 @@ const tableView = (
  * @returns The page.
  */
 export const view = Submodel.defineView<Model, Message>((model, h) =>
-  AsyncData.match(model.metadata, {
+  AsyncData.matchDataSplitEmpty(model.metadata, {
+    onData: (meta) => tableView(meta, model, h),
     onFailure: (error) =>
       error === "UnknownTable"
         ? notFoundView(
@@ -651,9 +652,6 @@ export const view = Submodel.defineView<Model, Message>((model, h) =>
         [h.Class("page")],
         [h.h1([], [model.table]), h.p([h.Role("status")], ["Loading…"])]
       ),
-    onRefreshing: (meta) => tableView(meta, model, h),
-    onStale: ({ data }) => tableView(data, model, h),
-    onSuccess: (meta) => tableView(meta, model, h),
   })
 );
 

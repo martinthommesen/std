@@ -48,7 +48,7 @@ import {
   LoadRelatedRecords,
   UpdateRecord,
 } from "./command.ts";
-import { formAfter } from "./fixture.ts";
+import { formAfter, readyWith } from "./fixture.ts";
 import { checkForm, controlIdOf, fieldOf } from "./form.ts";
 import { Message, OutMessage } from "./message.ts";
 import { FormMode, Submission, WriteError } from "./model.ts";
@@ -64,30 +64,6 @@ const REVISION_7 = revision("7.00000000-0000-4000-8000-000000000c07");
  * @param messages - The Messages.
  * @returns The last Model.
  */
-
-/**
- * The ticket form, ready at revision 5, the record at version 3.
- *
- * @param table - The ticket's metadata.
- * @returns The page.
- */
-const readyWith = (table: MetaTable): Model =>
-  formAfter(
-    init({
-      id: 1,
-      maybeAppRevision: Option.some(REVISION_3),
-      mode: FormMode.Edit({ recordId: TICKET_ID }),
-      table: TICKET,
-    }).model,
-    Message.SucceededLoadFormMetadata({ revision: REVISION_5, table }),
-    Message.SucceededLoadRecord({
-      generation: 1,
-      maybeRevision: Option.some(REVISION_5),
-      purpose: "Open",
-      record: ticketRecord,
-    }),
-    Message.SucceededLoadTarget({ request: 1, table: userTable })
-  );
 
 const ready = readyWith(ticketTable);
 

@@ -93,19 +93,6 @@ export const fieldById = (
 ): Option.Option<MetaField> =>
   Option.fromNullishOr(table.fields.find((field) => field.id === fieldId));
 
-/**
- * A field of a table by its definition name.
- *
- * @param table - The table's metadata.
- * @param name - The field's name.
- * @returns The field, if the caller can read it.
- */
-export const fieldByName = (
-  table: MetaTable,
-  name: string
-): Option.Option<MetaField> =>
-  Option.fromNullishOr(table.fields.find((field) => field.name === name));
-
 const lookUp =
   (tables: TablesByName, find: typeof fieldById) =>
   (tableName: string, key: string): FieldInfo | undefined => {

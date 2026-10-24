@@ -186,23 +186,19 @@ export const SignIn = Command.define("SignIn", {
         },
       });
 
-      const maybeSession = yield* client.session
+      return yield* client.session
         .current({ responseMode: "decoded-and-response" })
         .pipe(
-          Effect.map(Option.some),
+          Effect.map(([user, response]) =>
+            Message.SucceededSignIn({
+              maybeRevision: responseRevision(response),
+              user,
+            })
+          ),
           Effect.catchIf(isTmfError("Unauthenticated"), () =>
-            Effect.succeed(Option.none())
+            Effect.succeed(Message.FailedSignIn({ error: "SessionNotKept" }))
           )
         );
-
-      return Option.match(maybeSession, {
-        onNone: () => Message.FailedSignIn({ error: "SessionNotKept" }),
-        onSome: ([user, response]) =>
-          Message.SucceededSignIn({
-            maybeRevision: responseRevision(response),
-            user,
-          }),
-      });
     }).pipe(
       Effect.catchIf(isTmfError("InvalidCredentials"), () =>
         Effect.succeed(Message.FailedSignIn({ error: "InvalidCredentials" }))

@@ -14,7 +14,8 @@
 import { Checkbox, Input, Select, Textarea } from "@foldkit/ui";
 import type { MetaChoice } from "@std/definitions/table-metadata";
 import type { JsonValue } from "@std/values/json-value";
-import { isJsonObject, isJsonString } from "@std/values/json-value";
+import { isJsonString } from "@std/values/json-value";
+import { isSecretState } from "@std/values/write-only";
 import { Match, Option, Record, pipe } from "effect";
 import { groupBy } from "effect/Array";
 import { AsyncData } from "foldkit";
@@ -187,6 +188,24 @@ interface ControlConfig {
   readonly isInvalid: boolean;
 }
 
+const labelledControl = (
+  config: ControlConfig,
+  label: readonly Attribute<Message>[],
+  control: Html,
+  h: HtmlBuilder<Message>
+): Html =>
+  h.div(
+    [h.Class(CONTROL_CLASS)],
+    [
+      h.label(
+        [...label, h.Class(LABEL_CLASS)],
+        [labelText(config.field, true)]
+      ),
+      control,
+      notesView(config.controlId, config.notes, h),
+    ]
+  );
+
 const requiredAttributes = (field: MetaField, h: HtmlBuilder<Message>) =>
   field.required ? [h.AriaRequired(true)] : [];
 
@@ -209,24 +228,19 @@ const textControl = (
       onInput: (typed) =>
         Message.UpdatedText({ fieldId: config.field.id, text: typed }),
       toView: (attributes) =>
-        h.div(
-          [h.Class(CONTROL_CLASS)],
-          [
-            h.label(
-              [...attributes.label, h.Class(LABEL_CLASS)],
-              [labelText(config.field, true)]
-            ),
-            h.input([
-              ...attributes.input,
-              ...requiredAttributes(config.field, h),
-              ...(NUMERIC_KINDS.has(config.field.type.kind)
-                ? [h.InputMode("decimal")]
-                : []),
-              h.Spellcheck(false),
-              h.Class(INPUT_CLASS),
-            ]),
-            notesView(config.controlId, config.notes, h),
-          ]
+        labelledControl(
+          config,
+          attributes.label,
+          h.input([
+            ...attributes.input,
+            ...requiredAttributes(config.field, h),
+            ...(NUMERIC_KINDS.has(config.field.type.kind)
+              ? [h.InputMode("decimal")]
+              : []),
+            h.Spellcheck(false),
+            h.Class(INPUT_CLASS),
+          ]),
+          h
         ),
       type: "text",
       value: text,
@@ -250,21 +264,16 @@ const textareaControl = (
         Message.UpdatedText({ fieldId: config.field.id, text: typed }),
       rows: LONG_TEXT_ROWS,
       toView: (attributes) =>
-        h.div(
-          [h.Class(CONTROL_CLASS)],
-          [
-            h.label(
-              [...attributes.label, h.Class(LABEL_CLASS)],
-              [labelText(config.field, true)]
-            ),
-            h.textarea([
-              ...attributes.textarea,
-              ...requiredAttributes(config.field, h),
-              h.Spellcheck(config.field.type.kind === "longText"),
-              h.Class(INPUT_CLASS),
-            ]),
-            notesView(config.controlId, config.notes, h),
-          ]
+        labelledControl(
+          config,
+          attributes.label,
+          h.textarea([
+            ...attributes.textarea,
+            ...requiredAttributes(config.field, h),
+            h.Spellcheck(config.field.type.kind === "longText"),
+            h.Class(INPUT_CLASS),
+          ]),
+          h
         ),
       value: text,
     },
@@ -372,32 +381,27 @@ const selectControl = (
       onChange: (chosen) =>
         Message.SelectedChoice({ fieldId: config.field.id, key: chosen }),
       toView: (attributes) =>
-        h.div(
-          [h.Class(CONTROL_CLASS)],
-          [
-            h.label(
-              [...attributes.label, h.Class(LABEL_CLASS)],
-              [labelText(config.field, true)]
-            ),
-            h.select(
-              [
-                ...attributes.select,
-                ...requiredAttributes(config.field, h),
-                h.Class(INPUT_CLASS),
-              ],
-              choiceOptionsOf(
-                config.field,
-                storedKeyOf(model, config.field),
-                key
-              ).map((option) =>
-                h.option(
-                  [h.Value(option.value), h.Selected(option.value === key)],
-                  [option.label]
-                )
+        labelledControl(
+          config,
+          attributes.label,
+          h.select(
+            [
+              ...attributes.select,
+              ...requiredAttributes(config.field, h),
+              h.Class(INPUT_CLASS),
+            ],
+            choiceOptionsOf(
+              config.field,
+              storedKeyOf(model, config.field),
+              key
+            ).map((option) =>
+              h.option(
+                [h.Value(option.value), h.Selected(option.value === key)],
+                [option.label]
               )
-            ),
-            notesView(config.controlId, config.notes, h),
-          ]
+            )
+          ),
+          h
         ),
       value: key,
     },
@@ -575,10 +579,7 @@ const idOnlyHintOf = (model: Model, field: MetaField): readonly string[] => {
 const pickerItemsOf = (
   picker: Picker
 ): readonly { readonly id: string; readonly label: string }[] =>
-  Match.value(picker.results).pipe(
-    Match.tag("Success", "Refreshing", "Stale", ({ data }) => data),
-    Match.orElse(() => [])
-  );
+  AsyncData.getOrElse(picker.results, () => []);
 
 /**
  * The picker's list: its results, then "Show more results" when the
@@ -692,7 +693,7 @@ const writeOnlyStateOf = (model: Model, field: MetaField): boolean =>
     onSome: (record) => {
       const value = record.values[field.name];
 
-      return value !== undefined && isJsonObject(value) && value.set === true;
+      return isSecretState(value) && value.set;
     },
   });
 

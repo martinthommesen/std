@@ -344,9 +344,6 @@ const writeOnlyChanges = (
   FieldInput.guards.WriteOnly(input) &&
   (Option.isSome(input.maybeValue) || (isSecretState(stored) && stored.set));
 
-/** A write body's values by field name (Contracts 6.6). */
-export type FormValues = Readonly<Record<string, JsonValue>>;
-
 /** A write body, with passwords and secrets kept apart until the request. */
 export interface FormBody {
   /** Field name to JSON value: every changed field but typed secrets. */

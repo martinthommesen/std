@@ -64,7 +64,6 @@ import {
   assertRows,
   cellJsonText,
   createIncident,
-  expectedCell,
   decodeList,
   decodeRead,
   decodeMetadata,
@@ -80,7 +79,6 @@ import {
   patchIncident,
   shownRows,
   valueText,
-  visibleTextOf,
 } from "./shown.ts";
 import type { Described, LocalField, Seen } from "./shown.ts";
 import { launchBrowser, stdServe } from "./support.ts";
@@ -400,7 +398,6 @@ const relatedListShowsTheApiValues = async (
     await shownRows(section.locator("tbody tr")),
     answer.records,
     columns,
-    expectedCell,
     seen
   );
 };
@@ -589,33 +586,46 @@ const expectedEntry = (
  * @param page - A form page with the history open.
  * @returns The entries.
  */
-const shownEntries = async (page: Page): Promise<readonly ShownEntry[]> => {
-  const entries = page.locator(".history-entry");
-  const count = await entries.count();
+const shownEntries = async (page: Page): Promise<readonly ShownEntry[]> =>
+  await page.locator(".history-entry").evaluateAll((entries) =>
+    entries.map((entry) => {
+      const textOf = (selector: string, parent: Element = entry): string => {
+        const elements = parent.querySelectorAll(selector);
+        const element = elements.item(0);
 
-  return await Promise.all(
-    Array.from({ length: count }, async (_, index) => {
-      const entry = entries.nth(index);
-      const changes = entry.locator(".history-change");
-      const changeCount = await changes.count();
+        if (elements.length !== 1 || element === null) {
+          throw new Error(
+            `history ${selector}: expected one element, found ${elements.length}`
+          );
+        }
+
+        const copy = element.cloneNode(true);
+
+        if (!(copy instanceof Element)) {
+          throw new Error(`history ${selector}: clone is not an element`);
+        }
+
+        for (const hidden of copy.querySelectorAll(".visually-hidden")) {
+          hidden.remove();
+        }
+
+        return copy.textContent ?? "";
+      };
 
       return {
-        changes: await Promise.all(
-          Array.from({ length: changeCount }, async (__, at) => {
-            const change = changes.nth(at);
-
-            return [
-              (await change.getAttribute("data-field")) ?? "",
-              await visibleTextOf(change.locator("dt")),
-              await visibleTextOf(change.locator("dd")),
-            ] as const;
-          })
+        changes: Array.from(
+          entry.querySelectorAll<HTMLElement>(".history-change"),
+          (change) =>
+            [
+              change.dataset.field ?? "",
+              textOf("dt", change),
+              textOf("dd", change),
+            ] as const
         ),
-        heading: await visibleTextOf(entry.locator(".history-heading")),
+        heading: textOf(".history-heading"),
       };
     })
   );
-};
 
 const isHistoryResponse = (response: Response): boolean =>
   new URL(response.url()).pathname.endsWith("/history");

@@ -4,7 +4,6 @@ import type { StdClient } from "@std/api/client";
 import { Context, Effect, Layer, Option } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import type { HttpClientResponse } from "effect/http";
-import { Http } from "foldkit";
 
 import {
   MissingRevision,
@@ -89,7 +88,7 @@ export const responseRevision = (
 export class StdApi extends Context.Service<StdApi, StdClient>()(
   "@std/web/std-client/StdApi"
 ) {
-  /** The client over Foldkit's Fetch-backed `HttpClient`. */
+  /** The typed client over the supplied HTTP transport. */
   static readonly layer = Layer.effect(
     StdApi,
     makeStdClient({ webClient: true })
@@ -99,8 +98,7 @@ export class StdApi extends Context.Service<StdApi, StdClient>()(
         HttpClient.HttpClient,
         HttpClient.HttpClient.useSync(sendingRequestRevision)
       )
-    ),
-    Layer.provide(Http.layer)
+    )
   );
 }
 

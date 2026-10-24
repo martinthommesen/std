@@ -189,8 +189,6 @@ const tablesNavList = (
     ...groups.administration,
   ];
 
-  const labels = new Map(ordered.map((table) => [table.name, table.label]));
-
   return Nav.view({
     ariaLabel: "Tables",
     isItemCurrent: (table) => Option.contains(currentTable(model.route), table),
@@ -209,7 +207,7 @@ const tablesNavList = (
               [
                 h.a(
                   [...(links.get(table.name) ?? []), h.Class("nav-link")],
-                  [labels.get(table.name) ?? table.name]
+                  [table.label]
                 ),
               ]
             )

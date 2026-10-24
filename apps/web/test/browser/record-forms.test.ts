@@ -16,7 +16,7 @@ import {
   HelpdeskFixture,
   helpdeskTestLayer,
 } from "@std/testing/helpdesk-fixture";
-import type { HelpdeskData, HelpdeskUser } from "@std/testing/helpdesk-fixture";
+import type { HelpdeskData } from "@std/testing/helpdesk-fixture";
 import { TestDatabase } from "@std/testing/test-database";
 import { Effect } from "effect";
 import type { Browser, Page } from "playwright";
@@ -50,6 +50,7 @@ import {
   rendered,
   saveRecordForm,
   signIn,
+  signedInPage,
   valuesHiddenFrom,
   waitForForm,
 } from "./app.ts";
@@ -81,27 +82,6 @@ const incident = (id: string) => ({ id, table: INCIDENTS });
  * create's members).
  */
 const decodeBody = sentAttributes;
-
-/**
- * A signed-in page of its own browser context, closed with the test.
- *
- * @param browser - The browser.
- * @param origin - The server.
- * @param user - Who signs in.
- * @returns The page.
- */
-const signedInPage = async (
-  browser: Browser,
-  origin: string,
-  user: HelpdeskUser
-): Promise<Page> => {
-  const context = await browser.newContext();
-  const page = await context.newPage();
-
-  await signIn(page, origin, user);
-
-  return page;
-};
 
 const facts = async (page: Page): Promise<string> =>
   (await page.locator(".form-facts").textContent()) ?? "";

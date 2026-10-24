@@ -424,7 +424,7 @@ const changeOperand = (
   change: (operand: Operand) => Operand
 ): PlainReturn =>
   changeCondition(model, conditionId, (condition) =>
-    Condition({ ...condition, operand: change(condition.operand) })
+    modifyFields(condition, { operand: change })
   );
 
 const selectOperator = (
@@ -522,7 +522,7 @@ const withTime =
   (time: string) =>
   (operand: Operand): Operand =>
     Operand.guards.Instant(operand)
-      ? Operand.Instant({ ...operand, time })
+      ? modifyFields(operand, { time: () => time })
       : operand;
 
 const withDate =
@@ -570,15 +570,7 @@ const foldDatePicker = Update.foldChildAt({
     Message.GotDatePickerMessage({ conditionId, message }),
   update: DatePicker.update,
   writeAt: (model: Model, conditionId: number, nextPicker: DatePicker.Model) =>
-    modifyFields(model, {
-      root: (root) =>
-        replaceCondition(root, conditionId, (condition) =>
-          Condition({
-            ...condition,
-            operand: withPicker(nextPicker)(condition.operand),
-          })
-        ),
-    }),
+    changeOperand(model, conditionId, withPicker(nextPicker)).model,
 });
 
 const apply = (model: Model, scope: ConditionScope): UpdateReturn =>

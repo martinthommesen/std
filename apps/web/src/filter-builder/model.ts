@@ -1,3 +1,4 @@
+import { DatePicker } from "@foldkit/ui";
 /**
  * The filter builder's state: a tree that mirrors the condition AST
  * (Contracts 5.2) node for node, so any AST the builder can show loads
@@ -13,30 +14,16 @@
  * the filter is applied), so an unfinished value is never lost and never
  * reaches the server.
  */
-import { DatePicker } from "@foldkit/ui";
+import { ATOM_OPERATORS } from "@std/conditions/ast";
 import { Schema } from "effect";
 import { CalendarDate } from "foldkit/calendar";
 import { defineTaggedUnion, taggedStruct } from "foldkit/schema";
 
 /** The operators of the filter profile: every atom but `changed` (5.10). */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
-export const FilterOperator = Schema.Literals([
-  "eq",
-  "ne",
-  "lt",
-  "le",
-  "gt",
-  "ge",
-  "in",
-  "notIn",
-  "empty",
-  "notEmpty",
-  "contains",
-  "notContains",
-  "startsWith",
-  "endsWith",
-  "inPeriod",
-]);
+export const FilterOperator = Schema.Literals(
+  ATOM_OPERATORS.filter((operator) => operator !== "changed")
+);
 
 /** An operator of the filter profile. */
 export type FilterOperator = typeof FilterOperator.Type;

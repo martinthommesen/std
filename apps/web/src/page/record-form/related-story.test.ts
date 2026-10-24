@@ -37,9 +37,6 @@ import { init, update } from "./update.ts";
 
 const LIST = 1;
 
-const COLUMNS =
-  "shortDescription,number,status,assignee,internalCost,customerEmail";
-
 const page = (next: string | null) => ({
   maybeCount: Option.some(12),
   maybeNextCursor: Option.fromNullishOr(next),
@@ -100,7 +97,6 @@ const pageRequest = (
   LoadRelatedRecords({
     columns: TASK_COLUMNS,
     cursor: Option.none(),
-    fields: COLUMNS,
     filter: `parent = "${TICKET_ID}"`,
     generation: 2,
     listId: LIST,
@@ -184,9 +180,7 @@ describe("a related list without columns", () => {
           table: BARE_TASKS,
         })
       ),
-      Command.expectExact(
-        pageRequest({ columns: [], fields: "id", generation: 1 })
-      ),
+      Command.expectExact(pageRequest({ columns: [], generation: 1 })),
       Command.resolve(
         LoadRelatedRecords,
         Message.SucceededLoadRelatedRecords({

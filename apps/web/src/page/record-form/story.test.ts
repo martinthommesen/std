@@ -51,7 +51,7 @@ import {
   SearchTargets,
   UpdateRecord,
 } from "./command.ts";
-import { formAfter } from "./fixture.ts";
+import { formAfter, readyWith } from "./fixture.ts";
 import { checkForm, controlIdOf } from "./form.ts";
 import { Message, OutMessage, UnreadSavedRecord } from "./message.ts";
 import { FormMode, Submission, WriteError } from "./model.ts";
@@ -87,20 +87,7 @@ const creating = opening(FormMode.Create());
  */
 
 /** The ticket form, ready: metadata at revision 5, the record at version 3. */
-const ready = formAfter(
-  editing.model,
-  Message.SucceededLoadFormMetadata({
-    revision: REVISION_5,
-    table: ticketTable,
-  }),
-  Message.SucceededLoadRecord({
-    generation: 1,
-    maybeRevision: Option.some(REVISION_5),
-    purpose: "Open",
-    record: ticketRecord,
-  }),
-  Message.SucceededLoadTarget({ request: 1, table: userTable })
-);
+const ready = readyWith(ticketTable);
 
 /** The create form, ready. */
 const readyToCreate = formAfter(
@@ -1617,8 +1604,6 @@ describe("related lists and history", () => {
         LoadRelatedRecords({
           columns: TASK_COLUMNS,
           cursor: Option.none(),
-          fields:
-            "shortDescription,number,status,assignee,internalCost,customerEmail",
           filter: `parent = "${TICKET_ID}"`,
           generation: 1,
           listId: LIST,
@@ -1651,8 +1636,6 @@ describe("related lists and history", () => {
         LoadRelatedRecords({
           columns: TASK_COLUMNS,
           cursor: Option.some("c2"),
-          fields:
-            "shortDescription,number,status,assignee,internalCost,customerEmail",
           filter: `parent = "${TICKET_ID}"`,
           generation: 2,
           listId: LIST,

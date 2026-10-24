@@ -22,6 +22,7 @@ import {
   TICKET_ID,
   TICKET_SELECTION,
   TICKET_WIRE,
+  TASK_COLUMNS,
   USERS,
   ticketRecord,
 } from "../../form-fixture.ts";
@@ -32,6 +33,7 @@ import {
   LoadHistoryLabels,
   LoadHistory,
   LoadRecord,
+  LoadRelatedRecords,
   SearchTargets,
   UpdateRecord,
 } from "./command.ts";
@@ -1086,6 +1088,44 @@ describe("form Commands against the server", () => {
     ).toStrictEqual(ids);
     expect(api.seen.map((seen) => Number(seen.query.limit))).toStrictEqual(
       conditions.map((condition) => condition.match(UUIDS)?.length ?? 0)
+    );
+  });
+});
+
+describe("related list field selection", () => {
+  it("derives API fields from columns and requests IDs when there are no columns", async () => {
+    await Promise.all(
+      [
+        {
+          columns: TASK_COLUMNS,
+          fields:
+            "shortDescription,number,status,assignee,internalCost,customerEmail",
+        },
+        { columns: [], fields: "id" },
+      ].map(async (selection) => {
+        const api = fakeStdApi({
+          "/api/v1/helpTask": {
+            body: [],
+            headers: { "std-schema-revision": REVISION_5 },
+            status: 200,
+          },
+        });
+
+        const answer = await Effect.runPromise(
+          LoadRelatedRecords({
+            columns: selection.columns,
+            cursor: Option.none(),
+            filter: `parent = "${TICKET_ID}"`,
+            generation: 1,
+            listId: 1,
+            revision: REVISION_5,
+            table: "help.task",
+          }).effect.pipe(Effect.provide(api.layer))
+        );
+
+        expect(answer._tag).toBe("SucceededLoadRelatedRecords");
+        expect(api.seen[0]?.query.fields).toBe(selection.fields);
+      })
     );
   });
 });

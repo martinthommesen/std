@@ -11,7 +11,7 @@
  */
 import { apiTableNameOf } from "@std/definitions/names";
 import { Option, Predicate, Schema } from "effect";
-import type { Locator, Page, Response } from "playwright";
+import type { Browser, Locator, Page, Response } from "playwright";
 
 /**
  * Where the API lives. Every helper here names its paths relative to it,
@@ -912,6 +912,34 @@ const isResource = (value: Schema.Json): boolean =>
   });
 
 /**
+ * The text leaves of a JSON value, at any depth and under any member name
+ * (a json field's content is a value whatever its keys): strings, and
+ * numbers as text.
+ *
+ * @param value - The value.
+ * @returns Its leaves.
+ */
+const leavesOf = (value: Schema.Json): readonly string[] => {
+  if (Predicate.isString(value)) {
+    return [value];
+  }
+
+  if (Predicate.isNumber(value)) {
+    return [String(value)];
+  }
+
+  if (value === null || Predicate.isBoolean(value)) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item: Schema.Json) => leavesOf(item));
+  }
+
+  return Object.values(value).flatMap(leavesOf);
+};
+
+/**
  * The leaves (strings, and numbers as text) of a JSON value that sit inside
  * a member carrying field values (`VALUE_MEMBERS`), at any depth.
  *
@@ -923,15 +951,16 @@ const fieldValueLeaves = (
   value: Schema.Json,
   isInValues: boolean
 ): readonly string[] => {
-  if (Predicate.isString(value)) {
-    return isInValues ? [value] : [];
+  if (isInValues) {
+    return leavesOf(value);
   }
 
-  if (Predicate.isNumber(value)) {
-    return isInValues ? [String(value)] : [];
-  }
-
-  if (value === null || Predicate.isBoolean(value)) {
+  if (
+    value === null ||
+    Predicate.isString(value) ||
+    Predicate.isNumber(value) ||
+    Predicate.isBoolean(value)
+  ) {
     return [];
   }
 
@@ -946,7 +975,7 @@ const fieldValueLeaves = (
   return Object.entries(value).flatMap(([key, member]) =>
     fieldValueLeaves(
       member,
-      isInValues || VALUE_MEMBERS.has(key) || (isRecord && isAttribute(key))
+      VALUE_MEMBERS.has(key) || (isRecord && isAttribute(key))
     )
   );
 };
@@ -1548,34 +1577,6 @@ const everyRecord = async (
   return next === null
     ? listed
     : [...listed, ...(await everyRecord(origin, token, table, next))];
-};
-
-/**
- * The text leaves of a JSON value, at any depth and under any member name
- * (a json field's content is a value whatever its keys): strings, and
- * numbers as text.
- *
- * @param value - The value.
- * @returns Its leaves.
- */
-const leavesOf = (value: Schema.Json): readonly string[] => {
-  if (Predicate.isString(value)) {
-    return [value];
-  }
-
-  if (Predicate.isNumber(value)) {
-    return [String(value)];
-  }
-
-  if (value === null || Predicate.isBoolean(value)) {
-    return [];
-  }
-
-  if (Array.isArray(value)) {
-    return value.flatMap((item: Schema.Json) => leavesOf(item));
-  }
-
-  return Object.values(value).flatMap(leavesOf);
 };
 
 /**
@@ -2521,13 +2522,35 @@ export const uiAndApi = async (
     await clickSort(page, label);
   });
 
-  const shown = await listedPages(page);
-
-  const answered = await apiPages(page, origin, table, {
-    filter: scenario.filter,
-    limit: pageSize,
-    sort: scenario.sort,
-  });
+  const [shown, answered] = await Promise.all([
+    listedPages(page),
+    apiPages(page, origin, table, {
+      filter: scenario.filter,
+      limit: pageSize,
+      sort: scenario.sort,
+    }),
+  ]);
 
   return { answered, shown };
+};
+
+/**
+ * A signed-in page of its own browser context, closed with the test.
+ *
+ * @param browser - The browser.
+ * @param origin - The server.
+ * @param user - Who signs in.
+ * @returns The page.
+ */
+export const signedInPage = async (
+  browser: Browser,
+  origin: string,
+  user: Visitor
+): Promise<Page> => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  await signIn(page, origin, user);
+
+  return page;
 };

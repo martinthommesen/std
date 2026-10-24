@@ -1,9 +1,8 @@
-import { makeStdClient } from "@std/api/client";
 import type { Schema } from "effect";
 import { Effect, Layer, Redacted } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
-import { StdApi, sendingRequestRevision } from "./std-client.ts";
+import { StdApi } from "./std-client.ts";
 
 /** One canned answer of the fake server. */
 export interface FakeAnswer {
@@ -41,7 +40,7 @@ export const fakeStdApi = (answers: Readonly<Record<string, FakeAnswer>>) => {
 
   const client = HttpClient.make((request) =>
     Effect.sync(() => {
-      const url = new URL(request.url);
+      const url = new URL(request.url, BASE_URL);
       const path = decodeURIComponent(url.pathname);
 
       const answer = answers[`${request.method} ${path}`] ??
@@ -80,13 +79,8 @@ export const fakeStdApi = (answers: Readonly<Record<string, FakeAnswer>>) => {
     })
   );
 
-  const layer = Layer.effect(
-    StdApi,
-    makeStdClient({ baseUrl: BASE_URL, webClient: true })
-  ).pipe(
-    Layer.provide(
-      Layer.succeed(HttpClient.HttpClient, sendingRequestRevision(client))
-    )
+  const layer = StdApi.layer.pipe(
+    Layer.provide(Layer.succeed(HttpClient.HttpClient, client))
   );
 
   return { layer, seen };

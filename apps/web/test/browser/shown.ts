@@ -47,6 +47,7 @@ import {
   API_PREFIX,
   apiCall,
   collectionOf,
+  formFieldState,
   isListResponse,
   openRecordForm,
   openTableList,
@@ -534,7 +535,7 @@ export const cellOfApi = (field: Field, record: ApiRecord): Shown => {
  *   (with the record's ID before the cell's state when it has no value).
  * @returns The state and the visible text.
  */
-export const expectedCell = (
+const expectedCell = (
   field: Field,
   record: ApiRecord,
   isFirst: boolean
@@ -639,7 +640,6 @@ export type Seen = Set<string>;
  * @param rows - What the table shows.
  * @param records - The API's records, in order.
  * @param columns - The columns' fields.
- * @param expected - The rule for one cell.
  * @param seen - Collects `<where> <kind>:<state>` and the texts checked.
  * @returns Nothing.
  */
@@ -648,7 +648,6 @@ export const assertRows = (
   rows: readonly ShownRow[],
   records: readonly ApiRecord[],
   columns: readonly Field[],
-  expected: (field: Field, record: ApiRecord, isFirst: boolean) => Shown,
   seen: Seen
 ): void => {
   assert.deepStrictEqual(
@@ -663,7 +662,7 @@ export const assertRows = (
     assert.strictEqual(shown.length, columns.length, record.id);
 
     for (const [column, field] of columns.entries()) {
-      const cell = expected(field, record, column === 0);
+      const cell = expectedCell(field, record, column === 0);
 
       assert.deepStrictEqual(
         shown[column],
@@ -729,7 +728,6 @@ export const listShowsTheApiValues = async (
     await shownRows(page.locator("table.records tbody tr")),
     answer.records,
     columns,
-    expectedCell,
     seen
   );
 };
@@ -1002,13 +1000,7 @@ export const formShowsTheApiValues = async (
       const expected = expectedFormField(field, record);
       const about = `the form, ${id}, ${field.name} (${field.type.kind}): the API's value ${JSON.stringify(record.values[field.name])}`;
 
-      const state =
-        (await row.locator("[data-field-state]").count()) === 0
-          ? "control"
-          : await row
-              .locator("[data-field-state]")
-              .first()
-              .getAttribute("data-field-state");
+      const state = await formFieldState(page, field.name);
 
       if (expected.state === "control") {
         assert.strictEqual(state, "control", about);

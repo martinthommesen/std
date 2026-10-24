@@ -11,7 +11,7 @@ import { Model as RecordFormModel } from "./page/record-form/model.ts";
 import { Model as SignInModel } from "./page/sign-in/sign-in.ts";
 import { Model as TableListModel } from "./page/table-list/model.ts";
 import { AppRoute, SignedInRoute, SignedOutRoute } from "./route.ts";
-import { PreferenceProblem, ShellPreferences } from "./shell-preferences.ts";
+import { InitialShellPreferences } from "./shell-preferences.ts";
 
 /**
  * What the user asked for that would leave a form with unsaved edits, held
@@ -96,26 +96,23 @@ export type Tables = typeof Tables.schema.Type;
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const Model = defineTaggedUnion({
   CheckingSession: {
-    maybePreferenceProblem: Schema.Option(PreferenceProblem),
-    preferences: ShellPreferences,
+    ...InitialShellPreferences.fields,
     route: AppRoute,
   },
   SessionUnavailable: {
-    maybePreferenceProblem: Schema.Option(PreferenceProblem),
-    preferences: ShellPreferences,
+    ...InitialShellPreferences.fields,
     route: AppRoute,
   },
   SignedIn: {
     leaveDialog: Dialog.Model,
     maybeDeadLetters: Schema.Option(DeadLettersModel),
     maybeLeaveIntent: Schema.Option(LeaveIntent),
-    maybePreferenceProblem: Schema.Option(PreferenceProblem),
+    ...InitialShellPreferences.fields,
     maybeRecordForm: Schema.Option(RecordFormModel),
     maybeRevision: Schema.Option(SchemaRevision),
     maybeTableList: Schema.Option(TableListModel),
     navigationDrawer: Dialog.Model,
     nextPageId: Schema.Int,
-    preferences: ShellPreferences,
     route: SignedInRoute,
     sessionId: Schema.Int,
     signOutRequest: SignOutRequest,
@@ -124,11 +121,10 @@ export const Model = defineTaggedUnion({
     userMenu: Menu.Model,
   },
   SignedOut: {
-    maybePreferenceProblem: Schema.Option(PreferenceProblem),
+    ...InitialShellPreferences.fields,
     maybeReturnRoute: Schema.Option(SignedInRoute),
     nextPageId: Schema.Int,
     nextSessionId: Schema.Int,
-    preferences: ShellPreferences,
     route: SignedOutRoute,
     signIn: SignInModel,
   },

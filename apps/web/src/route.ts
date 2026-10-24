@@ -3,6 +3,21 @@ import { Route } from "foldkit";
 import { defineRouteUnion, literal, slash, string } from "foldkit/route";
 
 /**
+ * A list's state as its address holds it: the filter, the sort and the
+ * page size, as text (`TableList`), and the list a form was opened from
+ * (`Record`, `NewRecord`).
+ */
+// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
+export const ListQuery = Schema.Struct({
+  filter: Schema.Option(Schema.String),
+  limit: Schema.Option(Schema.String),
+  sort: Schema.Option(Schema.String),
+});
+
+/** A list's state as its address holds it. */
+export type ListQuery = typeof ListQuery.Type;
+
+/**
  * Every page of the app.
  *
  * - `TableList`: `/tables/:table`, a table's records. The query keeps the
@@ -24,48 +39,24 @@ export const AppRoute = defineRouteUnion({
   DeadLetters: {},
   Home: {},
   NewRecord: {
-    filter: Schema.Option(Schema.String),
-    limit: Schema.Option(Schema.String),
-    sort: Schema.Option(Schema.String),
+    ...ListQuery.fields,
     table: Schema.String,
   },
   NotFound: { path: Schema.String },
   Record: {
-    filter: Schema.Option(Schema.String),
+    ...ListQuery.fields,
     id: Schema.String,
-    limit: Schema.Option(Schema.String),
-    sort: Schema.Option(Schema.String),
     table: Schema.String,
   },
   SignIn: {},
   TableList: {
-    filter: Schema.Option(Schema.String),
-    limit: Schema.Option(Schema.String),
-    sort: Schema.Option(Schema.String),
+    ...ListQuery.fields,
     table: Schema.String,
   },
 });
 
 /** A page of the app. */
 export type AppRoute = typeof AppRoute.Type;
-
-/** A table's list page. */
-export type TableListRoute = typeof AppRoute.TableList.Type;
-
-/**
- * A list's state as its address holds it: the filter, the sort and the
- * page size, as text (`TableList`), and the list a form was opened from
- * (`Record`, `NewRecord`).
- */
-// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
-export const ListQuery = Schema.Struct({
-  filter: Schema.Option(Schema.String),
-  limit: Schema.Option(Schema.String),
-  sort: Schema.Option(Schema.String),
-});
-
-/** A list's state as its address holds it. */
-export type ListQuery = typeof ListQuery.Type;
 
 /** The table's plain list: no filter, the default sort and page size. */
 export const PLAIN_LIST: ListQuery = {

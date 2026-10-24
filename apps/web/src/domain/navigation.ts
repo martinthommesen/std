@@ -59,12 +59,3 @@ export const navigationGroupsOf = (
     ),
   };
 };
-
-/**
- * Whether a table is one of the platform's.
- *
- * @param table - The table's name.
- * @returns True for a `core` table.
- */
-export const isPlatformTable = (table: string): boolean =>
-  namespaceOf(table) === PLATFORM_NAMESPACE;

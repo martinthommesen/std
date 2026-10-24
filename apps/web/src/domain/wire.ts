@@ -252,13 +252,14 @@ export const resourceBodyOf = (
   fields: readonly WireField[]
 ): Record<string, Schema.Json> =>
   Object.fromEntries(
-    Object.entries(values).map(([name, value]) => [
-      apiNameIn(fields, name),
-      wireValue(
-        fields.find((field) => field.name === name),
-        value
-      ),
-    ])
+    Object.entries(values).map(([name, value]) => {
+      const field = fields.find((candidate) => candidate.name === name);
+
+      return [
+        field?.apiName ?? apiAttributeNameOf(name),
+        wireValue(field, value),
+      ];
+    })
   );
 
 /**

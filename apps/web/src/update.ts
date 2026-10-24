@@ -414,14 +414,20 @@ const endSession: Step = (model) =>
       })
     : { model };
 
-const foldTableListOutMessage = TableListOutMessage.match<Step>({
+const pageNotificationHandlers = {
   // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
-  SawCurrentRevision: ({ revision }) => replaceRevision(revision),
+  SawCurrentRevision: ({ revision }: { readonly revision: SchemaRevision }) =>
+    replaceRevision(revision),
   // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
-  SawRevision: ({ revision }) => noteRevision(revision),
+  SawRevision: ({ revision }: { readonly revision: SchemaRevision }) =>
+    noteRevision(revision),
   // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
   SessionEnded: () => endSession,
-});
+};
+
+const foldTableListOutMessage = TableListOutMessage.match<Step>(
+  pageNotificationHandlers
+);
 
 const foldTableList = (pageId: number) =>
   Update.foldChild({
@@ -583,14 +589,9 @@ const toGotRecordFormMessage =
   (message: RecordFormMessage): Message =>
     Message.GotRecordFormMessage({ message, pageId });
 
-const foldRecordFormOutMessage = RecordFormOutMessage.match<Step>({
-  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
-  SawCurrentRevision: ({ revision }) => replaceRevision(revision),
-  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
-  SawRevision: ({ revision }) => noteRevision(revision),
-  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
-  SessionEnded: () => endSession,
-});
+const foldRecordFormOutMessage = RecordFormOutMessage.match<Step>(
+  pageNotificationHandlers
+);
 
 const foldRecordForm = (pageId: number) =>
   Update.foldChild({

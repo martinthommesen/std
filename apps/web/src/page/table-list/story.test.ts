@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import { listFieldsParameter } from "../../domain/list-columns.ts";
 import type { RecordJson } from "../../domain/record.ts";
+import type { SchemaRevision } from "../../domain/schema-revision.ts";
 import { wireFieldOf } from "../../domain/wire.ts";
 import { fakeStdApi, tmfError } from "../../fake-std-api.ts";
 import {
@@ -142,6 +143,23 @@ const showing = after(opened.model, [
   }),
 ]);
 
+const resolveListPage = (
+  generation: number,
+  page: Parameters<typeof Message.SucceededLoadRecords>[0]["page"],
+  revision: SchemaRevision
+) =>
+  Command.resolveAll(
+    [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+    [
+      LoadRecords,
+      Message.SucceededLoadRecords({
+        generation,
+        maybeRevision: Option.some(revision),
+        page,
+      }),
+    ]
+  );
+
 const listUrl = "/tables/acme.asset";
 
 /** Metadata at revision 3 has arrived; the first page is asked for. */
@@ -152,17 +170,7 @@ const metadataLoaded = [
       table: assetTable,
     })
   ),
-  Command.resolveAll(
-    [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-    [
-      LoadRecords,
-      Message.SucceededLoadRecords({
-        generation: 1,
-        maybeRevision: Option.some(REVISION_3),
-        page: firstPage,
-      }),
-    ]
-  ),
+  resolveListPage(1, firstPage, REVISION_3),
 ] as const;
 
 /**
@@ -204,17 +212,7 @@ describe("list page", () => {
       ),
       expectOutMessage(OutMessage.SawRevision({ revision: REVISION_3 })),
       Command.expectExact(listRequest(), ReplaceListUrl({ url: listUrl })),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 1,
-            maybeRevision: Option.some(REVISION_3),
-            page: firstPage,
-          }),
-        ]
-      ),
+      resolveListPage(1, firstPage, REVISION_3),
       model((page) => {
         expect(recordsOf(page)).toStrictEqual(
           Option.some(firstPage.records.map((entry) => entry.id))
@@ -294,49 +292,19 @@ describe("list page", () => {
         listRequest({ generation: 2, sort: Option.some("cost") }),
         ReplaceListUrl({ url: costUrl(ASSET_FIELDS.cost) })
       ),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 2,
-            maybeRevision: Option.some(REVISION_3),
-            page: firstPage,
-          }),
-        ]
-      ),
+      resolveListPage(2, firstPage, REVISION_3),
       message(Message.ClickedSortColumn({ fieldId: ASSET_FIELDS.cost })),
       Command.expectExact(
         listRequest({ generation: 3, sort: Option.some("-cost") }),
         ReplaceListUrl({ url: costUrl(`-${ASSET_FIELDS.cost}`) })
       ),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 3,
-            maybeRevision: Option.some(REVISION_3),
-            page: firstPage,
-          }),
-        ]
-      ),
+      resolveListPage(3, firstPage, REVISION_3),
       message(Message.ClickedSortColumn({ fieldId: ASSET_FIELDS.cost })),
       Command.expectExact(
         listRequest({ generation: 4 }),
         ReplaceListUrl({ url: listUrl })
       ),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 4,
-            maybeRevision: Option.some(REVISION_3),
-            page: firstPage,
-          }),
-        ]
-      ),
+      resolveListPage(4, firstPage, REVISION_3),
       model((page) => {
         expect(page.query.sort).toStrictEqual([]);
       })
@@ -500,17 +468,7 @@ describe("loading a stored filter", () => {
           url: `${listUrl}?filter=${encodeURIComponent(JSON.stringify(ownerIsBob))}`,
         })
       ),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 3,
-            maybeRevision: Option.some(REVISION_3),
-            page: lastPage,
-          }),
-        ]
-      ),
+      resolveListPage(3, lastPage, REVISION_3),
       model((page) => {
         expect(page.query.maybeCondition).toStrictEqual(
           Option.some(ownerIsBob)
@@ -888,17 +846,7 @@ describe("review fixes", () => {
       model((page) => {
         expect(page.filterLoad).toStrictEqual(FilterLoad.Settled());
       }),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 3,
-            maybeRevision: Option.some(REVISION_3),
-            page: firstPage,
-          }),
-        ]
-      ),
+      resolveListPage(3, firstPage, REVISION_3),
       message(
         Message.SucceededLoadTargetTable({ request: 1, table: userTable })
       ),
@@ -1138,17 +1086,7 @@ describe("review fixes", () => {
         expect(page.address.filter).toStrictEqual(Option.none());
       }),
       Command.expectHas(ReplaceListUrl({ url: listUrl })),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 3,
-            maybeRevision: Option.some(REVISION_4),
-            page: firstPage,
-          }),
-        ]
-      )
+      resolveListPage(3, firstPage, REVISION_4)
     );
   });
 });
@@ -1224,33 +1162,13 @@ describe("saved filters", () => {
           generation: 2,
         })
       ),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 2,
-            maybeRevision: Option.some(REVISION_3),
-            page: lastPage,
-          }),
-        ]
-      ),
+      resolveListPage(2, lastPage, REVISION_3),
       message(Message.SelectedSavedFilter({ savedFilterId: "" })),
       model((page) => {
         expect(page.query.maybeCondition).toStrictEqual(Option.none());
         expect(appliedSavedFilter(page)).toStrictEqual(Option.none());
       }),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 3,
-            maybeRevision: Option.some(REVISION_3),
-            page: firstPage,
-          }),
-        ]
-      )
+      resolveListPage(3, firstPage, REVISION_3)
     );
   });
 
@@ -1435,17 +1353,7 @@ describe("positions, sorts and addresses after failures and refreshes", () => {
         }),
         ReplaceListUrl({ url: listUrl })
       ),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 5,
-            maybeRevision: Option.some(REVISION_4),
-            page: firstPage,
-          }),
-        ]
-      )
+      resolveListPage(5, firstPage, REVISION_4)
     );
   });
 
@@ -1471,17 +1379,7 @@ describe("positions, sorts and addresses after failures and refreshes", () => {
         }),
         ReplaceListUrl({ url: listUrl })
       ),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 4,
-            maybeRevision: Option.some(REVISION_4),
-            page: firstPage,
-          }),
-        ]
-      )
+      resolveListPage(4, firstPage, REVISION_4)
     );
   });
 
@@ -1554,17 +1452,7 @@ describe("positions, sorts and addresses after failures and refreshes", () => {
           url: `${listUrl}?filter=${encodeURIComponent(JSON.stringify(ownerIsBob))}`,
         })
       ),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 6,
-            maybeRevision: Option.some(REVISION_4),
-            page: firstPage,
-          }),
-        ]
-      )
+      resolveListPage(6, firstPage, REVISION_4)
     );
   });
 
@@ -1608,17 +1496,7 @@ describe("positions, sorts and addresses after failures and refreshes", () => {
         }),
         ReplaceListUrl({ url: listUrl })
       ),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 3,
-            maybeRevision: Option.some(REVISION_4),
-            page: firstPage,
-          }),
-        ]
-      )
+      resolveListPage(3, firstPage, REVISION_4)
     );
   });
 
@@ -1671,17 +1549,7 @@ describe("positions, sorts and addresses after failures and refreshes", () => {
         }),
         ReplaceListUrl({ url: listUrl })
       ),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 4,
-            maybeRevision: Option.some(REVISION_4),
-            page: firstPage,
-          }),
-        ]
-      )
+      resolveListPage(4, firstPage, REVISION_4)
     );
   });
 
@@ -1706,17 +1574,7 @@ describe("positions, sorts and addresses after failures and refreshes", () => {
         })
       ),
       Command.expectHas(listRequest({ fields: "id" })),
-      Command.resolveAll(
-        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
-        [
-          LoadRecords,
-          Message.SucceededLoadRecords({
-            generation: 1,
-            maybeRevision: Option.some(REVISION_3),
-            page: firstPage,
-          }),
-        ]
-      )
+      resolveListPage(1, firstPage, REVISION_3)
     );
   });
 });

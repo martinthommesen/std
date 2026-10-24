@@ -30,7 +30,7 @@ import { modifyFields } from "foldkit/struct";
 
 import { fieldShowOf } from "../../domain/form-fields.ts";
 import { FieldInput } from "../../domain/form-input.ts";
-import { listColumns, listFieldsParameter } from "../../domain/list-columns.ts";
+import { listColumns } from "../../domain/list-columns.ts";
 import type { MetaField, MetaTable } from "../../domain/metadata.ts";
 import type { HistoryEntry } from "../../domain/record.ts";
 import {
@@ -642,7 +642,6 @@ const relatedPageRequest = (
           LoadRelatedRecords({
             columns: listColumns(meta.table).map(wireFieldOf),
             cursor: Option.flatten(Option.fromNullishOr(cursors.at(-1))),
-            fields: listFieldsParameter(meta.table),
             filter: relatedFilterOf(list, meta.table, recordId),
             generation,
             listId: list.id,
@@ -1301,13 +1300,13 @@ const retryRefusedHistory: Step = (model) =>
  *
  * @param model - The page.
  * @param fieldId - The field.
- * @param toInput - The new input, from the field and its current input.
+ * @param toInput - The new input, from its current input.
  * @returns The page.
  */
 const editField = (
   model: Model,
   fieldId: string,
-  toInput: (field: MetaField, current: FieldInput) => FieldInput
+  toInput: (current: FieldInput) => FieldInput
 ): PlainReturn =>
   Option.match(
     Option.fromNullishOr(
@@ -1317,7 +1316,7 @@ const editField = (
       onNone: () => ({ model }),
       onSome: (field) =>
         requestFormState(
-          recordFieldEdit(model, fieldId, toInput(field, inputOf(model, field)))
+          recordFieldEdit(model, fieldId, toInput(inputOf(model, field)))
         ),
     }
   );
@@ -1348,7 +1347,7 @@ const timeWith = (maybeDate: Option.Option<string>, time: string): string => {
 
 const withDate =
   (maybeDate: Option.Option<string>) =>
-  (_field: MetaField, current: FieldInput): FieldInput =>
+  (current: FieldInput): FieldInput =>
     FieldInput.guards.Instant(current)
       ? FieldInput.Instant({
           maybeDate,
@@ -1403,7 +1402,7 @@ const pickedItem = (
 const selectTarget =
   (fieldId: string, id: string): Step =>
   (model) =>
-    editField(model, fieldId, (_field, current) => {
+    editField(model, fieldId, (current) => {
       const isSelected =
         FieldInput.guards.Reference(current) &&
         Option.contains(current.maybeId, id);
@@ -2240,13 +2239,9 @@ const receiveMetadata = (
 const failMetadata = (model: Model, error: MetaError): UpdateReturn => ({
   model: modifyFields(model, {
     metadata: (metadata) =>
-      Option.match(AsyncData.getData(metadata), {
-        onNone: () => Metadata.Failure({ error }),
-        onSome: (data) =>
-          error === "UnknownTable"
-            ? Metadata.Failure({ error })
-            : Metadata.Stale({ data, error }),
-      }),
+      error === "UnknownTable"
+        ? Metadata.Failure({ error })
+        : AsyncData.settle(metadata, Result.fail(error)),
   }),
 });
 
@@ -2352,13 +2347,9 @@ const failRecord = (
 
   const refused = modifyFields(model, {
     record: (record) =>
-      Option.match(AsyncData.getData(record), {
-        onNone: () => StoredRecord.Failure({ error }),
-        onSome: (data) =>
-          error === "NotFound"
-            ? StoredRecord.Failure({ error })
-            : StoredRecord.Stale({ data, error }),
-      }),
+      error === "NotFound"
+        ? StoredRecord.Failure({ error })
+        : AsyncData.settle(record, Result.fail(error)),
   });
 
   if (error !== "SchemaChanged") {
@@ -3208,7 +3199,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       editField(model, fieldId, () => FieldInput.Text({ text })),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     UpdatedTime: ({ fieldId, time }) =>
-      editField(model, fieldId, (_field, current) =>
+      editField(model, fieldId, (current) =>
         FieldInput.Instant({
           maybeDate: FieldInput.guards.Instant(current)
             ? current.maybeDate

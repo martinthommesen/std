@@ -846,23 +846,13 @@ export const LoadRelatedRecords = Command.define("LoadRelatedRecords", {
   args: {
     columns: Schema.Array(WireField),
     cursor: Schema.Option(Schema.String),
-    fields: Schema.String,
     filter: Schema.String,
     generation: Schema.Int,
     listId: Schema.Int,
     revision: SchemaRevision,
     table: Schema.String,
   },
-  execute: ({
-    columns,
-    cursor,
-    fields,
-    filter,
-    generation,
-    listId,
-    revision,
-    table,
-  }) =>
+  execute: ({ columns, cursor, filter, generation, listId, revision, table }) =>
     Effect.gen(function* loadRelatedRecords() {
       const client = yield* StdApi;
 
@@ -872,7 +862,7 @@ export const LoadRelatedRecords = Command.define("LoadRelatedRecords", {
           query: {
             condition: filter,
             count: "true",
-            fields,
+            fields: fieldsParameterOf(columns),
             limit: String(RELATED_PAGE_SIZE),
             ...optionalParameter("after", cursor),
           },

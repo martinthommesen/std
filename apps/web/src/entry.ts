@@ -1,5 +1,6 @@
 import "./styles.css";
-import { Runtime } from "foldkit";
+import { Layer } from "effect";
+import { Http, Runtime } from "foldkit";
 
 import { init, subscriptions } from "./main.ts";
 import { Message } from "./message.ts";
@@ -18,7 +19,7 @@ const application = Runtime.makeApplication({
   container: document.querySelector("#root") ?? document.body,
   devTools: { Message },
   init,
-  resources: StdApi.layer,
+  resources: StdApi.layer.pipe(Layer.provide(Http.layer)),
   routing: {
     onUrlChange: (url) => Message.ChangedUrl({ url }),
     onUrlRequest: (request) => Message.ClickedLink({ request }),

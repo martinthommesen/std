@@ -26,7 +26,6 @@ import { inject } from "vitest";
 import {
   API_PREFIX,
   uiAndApi,
-  apiCall,
   assertHiddenValuesAbsent,
   bearerToken,
   captureApiBodies,
@@ -42,6 +41,7 @@ import {
   valuesHiddenFrom,
 } from "./app.ts";
 import type { ConditionStep, Visitor, ListScenario } from "./app.ts";
+import { addLocalFields, adminCall } from "./shown.ts";
 import { launchBrowser, stdServe } from "./support.ts";
 
 const ASSETS = "acme.asset";
@@ -72,30 +72,6 @@ const HIDDEN_PURCHASE_DATE = "2024-02-29";
 const S_PURCHASE_DATE = "2023-03-10";
 
 const local = { owner: { layer: "local" }, protected: false } as const;
-
-/**
- * Sends a JSON request to the API with a bearer token.
- *
- * @param origin - The server.
- * @param token - The session token.
- * @param path - The path under `API_PREFIX`.
- * @param body - The JSON body.
- * @returns The response's text.
- */
-const post = async (
-  origin: string,
-  token: string,
-  path: string,
-  body: JsonValue
-): Promise<string> => {
-  const response = await apiCall(origin, token, { body, method: "POST", path });
-
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`POST ${path}: ${response.status} ${response.text}`);
-  }
-
-  return response.text;
-};
 
 /**
  * A reference's value in a write body: an EntityRef, or null.
@@ -132,44 +108,32 @@ const dockOf = (number: number, fixture: AcmeData): string | null => {
 const seed = async (origin: string, fixture: AcmeData): Promise<void> => {
   const token = await bearerToken(origin, ADA);
 
-  const tierId = randomUUID();
+  const [tierId] = await addLocalFields(origin, token, ACME.asset, [
+    ["tier", "Tier", { kind: "choice" }, null],
+  ]);
 
-  await post(origin, token, "/applyChangeSet", {
-    operations: [
-      {
+  if (tierId === undefined) {
+    throw new Error("tier field was not created");
+  }
+
+  await adminCall(origin, token, {
+    body: {
+      operations: ["gold", "silver", "bronze", "legacy"].map((key, index) => ({
         definition: {
           ...local,
-          classId: ACME.asset,
-          default: null,
-          helpText: null,
-          id: tierId,
-          kind: "field",
-          label: "Tier",
-          name: "tier",
-          numberPrefix: null,
-          readOnly: false,
-          required: false,
-          type: { kind: "choice" },
+          fieldId: tierId,
+          hidden: key === "legacy",
+          id: randomUUID(),
+          key,
+          kind: "choice",
+          label: `${key[0]?.toUpperCase() ?? ""}${key.slice(1)}`,
+          order: index + 1,
         },
-        op: "addField",
-      },
-    ],
-  });
-
-  await post(origin, token, "/applyChangeSet", {
-    operations: ["gold", "silver", "bronze", "legacy"].map((key, index) => ({
-      definition: {
-        ...local,
-        fieldId: tierId,
-        hidden: key === "legacy",
-        id: randomUUID(),
-        key,
-        kind: "choice",
-        label: `${key[0]?.toUpperCase() ?? ""}${key.slice(1)}`,
-        order: index + 1,
-      },
-      op: "createChoice",
-    })),
+        op: "createChoice",
+      })),
+    },
+    method: "POST",
+    path: "/applyChangeSet",
   });
 
   const bobAges = [5, 20, 45, 80, 120, 200, 300, 380, 420, 500, 700, 1000];
@@ -179,14 +143,18 @@ const seed = async (origin: string, fixture: AcmeData): Promise<void> => {
     bobAges.map(async (age, index) => {
       const number = index + 1;
 
-      await post(origin, token, `/${collectionOf(ASSETS)}`, {
-        cost: number % 3 === 0 ? "2600" : String(100 * number),
-        dockedTo: refTo(dockOf(number, fixture)),
-        name: `B${String(number).padStart(2, "0")}`,
-        owner: { id: fixture.bob.id },
-        purchasedOn: number === 4 ? HIDDEN_PURCHASE_DATE : daysAgo(age),
-        status: number % 4 === 0 ? "lost" : "in_use",
-        tier: tiers[number % 4] ?? null,
+      await adminCall(origin, token, {
+        body: {
+          cost: number % 3 === 0 ? "2600" : String(100 * number),
+          dockedTo: refTo(dockOf(number, fixture)),
+          name: `B${String(number).padStart(2, "0")}`,
+          owner: { id: fixture.bob.id },
+          purchasedOn: number === 4 ? HIDDEN_PURCHASE_DATE : daysAgo(age),
+          status: number % 4 === 0 ? "lost" : "in_use",
+          tier: tiers[number % 4] ?? null,
+        },
+        method: "POST",
+        path: `/${collectionOf(ASSETS)}`,
       });
     })
   );
@@ -197,14 +165,18 @@ const seed = async (origin: string, fixture: AcmeData): Promise<void> => {
     aliceAges.map(async (age, index) => {
       const number = index + 1;
 
-      await post(origin, token, `/${collectionOf(ASSETS)}`, {
-        cost: String(250 * number),
-        dockedTo: refTo(number % 2 === 0 ? fixture.records.AM : null),
-        name: `A${String(number).padStart(2, "0")}`,
-        owner: { id: fixture.alice.id },
-        purchasedOn: daysAgo(age),
-        status: number % 3 === 0 ? "lost" : "in_use",
-        tier: tiers[(number + 1) % 4] ?? null,
+      await adminCall(origin, token, {
+        body: {
+          cost: String(250 * number),
+          dockedTo: refTo(number % 2 === 0 ? fixture.records.AM : null),
+          name: `A${String(number).padStart(2, "0")}`,
+          owner: { id: fixture.alice.id },
+          purchasedOn: daysAgo(age),
+          status: number % 3 === 0 ? "lost" : "in_use",
+          tier: tiers[(number + 1) % 4] ?? null,
+        },
+        method: "POST",
+        path: `/${collectionOf(ASSETS)}`,
       });
     })
   );
@@ -539,63 +511,71 @@ const idOnlyTable = async (origin: string): Promise<readonly string[]> => {
   const namespaceId = randomUUID();
   const classId = randomUUID();
 
-  await post(origin, token, "/applyChangeSet", {
-    operations: [
-      {
-        definition: {
-          ...local,
-          extensible: false,
-          helpText: null,
-          id: namespaceId,
-          kind: "namespace",
-          label: "Site",
-          name: "site",
-          storage: "standard",
+  await adminCall(origin, token, {
+    body: {
+      operations: [
+        {
+          definition: {
+            ...local,
+            extensible: false,
+            helpText: null,
+            id: namespaceId,
+            kind: "namespace",
+            label: "Site",
+            name: "site",
+            storage: "standard",
+          },
+          op: "createNamespace",
         },
-        op: "createNamespace",
-      },
-      {
-        definition: {
-          ...local,
-          displayFieldId: null,
-          extensible: false,
-          helpText: null,
-          id: classId,
-          kind: "class",
-          label: "Blobs",
-          name: "blobs",
-          namespaceId,
-          parentId: null,
-          storage: "standard",
+        {
+          definition: {
+            ...local,
+            displayFieldId: null,
+            extensible: false,
+            helpText: null,
+            id: classId,
+            kind: "class",
+            label: "Blobs",
+            name: "blobs",
+            namespaceId,
+            parentId: null,
+            storage: "standard",
+          },
+          op: "createClass",
         },
-        op: "createClass",
-      },
-      {
-        definition: {
-          ...local,
-          classId,
-          default: null,
-          helpText: null,
-          id: randomUUID(),
-          kind: "field",
-          label: "Payload",
-          name: "payload",
-          numberPrefix: null,
-          readOnly: false,
-          required: false,
-          type: { kind: "json" },
+        {
+          definition: {
+            ...local,
+            classId,
+            default: null,
+            helpText: null,
+            id: randomUUID(),
+            kind: "field",
+            label: "Payload",
+            name: "payload",
+            numberPrefix: null,
+            readOnly: false,
+            required: false,
+            type: { kind: "json" },
+          },
+          op: "addField",
         },
-        op: "addField",
-      },
-    ],
+      ],
+    },
+    method: "POST",
+    path: "/applyChangeSet",
   });
 
   const created = await Promise.all(
     [1, 2, 3].map(
       async (n) =>
         decodeCreated(
-          await post(origin, token, `/${collectionOf(BLOBS)}`, {
-            payload: { n },
+          await adminCall(origin, token, {
+            body: {
+              payload: { n },
+            },
+            method: "POST",
+            path: `/${collectionOf(BLOBS)}`,
           })
         ).id
     )

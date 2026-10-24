@@ -20,7 +20,7 @@ import {
   HelpdeskFixture,
   helpdeskTestLayer,
 } from "@std/testing/helpdesk-fixture";
-import type { HelpdeskData, HelpdeskUser } from "@std/testing/helpdesk-fixture";
+import type { HelpdeskData } from "@std/testing/helpdesk-fixture";
 import { TestDatabase } from "@std/testing/test-database";
 import { Effect, Schema } from "effect";
 import type { Browser, Page } from "playwright";
@@ -49,6 +49,7 @@ import {
   sentAttributes,
   setPageSize,
   signIn,
+  signedInPage,
 } from "./app.ts";
 import { launchBrowser, stdServe } from "./support.ts";
 
@@ -65,27 +66,6 @@ const ADMIN_TABLES = [
 ] as const;
 
 const INCIDENTS = "helpdesk.incident";
-
-/**
- * A signed-in page of its own browser context.
- *
- * @param browser - The browser.
- * @param origin - The server.
- * @param user - Who signs in.
- * @returns The page.
- */
-const signedInPage = async (
-  browser: Browser,
-  origin: string,
-  user: HelpdeskUser
-): Promise<Page> => {
-  const context = await browser.newContext();
-  const page = await context.newPage();
-
-  await signIn(page, origin, user);
-
-  return page;
-};
 
 const decodeRevision = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ schemaRevision: Schema.Int }))

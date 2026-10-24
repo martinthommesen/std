@@ -1,14 +1,3 @@
-/**
- * A table's list page (plan Step 2, workstream 2B): the generic list over
- * the table's metadata, with sorting, keyset paging, the count, restricted
- * fields, and the filter builder.
- *
- * Revisions (Contracts 6.2, 6.4): the page keeps the revision its metadata
- * was built at and sends it with every list request. A response stating a
- * newer revision refreshes the metadata in the background; a
- * `SchemaChanged` refusal refreshes it and asks again, since a read is
- * safe to repeat; the app hears of every revision through `SawRevision`.
- */
 import { ExprSchema } from "@std/conditions/ast";
 import type { Expr } from "@std/conditions/ast";
 import type { MetaSavedFilter } from "@std/definitions/table-metadata";
@@ -16,7 +5,7 @@ import { Equal, Option, Record, Result, Schema, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
-import { listColumns, listFieldsParameter } from "../../domain/list-columns.ts";
+import { listColumns } from "../../domain/list-columns.ts";
 import {
   addressOf,
   conditionOf,
@@ -33,7 +22,18 @@ import type { MetaTable } from "../../domain/metadata.ts";
 import { isNewerRevision } from "../../domain/schema-revision.ts";
 import type { SchemaRevision } from "../../domain/schema-revision.ts";
 import type { TablesByName } from "../../domain/table-view.ts";
-import { wireFieldOf } from "../../domain/wire.ts";
+/**
+ * A table's list page (plan Step 2, workstream 2B): the generic list over
+ * the table's metadata, with sorting, keyset paging, the count, restricted
+ * fields, and the filter builder.
+ *
+ * Revisions (Contracts 6.2, 6.4): the page keeps the revision its metadata
+ * was built at and sends it with every list request. A response stating a
+ * newer revision refreshes the metadata in the background; a
+ * `SchemaChanged` refusal refreshes it and asks again, since a read is
+ * safe to repeat; the app hears of every revision through `SawRevision`.
+ */
+import { fieldsParameterOf, wireFieldOf } from "../../domain/wire.ts";
 import { followedReferences } from "../../filter-builder/condition.ts";
 import type { ConditionScope } from "../../filter-builder/condition.ts";
 import {
@@ -181,10 +181,7 @@ export const scopeOf = (model: Model): Option.Option<ConditionScope> =>
   }));
 
 const reloading = (records: Records): Records =>
-  Option.match(AsyncData.getData(records), {
-    onNone: () => Records.Loading(),
-    onSome: (data) => Records.Refreshing({ data }),
-  });
+  Option.getOrElse(AsyncData.revalidateOrLoad(records), () => records);
 
 const DROPPED_NOTICE =
   "The filter named a field that is no longer available, so it was removed.";
@@ -269,15 +266,16 @@ const sendRequest =
       onNone: () => ({ model }),
       onSome: (meta) => {
         const generation = model.generation + 1;
+        const columns = listColumns(meta.table).map(wireFieldOf);
 
         return {
           commands: [
             LoadRecords({
-              columns: listColumns(meta.table).map(wireFieldOf),
+              columns,
               cursor: Option.flatten(
                 Option.fromNullishOr(requestedCursors(model).at(-1))
               ),
-              fields: listFieldsParameter(meta.table),
+              fields: fieldsParameterOf(columns),
               filter: maybeFilter,
               generation,
               limit: model.query.pageSize,
