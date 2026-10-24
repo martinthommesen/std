@@ -13,9 +13,10 @@
  *
  * Writes recognize the labels case-insensitively; filters compare the
  * rendered text exactly (decision 0025, D4): a canonical label (`Minor`)
- * selects the records whose numeric key renders it, with no free-text
- * label, and any other value (`minor` included) selects the stored label
- * exactly. A sort orders by the rendered text under the deployment list order.
+ * selects an exact stored override as well as records whose numeric key
+ * renders it with no override. Any other value (`minor` included) selects
+ * the stored label exactly. A sort orders by the rendered text under the
+ * deployment list order.
  */
 import type { Expr } from "@std/conditions/ast";
 import { isJsonString } from "@std/values/json-value";
@@ -149,14 +150,30 @@ const filter =
       const index = choice.labels.indexOf(value);
       const key = index === -1 ? undefined : String(index + 1);
 
+      const stored: Expr = {
+        left: { path: [choice.label] },
+        op: "eq",
+        right: { value },
+      };
+
       return key === undefined
-        ? { left: { path: [choice.label] }, op: "eq", right: { value } }
+        ? stored
         : {
             args: [
-              { left: { path: [choice.key] }, op: "eq", right: { value: key } },
-              { arg: { path: [choice.label] }, op: "empty" },
+              stored,
+              {
+                args: [
+                  {
+                    left: { path: [choice.key] },
+                    op: "eq",
+                    right: { value: key },
+                  },
+                  { arg: { path: [choice.label] }, op: "empty" },
+                ],
+                op: "and",
+              },
             ],
-            op: "and",
+            op: "or",
           };
     });
 

@@ -12,7 +12,14 @@ import { runUpgrade } from "../src/config/upgrade.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
 import { asObject, textOf, withQuery } from "./api-support.ts";
 import { HELPDESK_V4, itilV3Layer, itilLayer } from "./itil-support.ts";
-import { change } from "./schema-support.ts";
+import {
+  addField,
+  change,
+  createClass,
+  ensureSite,
+  insertRecords,
+  values,
+} from "./schema-support.ts";
 import {
   arrayOf,
   bodyOf,
@@ -282,5 +289,481 @@ describe("text-policy-upgrade", () => {
         assert.include(original[0]?.image ?? "", "é");
         assert.notInclude(original[0]?.image ?? "", "e\u0301");
       }).pipe(Effect.provide(itilV3Layer), TestClock.withLive)
+  );
+});
+
+describe("text-policy-defaults", () => {
+  it.effect(
+    "updates converted SQL defaults in both policy directions without changing stored rows",
+    () =>
+      Effect.gen(function* policyDefaults() {
+        const admin = yield* tmf621As("admin");
+        yield* ensureSite;
+        const table = createClass("policy_defaults");
+
+        const short = addField(
+          table.id,
+          "short",
+          { kind: "text" },
+          { default: " e\u0301 " }
+        );
+
+        const long = addField(
+          table.id,
+          "long",
+          { kind: "longText" },
+          { default: " e\u0301\r\nbody\r " }
+        );
+
+        const stable = addField(
+          table.id,
+          "stable",
+          { kind: "text" },
+          { default: "same" }
+        );
+
+        const absent = addField(table.id, "absent", { kind: "text" });
+        yield* change([table.op, short.op, long.op, stable.op, absent.op]);
+        const path = "/api/v1/sitePolicyDefaults";
+        const original = yield* admin.post(path, {});
+        assert.strictEqual(original.status, 201, original.text);
+        assert.strictEqual(bodyOf(original).short, "é");
+        assert.strictEqual(bodyOf(original).long, " é\nbody\n ");
+        assert.strictEqual((yield* runDoctor()).exitCode, 0);
+
+        for (const [version, textPolicy, expectedShort, expectedLong] of [
+          [1, "freeText", " e\u0301 ", " e\u0301\r\nbody\r "],
+          [2, "normalized", "é", " é\nbody\n "],
+        ] as const) {
+          const recorded = yield* values(
+            "SELECT to_jsonb(t)::text AS value FROM site.policy_defaults t ORDER BY id"
+          );
+
+          const changed = yield* change([
+            {
+              changes: { type: { kind: "text", textPolicy } },
+              id: short.id,
+              op: "update",
+              version,
+            },
+            {
+              changes: { type: { kind: "longText", textPolicy } },
+              id: long.id,
+              op: "update",
+              version,
+            },
+            {
+              changes: { type: { kind: "text", textPolicy } },
+              id: stable.id,
+              op: "update",
+              version,
+            },
+            {
+              changes: { type: { kind: "text", textPolicy } },
+              id: absent.id,
+              op: "update",
+              version,
+            },
+          ]);
+
+          assert.strictEqual(changed.state, "completed");
+          assert.lengthOf(changed.statements, 2);
+          assert.isTrue(
+            changed.statements.every((statement) =>
+              statement.includes("SET DEFAULT")
+            )
+          );
+          assert.deepStrictEqual(
+            yield* values(
+              "SELECT to_jsonb(t)::text AS value FROM site.policy_defaults t ORDER BY id"
+            ),
+            recorded
+          );
+          const doctor = yield* runDoctor();
+          assert.strictEqual(
+            doctor.exitCode,
+            0,
+            JSON.stringify(doctor.findings)
+          );
+
+          const [sqlId] = yield* insertRecords(
+            ['"site"."policy_defaults"'],
+            table.id,
+            1
+          );
+
+          const inserted = yield* admin.get(`${path}/${sqlId ?? ""}`);
+          assert.strictEqual(inserted.status, 200, inserted.text);
+          assert.strictEqual(bodyOf(inserted).short, expectedShort);
+          assert.strictEqual(bodyOf(inserted).long, expectedLong);
+          assert.strictEqual(bodyOf(inserted).stable, "same");
+          assert.isUndefined(bodyOf(inserted).absent);
+          const pipeline = yield* admin.post(path, {});
+          assert.strictEqual(pipeline.status, 201, pipeline.text);
+          assert.strictEqual(bodyOf(pipeline).short, expectedShort);
+          assert.strictEqual(bodyOf(pipeline).long, expectedLong);
+
+          const untouched = yield* admin.get(
+            `${path}/${textOf(bodyOf(original).id)}`
+          );
+
+          assert.strictEqual(etagOf(untouched), etagOf(original));
+          assert.strictEqual(bodyOf(untouched).short, "é");
+        }
+
+        const equivalent = yield* change([
+          {
+            changes: { default: " same " },
+            id: stable.id,
+            op: "update",
+            version: 3,
+          },
+        ]);
+
+        assert.deepStrictEqual(equivalent.statements, []);
+        assert.strictEqual((yield* runDoctor()).exitCode, 0);
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+});
+
+describe("text-policy-mandatory", () => {
+  it.effect(
+    "rejects blank non-null mandatory overrides through generic create/update and mapped writes",
+    () =>
+      Effect.gen(function* mandatoryOverrides() {
+        const admin = yield* tmf621As("admin");
+
+        for (const [collection, classType] of [
+          ["helpdeskTicket", "ticket"],
+          ["helpdeskIncident", "incident"],
+          ["helpdeskProblem", "problem"],
+        ]) {
+          const path = `/api/v1/${collection}`;
+
+          const created = yield* admin.post(path, {
+            description: "Retained required content",
+            shortDescription: "Mandatory override test",
+          });
+
+          assert.strictEqual(created.status, 201, created.text);
+          const record = `${path}/${textOf(bodyOf(created).id)}`;
+
+          for (const field of ["ticketType", "severityLabel"]) {
+            for (const blank of ["", " \t\r\n\u00A0\uFEFF"]) {
+              const invalidCreate = yield* admin.post(path, {
+                description: "Retained required content",
+                shortDescription: "Invalid override",
+                [field]: blank,
+              });
+
+              assert.strictEqual(invalidCreate.status, 422, invalidCreate.text);
+              assert.strictEqual(
+                bodyOf(invalidCreate).code,
+                "ValidationFailed"
+              );
+
+              const invalidUpdate = yield* admin.patch(
+                record,
+                { [field]: blank },
+                { ifMatch: etagOf(created) }
+              );
+
+              assert.strictEqual(invalidUpdate.status, 422, invalidUpdate.text);
+              assert.strictEqual(
+                bodyOf(invalidUpdate).code,
+                "ValidationFailed"
+              );
+              const after = yield* admin.get(record);
+              assert.strictEqual(etagOf(after), etagOf(created));
+              assert.isUndefined(bodyOf(after)[field]);
+            }
+          }
+
+          const raw = " \tCafe\u0301\r\ncustom\r ";
+
+          const accepted = yield* admin.patch(
+            record,
+            { severityLabel: raw, ticketType: raw },
+            { ifMatch: etagOf(created) }
+          );
+
+          assert.strictEqual(accepted.status, 200, accepted.text);
+          assert.strictEqual(bodyOf(accepted).ticketType, raw);
+          assert.strictEqual(bodyOf(accepted).severityLabel, raw);
+
+          const mapped = yield* admin.get(
+            `${TICKETS}/${textOf(bodyOf(created).id)}`
+          );
+
+          assert.strictEqual(bodyOf(mapped).severity, raw);
+          assert.strictEqual(
+            bodyOf(mapped).ticketType,
+            collection === "helpdeskTicket" ? raw : classType
+          );
+
+          const cleared = yield* admin.patch(
+            record,
+            { severityLabel: null, ticketType: null },
+            { ifMatch: etagOf(accepted) }
+          );
+
+          assert.strictEqual(cleared.status, 200, cleared.text);
+
+          const fallback = yield* admin.get(
+            `${TICKETS}/${textOf(bodyOf(created).id)}`
+          );
+
+          assert.strictEqual(bodyOf(fallback).ticketType, classType);
+          assert.strictEqual(bodyOf(fallback).severity, "Minor");
+
+          for (const value of [null, raw]) {
+            const acceptedCreate = yield* admin.post(path, {
+              description: "Accepted override create",
+              severityLabel: value,
+              shortDescription: "Accepted override",
+              ticketType: value,
+            });
+
+            assert.strictEqual(acceptedCreate.status, 201, acceptedCreate.text);
+
+            const mappedCreate = yield* admin.get(
+              `${TICKETS}/${textOf(bodyOf(acceptedCreate).id)}`
+            );
+
+            assert.strictEqual(bodyOf(mappedCreate).severity, value ?? "Minor");
+            assert.strictEqual(
+              bodyOf(mappedCreate).ticketType,
+              collection === "helpdeskTicket" ? (value ?? "ticket") : classType
+            );
+          }
+        }
+
+        const created = yield* admin.post(
+          TICKETS,
+          ticketBody({ ticketType: "open" })
+        );
+
+        assert.strictEqual(created.status, 201, created.text);
+
+        const rawType = " \tTicket\u0301\r\ncustom\r ";
+
+        const rawCreated = yield* admin.post(
+          TICKETS,
+          ticketBody({ ticketType: rawType })
+        );
+
+        assert.strictEqual(rawCreated.status, 201, rawCreated.text);
+        assert.strictEqual(bodyOf(rawCreated).ticketType, rawType);
+
+        const rawUpdated = yield* admin.patch(
+          `${TICKETS}/${textOf(bodyOf(created).id)}`,
+          { ticketType: rawType }
+        );
+
+        assert.strictEqual(rawUpdated.status, 200, rawUpdated.text);
+        assert.strictEqual(bodyOf(rawUpdated).ticketType, rawType);
+
+        for (const field of ["ticketType", "severity"]) {
+          for (const blank of ["", " \t\r\n\u00A0\uFEFF", null]) {
+            const invalidCreate = yield* admin.post(
+              TICKETS,
+              ticketBody({ [field]: blank })
+            );
+
+            assert.strictEqual(invalidCreate.status, 400, invalidCreate.text);
+
+            const invalidUpdate = yield* admin.patch(
+              `${TICKETS}/${textOf(bodyOf(created).id)}`,
+              { [field]: blank }
+            );
+
+            assert.strictEqual(invalidUpdate.status, 400, invalidUpdate.text);
+          }
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "filters and sorts the exact labels rendered after generic and mapped writes, retaining optional priority blanks",
+    () =>
+      Effect.gen(function* projectedLabels() {
+        const admin = yield* tmf621As("admin");
+        const tag = "Projected override test";
+
+        const created = yield* admin.post(
+          TICKETS,
+          ticketBody({ description: tag })
+        );
+
+        assert.strictEqual(created.status, 201, created.text);
+        const id = textOf(bodyOf(created).id);
+        const genericPath = `/api/v1/helpdeskIncident/${id}`;
+        const mappedPath = `${TICKETS}/${id}`;
+
+        const before = yield* admin.get(genericPath);
+
+        const blankSeverity = yield* admin.patch(
+          genericPath,
+          { severityLabel: " \t\r\n" },
+          { ifMatch: etagOf(before) }
+        );
+
+        assert.strictEqual(blankSeverity.status, 422, blankSeverity.text);
+        const unchanged = yield* admin.get(mappedPath);
+        assert.strictEqual(etagOf(unchanged), etagOf(before));
+        assert.strictEqual(bodyOf(unchanged).severity, "Major");
+
+        const fallbackFilter = yield* admin.get(
+          withQuery(TICKETS, [
+            ["description", tag],
+            ["severity", "Major"],
+          ])
+        );
+
+        assert.strictEqual(fallbackFilter.status, 200, fallbackFilter.text);
+        assert.deepStrictEqual(
+          itemsOf(fallbackFilter).map((item) => item.id),
+          [id]
+        );
+
+        for (const [field, attribute, fallback, labels] of [
+          [
+            "severityLabel",
+            "severity",
+            "Major",
+            [null, "Major", "Minor", "minor", " Seve\u0301rity\r\n "],
+          ],
+          [
+            "priorityLabel",
+            "priority",
+            "Low",
+            [
+              null,
+              "Low",
+              "High",
+              "high",
+              "",
+              " \t\r\n\u00A0\uFEFF",
+              " Prio\u0301rity\r\n ",
+            ],
+          ],
+        ] as const) {
+          for (const value of labels) {
+            const current = yield* admin.get(genericPath);
+
+            const changed = yield* admin.patch(
+              genericPath,
+              { [field]: value },
+              { ifMatch: etagOf(current) }
+            );
+
+            assert.strictEqual(changed.status, 200, changed.text);
+            const expected = value ?? fallback;
+            const rendered = yield* admin.get(mappedPath);
+            assert.strictEqual(bodyOf(rendered)[attribute], expected);
+
+            // Empty URL values are refused by the public query grammar.
+            if (expected !== "") {
+              const selected = yield* admin.get(
+                withQuery(TICKETS, [
+                  ["description", tag],
+                  [attribute, expected],
+                ])
+              );
+
+              assert.strictEqual(selected.status, 200, selected.text);
+              assert.deepStrictEqual(
+                itemsOf(selected).map((item) => item.id),
+                [id]
+              );
+            }
+
+            for (const negative of [
+              "Critical",
+              expected === fallback ? "Other" : fallback,
+            ]) {
+              const selected = yield* admin.get(
+                withQuery(TICKETS, [
+                  ["description", tag],
+                  [attribute, negative],
+                ])
+              );
+
+              assert.strictEqual(selected.status, 200, selected.text);
+              assert.lengthOf(itemsOf(selected), 0);
+            }
+          }
+        }
+
+        const peer = yield* admin.post(
+          TICKETS,
+          ticketBody({
+            description: tag,
+            priority: "High",
+            severity: "Critical",
+          })
+        );
+
+        assert.strictEqual(peer.status, 201, peer.text);
+
+        const reset = yield* admin.patch(mappedPath, {
+          priority: "Planning",
+          severity: "Major",
+        });
+
+        assert.strictEqual(reset.status, 200, reset.text);
+
+        for (const [sort, expected] of [
+          ["severity", ["Critical", "Major"]],
+          ["-severity", ["Major", "Critical"]],
+          ["priority", ["High", "Planning"]],
+          ["-priority", ["Planning", "High"]],
+        ] as const) {
+          const ordered = yield* admin.get(
+            withQuery(TICKETS, [
+              ["description", tag],
+              ["sort", sort],
+            ])
+          );
+
+          assert.strictEqual(ordered.status, 200, ordered.text);
+          assert.deepStrictEqual(
+            itemsOf(ordered).map((item) => item[sort.replace("-", "")]),
+            [...expected]
+          );
+        }
+
+        for (const priorityLabel of ["", " \t\r\n"]) {
+          const current = yield* admin.get(genericPath);
+
+          const raw = yield* admin.patch(
+            genericPath,
+            { priorityLabel, severityLabel: "Zulu\r\n" },
+            { ifMatch: etagOf(current) }
+          );
+
+          assert.strictEqual(raw.status, 200, raw.text);
+
+          for (const [sort, expected] of [
+            ["severity", ["Critical", "Zulu\r\n"]],
+            ["-severity", ["Zulu\r\n", "Critical"]],
+            ["priority", [priorityLabel, "High"]],
+            ["-priority", ["High", priorityLabel]],
+          ] as const) {
+            const ordered = yield* admin.get(
+              withQuery(TICKETS, [
+                ["description", tag],
+                ["sort", sort],
+              ])
+            );
+
+            assert.strictEqual(ordered.status, 200, ordered.text);
+            assert.deepStrictEqual(
+              itemsOf(ordered).map((item) => item[sort.replace("-", "")]),
+              [...expected]
+            );
+          }
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 });

@@ -193,10 +193,10 @@ tables:
         type: { kind: longText, textPolicy: freeText }
       - id: a00ca65a-c756-55b8-a5d9-1e49ccd3ba05
         name: ticket_type
-        type: { kind: longText, textPolicy: freeText }
+        type: { kind: longText, textPolicy: freeText, nonBlank: true }
       - id: 8669c4c8-92da-5f4c-b4bb-eb6b139e10ed
         name: severity_label
-        type: { kind: longText, textPolicy: freeText }
+        type: { kind: longText, textPolicy: freeText, nonBlank: true }
       - id: af216ccf-12c8-5ea8-b976-6045d47ea43a
         name: priority_label
         type: { kind: longText, textPolicy: freeText }

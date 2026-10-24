@@ -516,7 +516,7 @@ const planFieldUpdates = (
     ) {
       const table = tableName(planning.after, after.classId);
 
-      if (JSON.stringify(after.default) !== JSON.stringify(before.default)) {
+      if (initialValue(after) !== initialValue(before)) {
         planning.tables.push(setDefault(table, after));
       }
 
