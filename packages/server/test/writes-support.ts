@@ -10,11 +10,14 @@ import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
-import { asObject, numberOf, textOf } from "./api-support.ts";
+import {
+  asObject,
+  numberOf,
+  textOf,
+  patchOptions,
+  MERGE_PATCH,
+} from "./api-support.ts";
 import { listPath, recordPath } from "./reads-support.ts";
-import { values } from "./schema-support.ts";
-
-const MERGE_PATCH = "application/merge-patch+json";
 
 /** The acme endpoints. */
 export const ASSET = "acme.asset";
@@ -62,14 +65,16 @@ export const patch = Effect.fn("WritesSupport.patch")(function* patch(
 ) {
   const http = yield* TestHttpClient;
 
-  return yield* http.request("PATCH", recordPath(table, id), {
-    headers:
-      version === undefined
-        ? { "content-type": MERGE_PATCH }
-        : { "content-type": MERGE_PATCH, "if-match": `"${version}"` },
-    rawBody: JSON.stringify(body),
-    token,
-  });
+  return yield* http.request(
+    "PATCH",
+    recordPath(table, id),
+    patchOptions(
+      { token },
+      MERGE_PATCH,
+      body,
+      version === undefined ? undefined : `"${version}"`
+    )
+  );
 });
 
 /**
@@ -184,43 +189,3 @@ export const savedOf = (response: TestResponse) => {
         )
       );
 };
-
-/**
- * A record's root version, read as table owner.
- *
- * @param id - The record.
- * @returns The version, or undefined when the record is gone.
- */
-export const versionOf = (id: string) =>
-  values(`SELECT version::text AS value FROM acme.asset WHERE id = $1::uuid`, [
-    id,
-  ]).pipe(
-    Effect.map(([version]) =>
-      version === undefined ? undefined : Number(version)
-    )
-  );
-
-/**
- * The versions and kinds of a record's change entries, as table owner.
- *
- * @param id - The record.
- * @returns `"1:create"`, `"2:update"` and so on.
- */
-export const entriesOf = (id: string) =>
-  values(
-    `SELECT record_version::text || ':' || kind AS value FROM core."change"
-     WHERE record_id = $1::uuid ORDER BY record_version`,
-    [id]
-  );
-
-/**
- * How many rows a table has for an ID, as table owner.
- *
- * @param table - The quoted table.
- * @param id - The record.
- * @returns The count.
- */
-export const rowsOf = (table: string, id: string) =>
-  values(`SELECT count(*)::text AS value FROM ${table} WHERE id = $1::uuid`, [
-    id,
-  ]).pipe(Effect.map(([count]) => Number(count)));

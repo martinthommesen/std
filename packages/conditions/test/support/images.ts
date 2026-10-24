@@ -87,16 +87,14 @@ export const toImage = (
  * @param people - The reference targets.
  * @returns The image source.
  */
-export const sourceFor = (
-  row: AssetRow,
-  people: readonly PersonRow[]
-): ImageSource => ({
-  previous: row.previous === null ? null : toImage(row.previous),
-  record: toImage(row.values, row.readable ? new Set() : MASKED_FIELDS),
-  targets: new Map(
-    people.map((person) => [
-      person.id,
-      person.visible ? toImage(person.values) : null,
-    ])
-  ),
-});
+export const sourceFor = (row: AssetRow, people: readonly PersonRow[]) =>
+  ({
+    previous: row.previous === null ? null : toImage(row.previous),
+    record: toImage(row.values, row.readable ? new Set() : MASKED_FIELDS),
+    targets: new Map(
+      people.map((person) => [
+        person.id,
+        person.visible ? toImage(person.values) : null,
+      ])
+    ),
+  }) satisfies ImageSource;

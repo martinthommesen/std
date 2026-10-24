@@ -5,7 +5,6 @@
  * page through keyset cursors, for generated filters, sorts and page
  * sizes.
  */
-import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Expr } from "@std/conditions/ast";
@@ -50,7 +49,7 @@ import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { sequence } from "./authz-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import { change, createRole } from "./schema-support.ts";
+import { change, createRole, addAccessRule } from "./schema-support.ts";
 
 const OWNER = "6a373fb5-bd18-4d7f-b0b4-182470f5421e";
 const STATUS = "5ed5f951-f6da-47ed-967a-c726af083d44";
@@ -66,24 +65,8 @@ const rule = (
   effect: "allow" | "deny",
   target: AccessRuleDraft["target"],
   condition: AccessRuleDraft["condition"]
-): Operation => ({
-  definition: {
-    actions: ["read"],
-    active: true,
-    classId,
-    condition,
-    description: null,
-    effect,
-    id: randomUUID(),
-    kind: "accessRule",
-    name: null,
-    owner: { layer: "local" },
-    protected: false,
-    roleIds: [roleId],
-    target,
-  },
-  op: "createAccessRule",
-});
+): Operation =>
+  addAccessRule(classId, [roleId], {}, { condition, effect, target }).op;
 
 /**
  * Rules whose visibility has several top-level ORs: assets and monitors

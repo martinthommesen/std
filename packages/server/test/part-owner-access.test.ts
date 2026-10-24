@@ -21,7 +21,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import type { Condition } from "@std/definitions/condition";
 import type { JsonObject } from "@std/values/json-value";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 
 import {
   HELPDESK,
@@ -103,6 +103,16 @@ const assertOwnerRefusal = (response: TestResponse, ticketId: string) => {
   assert.notInclude(response.text, ticketId);
 };
 
+const StateAround = Schema.fromJsonString(
+  Schema.Struct({
+    changes: Schema.String,
+    deliveries: Schema.String,
+    notes: Schema.Array(Schema.String),
+    parties: Schema.Array(Schema.String),
+    version: Schema.NullOr(Schema.String),
+  })
+);
+
 /**
  * The parts, the version, the history and the outbox around a ticket.
  * @param ticketId - The ticket.
@@ -111,27 +121,27 @@ const assertOwnerRefusal = (response: TestResponse, ticketId: string) => {
  */
 const stateAround = (ticketId: string) =>
   Effect.gen(function* readState() {
+    const [json] = yield* values(
+      `SELECT json_build_object(
+      'changes', (SELECT count(*)::text FROM core."change"),
+      'deliveries', (SELECT count(*)::text FROM core.delivery),
+      'notes', COALESCE((SELECT json_agg(id::text || ' ' || version::text || ' ' || "text" ORDER BY id) FROM helpdesk.ticket_note WHERE ticket = $1::uuid), '[]'::json),
+      'parties', COALESCE((SELECT json_agg(id::text || ' ' || version::text || ' ' || "role" ORDER BY id) FROM helpdesk.ticket_party WHERE ticket = $1::uuid), '[]'::json),
+      'version', (SELECT version::text FROM helpdesk.ticket WHERE id = $1::uuid)
+    )::text AS value`,
+      [ticketId]
+    );
+
+    const state = yield* Schema.decodeUnknownEffect(StateAround)(json).pipe(
+      Effect.orDie
+    );
+
     return {
-      changes: yield* count(
-        'SELECT count(*)::text AS value FROM core."change"'
-      ),
-      deliveries: yield* count(
-        "SELECT count(*)::text AS value FROM core.delivery"
-      ),
-      notes: yield* values(
-        `SELECT id::text || ' ' || version::text || ' ' || "text" AS value
-         FROM helpdesk.ticket_note WHERE ticket = $1::uuid ORDER BY id`,
-        [ticketId]
-      ),
-      parties: yield* values(
-        `SELECT id::text || ' ' || version::text || ' ' || "role" AS value
-         FROM helpdesk.ticket_party WHERE ticket = $1::uuid ORDER BY id`,
-        [ticketId]
-      ),
-      version: yield* count(
-        "SELECT version::text AS value FROM helpdesk.ticket WHERE id = $1::uuid",
-        [ticketId]
-      ),
+      changes: Number(state.changes),
+      deliveries: Number(state.deliveries),
+      notes: state.notes,
+      parties: state.parties,
+      version: Number(state.version ?? undefined),
     };
   });
 

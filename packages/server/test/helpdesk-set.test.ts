@@ -338,9 +338,11 @@ const callersSeeTheSet = Effect.fn("HelpdeskSet.callers")(
     );
 
     // The agent's restricted fields, on both tables, next to the admin's.
-    for (const table of [TICKET, INCIDENT]) {
+    for (const [table, asAdmin] of [
+      [TICKET, adminTicket],
+      [INCIDENT, adminIncident],
+    ] as const) {
       const asAgent = yield* metadataOf(agent, table);
-      const asAdmin = yield* metadataOf(admin, table);
 
       assert.isUndefined(
         metaField(asAgent, HELPDESK.fields.internalCost),

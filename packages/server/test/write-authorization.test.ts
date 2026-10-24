@@ -82,7 +82,13 @@ describe("write-authorization", () => {
 
     dbTest.effect("child-rule-parent-endpoint", () =>
       Effect.gen(function* childRule() {
-        const { bob, fixture } = yield* tokens;
+        const fixture = yield* AcmeFixture;
+
+        const bob = yield* (yield* TestHttpClient).signIn(
+          "bob",
+          "bob-password"
+        );
+
         const { L, M } = fixture.records;
 
         const onMonitor = yield* patch(
@@ -110,7 +116,13 @@ describe("write-authorization", () => {
 
     dbTest.effect("child-fields", () =>
       Effect.gen(function* childFields() {
-        const { bob, fixture } = yield* tokens;
+        const fixture = yield* AcmeFixture;
+
+        const bob = yield* (yield* TestHttpClient).signIn(
+          "bob",
+          "bob-password"
+        );
+
         const { L } = fixture.records;
         const version = (yield* rootVersion(L)) ?? 0;
 
@@ -141,7 +153,13 @@ describe("write-authorization", () => {
 
     dbTest.effect("written-fields", () =>
       Effect.gen(function* writtenFields() {
-        const { bob, fixture } = yield* tokens;
+        const fixture = yield* AcmeFixture;
+
+        const bob = yield* (yield* TestHttpClient).signIn(
+          "bob",
+          "bob-password"
+        );
+
         const { L, S } = fixture.records;
         const version = (yield* rootVersion(L)) ?? 0;
 
@@ -182,7 +200,13 @@ describe("write-authorization", () => {
 
     dbTest.effect("references", () =>
       Effect.gen(function* references() {
-        const { bob, fixture } = yield* tokens;
+        const fixture = yield* AcmeFixture;
+
+        const bob = yield* (yield* TestHttpClient).signIn(
+          "bob",
+          "bob-password"
+        );
+
         const { AM, M } = fixture.records;
         const version = (yield* rootVersion(M)) ?? 0;
 
@@ -365,7 +389,13 @@ describe("write-authorization", () => {
 
     dbTest.effect("referenced", () =>
       Effect.gen(function* referenced() {
-        const { alice, fixture } = yield* tokens;
+        const fixture = yield* AcmeFixture;
+
+        const alice = yield* (yield* TestHttpClient).signIn(
+          "alice",
+          "alice-password"
+        );
+
         const { AM } = fixture.records;
         const version = (yield* rootVersion(AM)) ?? 0;
         const response = yield* remove(alice, MONITOR, AM, version);
@@ -378,7 +408,13 @@ describe("write-authorization", () => {
 
     dbTest.effect("invisible-404", () =>
       Effect.gen(function* invisible() {
-        const { bob, fixture } = yield* tokens;
+        const fixture = yield* AcmeFixture;
+
+        const bob = yield* (yield* TestHttpClient).signIn(
+          "bob",
+          "bob-password"
+        );
+
         const { K } = fixture.records;
         const version = (yield* rootVersion(K)) ?? 0;
         const random = randomUUID();
@@ -405,7 +441,13 @@ describe("write-authorization", () => {
       "If-Match: missing is 428, stale is 412 with the current version",
       () =>
         Effect.gen(function* ifMatch() {
-          const { alice, fixture } = yield* tokens;
+          const fixture = yield* AcmeFixture;
+
+          const alice = yield* (yield* TestHttpClient).signIn(
+            "alice",
+            "alice-password"
+          );
+
           const { K } = fixture.records;
           const version = (yield* rootVersion(K)) ?? 0;
 
@@ -431,7 +473,13 @@ describe("write-authorization", () => {
       "undecodable requests are 400, invalid field values are 422",
       () =>
         Effect.gen(function* decoding() {
-          const { alice, fixture } = yield* tokens;
+          const fixture = yield* AcmeFixture;
+
+          const alice = yield* (yield* TestHttpClient).signIn(
+            "alice",
+            "alice-password"
+          );
+
           const http = yield* TestHttpClient;
           const { K } = fixture.records;
           const version = (yield* rootVersion(K)) ?? 0;

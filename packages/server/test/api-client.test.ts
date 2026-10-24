@@ -55,15 +55,13 @@ describe("api-client", () => {
           makeStdClient({ baseUrl: BASE_URL })
         );
 
-        const session = yield* withFetch(
-          anonymous.session.create({
-            payload: {
-              login: "alice",
-              password: "alice-password",
-              tokenDelivery: "body",
-            },
-          })
-        );
+        const session = yield* anonymous.session.create({
+          payload: {
+            login: "alice",
+            password: "alice-password",
+            tokenDelivery: "body",
+          },
+        });
 
         assert.strictEqual(session.tokenDelivery, "body");
 
@@ -74,19 +72,19 @@ describe("api-client", () => {
           })
         );
 
-        const current = yield* withFetch(client.session.current());
+        const current = yield* client.session.current();
 
         assert.strictEqual(current.user.id, session.user.id);
 
-        const tables = yield* withFetch(client.tableMetadata.list());
+        const tables = yield* client.tableMetadata.list();
         const asset = tables.find((entry) => entry.name === "acme.asset");
 
         assert.strictEqual(asset?.id, "acmeAsset");
         assert.strictEqual(asset?.resourceType, "AcmeAsset");
 
-        const metadata = yield* withFetch(
-          client.tableMetadata.get({ params: { table: "acmeAsset" } })
-        );
+        const metadata = yield* client.tableMetadata.get({
+          params: { table: "acmeAsset" },
+        });
 
         assert.strictEqual(metadata.name, "acme.asset");
         assert.include(
@@ -94,89 +92,79 @@ describe("api-client", () => {
           "status"
         );
 
-        const [page, response] = yield* withFetch(
-          client.records.list({
-            params: { table: "acmeAsset" },
-            query: { condition: 'status = "spare"', limit: "50" },
-            responseMode: "decoded-and-response",
-          })
-        );
+        const [page, response] = yield* client.records.list({
+          params: { table: "acmeAsset" },
+          query: { condition: 'status = "spare"', limit: "50" },
+          responseMode: "decoded-and-response",
+        });
 
         assert.isString(response.headers["std-schema-revision"]);
         assert.isTrue(page.every((resource) => resource.status === "spare"));
 
-        const created = yield* withFetch(
-          client.records.create({
-            params: { table: "acmeAsset" },
-            payload: { name: "Typed", status: "spare" },
-          })
-        );
+        const created = yield* client.records.create({
+          params: { table: "acmeAsset" },
+          payload: { name: "Typed", status: "spare" },
+        });
 
         const ids = { id: created.id, table: "acmeAsset" };
 
-        const merged = yield* withFetch(
-          client.records.patch({
-            headers: { "if-match": '"1"' },
-            params: ids,
-            payload: { name: "Typed 2" },
-          })
-        );
+        const merged = yield* client.records.patch({
+          headers: { "if-match": '"1"' },
+          params: ids,
+          payload: { name: "Typed 2" },
+        });
 
         assert.strictEqual(merged.name, "Typed 2");
 
-        const patched = yield* withFetch(
-          client.records.patch({
-            headers: { "if-match": '"2"' },
-            params: ids,
-            payload: [{ op: "replace", path: "/name", value: "Typed 3" }],
-          })
-        );
+        const patched = yield* client.records.patch({
+          headers: { "if-match": '"2"' },
+          params: ids,
+          payload: [{ op: "replace", path: "/name", value: "Typed 3" }],
+        });
 
         assert.strictEqual(patched.name, "Typed 3");
 
-        const history = yield* withFetch(
-          client.records.history({ params: ids, query: { limit: "10" } })
-        );
+        const history = yield* client.records.history({
+          params: ids,
+          query: { limit: "10" },
+        });
 
         assert.strictEqual(history.length, 3);
 
         const [first] = history;
 
-        const entry = yield* withFetch(
-          client.records.historyEntry({
-            params: { ...ids, changeId: first?.id ?? "" },
-            query: {},
-          })
-        );
+        const entry = yield* client.records.historyEntry({
+          params: { ...ids, changeId: first?.id ?? "" },
+          query: {},
+        });
 
         assert.strictEqual(entry.id, first?.id);
 
-        yield* withFetch(
-          client.records.delete({ headers: { "if-match": '"3"' }, params: ids })
-        );
+        yield* client.records.delete({
+          headers: { "if-match": '"3"' },
+          params: ids,
+        });
 
-        const missing = yield* withFetch(
-          client.records.get({ params: ids, query: {} })
-        ).pipe(Effect.flip);
+        const missing = yield* client.records
+          .get({ params: ids, query: {} })
+          .pipe(Effect.flip);
 
         assert.isTrue(isTmfError("NotFound")(missing));
 
         // Alice's own laptop through the parent collection, one field.
-        const viaParent = yield* withFetch(
-          client.records.get({
-            params: { id: records.K, table: "acmeAsset" },
-            query: { fields: "name" },
-          })
-        );
+        const viaParent = yield* client.records.get({
+          params: { id: records.K, table: "acmeAsset" },
+          query: { fields: "name" },
+        });
 
         assert.strictEqual(viaParent.id, records.K);
 
-        const unknownId = yield* withFetch(
-          client.records.get({
+        const unknownId = yield* client.records
+          .get({
             params: { id: UNKNOWN_ID, table: "acmeAsset" },
             query: {},
           })
-        ).pipe(Effect.flip);
+          .pipe(Effect.flip);
 
         assert.isTrue(isTmfError("NotFound")(unknownId));
       })
@@ -210,29 +198,27 @@ describe("api-client", () => {
             })
           );
 
-          const listed = yield* withFetch(
-            stale.records.list({ params: { table: "acmeAsset" }, query: {} })
-          ).pipe(Effect.flip);
+          const listed = yield* stale.records
+            .list({ params: { table: "acmeAsset" }, query: {} })
+            .pipe(Effect.flip);
 
           assert.isTrue(isTmfError("SchemaChanged")(listed));
 
-          const current = yield* withFetch(stale.session.current()).pipe(
-            Effect.flip
-          );
+          const current = yield* stale.session.current().pipe(Effect.flip);
 
           assert.isTrue(isTmfError("SchemaChanged")(current));
 
-          const bad = yield* withFetch(
-            malformed.records.list({
+          const bad = yield* malformed.records
+            .list({
               params: { table: "acmeAsset" },
               query: {},
             })
-          ).pipe(Effect.flip);
+            .pipe(Effect.flip);
 
           assert.isTrue(isTmfError("InvalidSchemaRevision")(bad));
 
           // Sign-out checks the format but never refuses a stale client.
-          yield* withFetch(stale.session.signOut());
+          yield* stale.session.signOut();
         })
     );
 
@@ -250,12 +236,10 @@ describe("api-client", () => {
           makeStdClient({ baseUrl: BASE_URL, token })
         );
 
-        yield* withFetch(client.session.current());
-        yield* withFetch(client.session.signOut());
+        yield* client.session.current();
+        yield* client.session.signOut();
 
-        const ended = yield* withFetch(client.session.current()).pipe(
-          Effect.flip
-        );
+        const ended = yield* client.session.current().pipe(Effect.flip);
 
         assert.isTrue(isTmfError("Unauthenticated")(ended));
       })
@@ -276,18 +260,18 @@ describe("api-client", () => {
         );
 
         // Alice's laptop is hidden from Bob like a record that is not there.
-        const hidden = yield* withFetch(
-          bob.records.get({
+        const hidden = yield* bob.records
+          .get({
             params: { id: records.K, table: "acmeAsset" },
             query: {},
           })
-        ).pipe(Effect.flip);
+          .pipe(Effect.flip);
 
         assert.isTrue(isTmfError("NotFound")(hidden));
 
-        const platform = yield* withFetch(
-          bob.records.list({ params: { table: "coreChange" }, query: {} })
-        ).pipe(Effect.flip);
+        const platform = yield* bob.records
+          .list({ params: { table: "coreChange" }, query: {} })
+          .pipe(Effect.flip);
 
         assert.isTrue(isTmfError("UnknownTable")(platform));
 
@@ -295,15 +279,15 @@ describe("api-client", () => {
           makeStdClient({ baseUrl: BASE_URL })
         );
 
-        const wrong = yield* withFetch(
-          anonymous.session.create({
+        const wrong = yield* anonymous.session
+          .create({
             payload: {
               login: "alice",
               password: "wrong",
               tokenDelivery: "body",
             },
           })
-        ).pipe(Effect.flip);
+          .pipe(Effect.flip);
 
         assert.isTrue(isTmfError("InvalidCredentials")(wrong));
       })
@@ -324,8 +308,8 @@ describe("api-client", () => {
         );
 
         // Bob may create only assets he owns.
-        const refused = yield* withFetch(
-          bob.records.create({
+        const refused = yield* bob.records
+          .create({
             params: { table: "acmeAsset" },
             payload: {
               name: "Not mine",
@@ -333,7 +317,7 @@ describe("api-client", () => {
               status: "spare",
             },
           })
-        ).pipe(Effect.flip);
+          .pipe(Effect.flip);
 
         assert.isTrue(
           isTmfError("NotAllowed")(refused),
@@ -356,13 +340,11 @@ describe("api-client", () => {
           })
         );
 
-        const [resource, response] = yield* withFetch(
-          client.records.get({
-            params: { id: records.K, table: "acmeAsset" },
-            query: {},
-            responseMode: "decoded-and-response",
-          })
-        );
+        const [resource, response] = yield* client.records.get({
+          params: { id: records.K, table: "acmeAsset" },
+          query: {},
+          responseMode: "decoded-and-response",
+        });
 
         assert.match(response.headers["std-schema-revision"] ?? "", REVISION);
         assert.strictEqual(

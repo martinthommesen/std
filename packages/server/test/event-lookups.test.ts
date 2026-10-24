@@ -22,7 +22,8 @@ import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { asObject, textOf, apiCallers } from "./api-support.ts";
 import { hubTestLayer } from "./hub-support.ts";
-import { actingAs, asLoadedUser } from "./worker-support.ts";
+import { asUser } from "./records-support.ts";
+import { asLoadedUser } from "./worker-support.ts";
 
 const topicFixture = Effect.gen(function* topicFixture() {
   const http = yield* TestHttpClient;
@@ -153,7 +154,7 @@ describe("event lookups during rollout", () => {
       const failedGeneric = yield* createRecord({
         body: { payload: bodyOf("failed"), topic: id },
         endpointClassId: EVENT_CLASS_IDS.event,
-      }).pipe(actingAs(fixture.admin.id), Effect.flip);
+      }).pipe(asUser(fixture.admin.id), Effect.flip);
 
       assert.strictEqual(failedGeneric._tag, "DatabaseError");
 
@@ -170,7 +171,7 @@ describe("event lookups during rollout", () => {
       const fixture = yield* AcmeFixture;
 
       const remaining = request(migration0022.remaining).pipe(
-        actingAs(fixture.admin.id)
+        asUser(fixture.admin.id)
       );
 
       const { admin, http, id, path } = yield* topicFixture;

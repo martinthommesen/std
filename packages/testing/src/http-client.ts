@@ -189,22 +189,36 @@ const makeTestHttpClient = Effect.fnUntraced(function* makeTestHttpClient(
   // it must be: an `/api/v1` answer against the shared definition (and so
   // `/api/v1/openapi.json`), a TMF API answer against its pinned OpenAPI
   // document (`tmf-oas-contract`, Contracts 11.1). A mismatch is a defect.
-  const checkExchange = (exchange: {
-    readonly method: string;
-    readonly path: string;
-    readonly status: number;
-    readonly text: string;
-    readonly json: JsonValue | undefined;
-    readonly contentType: string | null;
-  }) =>
-    Effect.all([
+  const checkExchange = Effect.fnUntraced(function* checkExchange(
+    response: Response,
+    text: string,
+    method: string,
+    path: string
+  ) {
+    const checked = {
+      headers: response.headers,
+      json: bodyJson(text),
+      status: response.status,
+      text,
+    } satisfies TestResponse;
+
+    const exchange = {
+      ...checked,
+      contentType: response.headers.get(CONTENT_TYPE_HEADER),
+      method,
+      path,
+    };
+
+    yield* Effect.all([
       checkApiExchange(exchange),
       checkTmfExchange(contracts, exchange),
     ]).pipe(
       Effect.mapError((problem) => new Error(problem)),
-      Effect.orDie,
-      Effect.asVoid
+      Effect.orDie
     );
+
+    return checked;
+  });
 
   const request = Effect.fn("TestHttpClient.request")(function* request(
     method: string,
@@ -232,23 +246,8 @@ const makeTestHttpClient = Effect.fnUntraced(function* makeTestHttpClient(
     );
 
     const text = yield* Effect.promise(async () => await response.text());
-    const json = bodyJson(text);
 
-    yield* checkExchange({
-      contentType: response.headers.get(CONTENT_TYPE_HEADER),
-      json,
-      method,
-      path,
-      status: response.status,
-      text,
-    });
-
-    return {
-      headers: response.headers,
-      json,
-      status: response.status,
-      text,
-    } satisfies TestResponse;
+    return yield* checkExchange(response, text, method, path);
   });
 
   const signIn = Effect.fn("TestHttpClient.signIn")(function* signIn(
@@ -297,14 +296,12 @@ const makeTestHttpClient = Effect.fnUntraced(function* makeTestHttpClient(
     const text = await response.clone().text();
 
     await Effect.runPromise(
-      checkExchange({
-        contentType: response.headers.get(CONTENT_TYPE_HEADER),
-        json: bodyJson(text),
-        method: outgoing.method,
-        path: `${url.pathname}${url.search}`,
-        status: response.status,
+      checkExchange(
+        response,
         text,
-      })
+        outgoing.method,
+        `${url.pathname}${url.search}`
+      )
     );
 
     return response;

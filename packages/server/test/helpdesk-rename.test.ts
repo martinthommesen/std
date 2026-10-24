@@ -25,7 +25,6 @@ import type {
   SetFile,
   TableEntry,
 } from "@std/definitions/set-file";
-import { isJsonString } from "@std/values/json-value";
 import type { JsonObject } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
 
@@ -39,7 +38,7 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { readSetDirectory } from "../src/config/set-files.ts";
-import { numberOf } from "./api-support.ts";
+import { textOf, numberOf } from "./api-support.ts";
 import { writeSetDirectory } from "./config-support.ts";
 import {
   fetchMetadata,
@@ -54,12 +53,6 @@ import { definitionVersion } from "./schema-support.ts";
 import { patch } from "./writes-support.ts";
 
 const INCIDENT = "helpdesk.incident";
-
-const idOf = (resource: JsonObject): string => {
-  const { id } = resource;
-
-  return id !== undefined && isJsonString(id) ? id : "";
-};
 
 type MetaTable = typeof TableMetadata.Type;
 
@@ -129,7 +122,7 @@ const observe = Effect.fn("HelpdeskRename.observe")(function* observe(
     form: layoutEntries(table, "form"),
     id: filter.id,
     list: layoutEntries(table, "list"),
-    selected: resources.map((resource) => idOf(resource)).toSorted(),
+    selected: resources.map((resource) => textOf(resource.id)).toSorted(),
   } satisfies Observation;
 });
 

@@ -30,6 +30,7 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import type { OwnerRecord } from "../../testing/src/owner-records.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { DatabaseConfig } from "../src/sql/database-config.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { arrayOf, objectOf, sequence, textOf } from "./authz-support.ts";
 import {
@@ -41,8 +42,9 @@ import {
   recordPath,
   resourceOf,
 } from "./reads-support.ts";
+import { rootVersion } from "./records-support.ts";
 import { values } from "./schema-support.ts";
-import { create, patch, versionOf } from "./writes-support.ts";
+import { create, patch } from "./writes-support.ts";
 
 const ASSET = "acme.asset";
 const LAPTOP = "acme.laptop";
@@ -672,7 +674,7 @@ describe("references", () => {
           // L's fixture cost, under rule 10's limit (another test raises it).
           yield* setAsset("cost = 1200", records.L);
 
-          const version = (yield* versionOf(records.L)) ?? 0;
+          const version = (yield* rootVersion(records.L)) ?? 0;
 
           // Bob docks L to his own monitor M: a visible target.
           const docked = yield* patch(bob, LAPTOP, records.L, version, {
@@ -692,7 +694,7 @@ describe("references", () => {
 
           // Hidden targets (Alice's monitor and laptop) are refused exactly
           // like an unknown ID, on update and on create.
-          const current = (yield* versionOf(records.L)) ?? 0;
+          const current = (yield* rootVersion(records.L)) ?? 0;
 
           const random = yield* patch(bob, LAPTOP, records.L, current, {
             dockedTo: randomUUID(),
@@ -709,7 +711,7 @@ describe("references", () => {
             assert.strictEqual(hidden.text, random.text);
           }
 
-          assert.strictEqual(yield* versionOf(records.L), current);
+          assert.strictEqual(yield* rootVersion(records.L), current);
 
           const body = (target: string): JsonValue => ({
             dockedTo: target,
@@ -1088,6 +1090,32 @@ const sortedPages = Effect.fn("ChildEndpointReads.sortedPages")(
 );
 
 /**
+ * All independent sorted traversals for one caller, in table/sort order.
+ * @param tokens - The fixture sessions.
+ * @param who - The caller.
+ * @returns Each traversal's observed response bytes.
+ */
+const sortAll = Effect.fn("ChildEndpointReads.sortAll")(function* sortAll(
+  tokens: { readonly alice: string; readonly bob: string },
+  who: "alice" | "bob"
+) {
+  const config = yield* DatabaseConfig;
+  // Like builtins.test.ts, reserve half the configured pool for other requests.
+  const concurrency = Math.max(1, Math.floor(config.maxConnections / 2));
+
+  const pairs = ([LAPTOP, MONITOR] as const).flatMap((table) =>
+    sortsFor(table, who).map((sort) => ({ sort, table }))
+  );
+
+  return yield* Effect.all(
+    pairs.map(({ table, sort }) =>
+      sortedPages(table, tokens[who], sort, visibleBulkRows(table, who))
+    ),
+    { concurrency }
+  );
+});
+
+/**
  * A laptop resource; an empty attribute is absent from a resource.
  * @param id - Its ID.
  * @param serial - Its serial, or null for empty.
@@ -1176,30 +1204,9 @@ describe("cursor-nulls", () => {
             bob: yield* http.signIn("bob", "bob-password"),
           };
 
-          const sortAll = Effect.fn("ChildEndpointReads.sortAll")(
-            function* sortAll(who: "alice" | "bob") {
-              const texts: string[][] = [];
+          yield* sortAll(tokens, "alice");
 
-              for (const table of [LAPTOP, MONITOR] as const) {
-                for (const sort of sortsFor(table, who)) {
-                  texts.push(
-                    yield* sortedPages(
-                      table,
-                      tokens[who],
-                      sort,
-                      visibleBulkRows(table, who)
-                    )
-                  );
-                }
-              }
-
-              return texts;
-            }
-          );
-
-          yield* sortAll("alice");
-
-          const bobBefore = yield* sortAll("bob");
+          const bobBefore = yield* sortAll(tokens, "bob");
 
           // A monitor's own field is never readable to Bob: its sort is
           // refused like a misspelled name.
@@ -1248,7 +1255,7 @@ describe("cursor-nulls", () => {
             [AM]
           );
 
-          assert.deepStrictEqual(yield* sortAll("bob"), bobBefore);
+          assert.deepStrictEqual(yield* sortAll(tokens, "bob"), bobBefore);
         }),
       { timeout: 300_000 }
     );

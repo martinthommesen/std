@@ -111,27 +111,20 @@ const setup = Effect.gen(function* setupMetadata() {
       { fieldId: ACME.cost, kind: "field" },
       { fieldId: ACME.status, kind: "field" },
     ]),
-    {
-      definition: {
-        ...local,
-        actions: ["read"],
-        active: true,
-        classId: ACME.asset,
+    addAccessRule(
+      ACME.asset,
+      [ACME.employee],
+      {
         condition: {
           left: { path: [ACME.cost] },
           op: "gt",
           right: { value: "5000" },
         },
         description: "employees do not see the vault of costly assets",
-        effect: "deny",
-        id: denyRule,
-        kind: "accessRule",
-        name: null,
-        roleIds: [ACME.employee],
-        target: { fields: [vault.id], kind: "fields" },
+        fields: [vault.id],
       },
-      op: "createAccessRule",
-    },
+      { effect: "deny", id: denyRule }
+    ).op,
   ]);
 
   return {

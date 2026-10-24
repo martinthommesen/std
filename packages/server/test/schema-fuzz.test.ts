@@ -47,9 +47,9 @@
  * step, so the coverage gate depends neither on luck nor on speed.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { Definition, DefinitionKind } from "@std/definitions/definition";
+import type { Definition } from "@std/definitions/definition";
 import { apiAttributeNameOf } from "@std/definitions/names";
-import type { Operation } from "@std/definitions/operation";
+import type { CreateOperation, Operation } from "@std/definitions/operation";
 import { setOrigin } from "@std/definitions/requester";
 import {
   BUILT_IN_ROLE_IDS,
@@ -59,7 +59,7 @@ import {
 import { parseJson } from "@std/values/json";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import type { Scope } from "effect";
 import type { SqlClient } from "effect/sql";
 import {
@@ -90,7 +90,11 @@ import { Transactions } from "../src/sql/transactions.ts";
 import { arrayOf, objectOf, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
-import { CHANGE_SETS } from "./schema-paths-support.ts";
+import {
+  createBodyOf,
+  inApiNames,
+  CHANGE_SETS,
+} from "./schema-paths-support.ts";
 import {
   addAccessRule,
   addField,
@@ -698,47 +702,9 @@ const toJson = (operation: Operation): Record<string, JsonValue> => {
   return parsed.ok && isJsonObject(parsed.value) ? { ...parsed.value } : {};
 };
 
-/**
- * A generic POST body for a create: the definition table's columns from
- * the draft.
- *
- * @param operation - A create.
- * @returns The body.
- */
-const genericBody = (operation: Operation) => {
-  const body: Record<string, JsonValue> = {};
-
-  if (!("definition" in operation)) {
-    return body;
-  }
-
-  const draft: JsonObject = operation.definition;
-
-  for (const spec of tableOf(operation.definition.kind).columns) {
-    const value = draft[spec.property];
-
-    if (!spec.column.startsWith("enforcement") && value !== undefined) {
-      body[apiAttributeNameOf(spec.column)] = value;
-    }
-  }
-
-  if (operation.definition.kind === "accessRule") {
-    const { target } = operation.definition;
-
-    body.target = target.kind;
-    body.fields =
-      target.kind === "fields" && target.fields !== "*"
-        ? [...target.fields]
-        : null;
-  }
-
-  return body;
-};
-
-/** A create step's operation, the kind it creates and a bogus type. */
+/** A create step's operation and optional bogus field type. */
 interface CreateStep {
-  readonly operation: Operation;
-  readonly kind: DefinitionKind;
+  readonly operation: CreateOperation;
   /** Replaces a field's type in the body, so the decoder refuses it. */
   readonly bogusType?: JsonValue;
 }
@@ -748,7 +714,7 @@ interface CreateStep {
  *
  * @param world - The world.
  * @param step - The step.
- * @returns The operation, the kind it creates and its field type, if a
+ * @returns The operation and its field type, if a
  *   field's type is to be replaced by a bogus one.
  */
 const createOperationOf = (
@@ -766,8 +732,8 @@ const createOperationOf = (
     // A bogus type replaces the valid one in the body: the decoder
     // refuses it.
     return step.type === "bogus"
-      ? { bogusType: { kind: "colour" }, kind: "field", operation: field.op }
-      : { kind: "field", operation: field.op };
+      ? { bogusType: { kind: "colour" }, operation: field.op }
+      : { operation: field.op };
   }
 
   if (step.op === "addIndex") {
@@ -781,7 +747,6 @@ const createOperationOf = (
     }[step.fields];
 
     return {
-      kind: "index",
       operation: addIndex(
         world.baseId,
         fields,
@@ -793,7 +758,6 @@ const createOperationOf = (
 
   if (step.op === "createRole") {
     return {
-      kind: "role",
       operation: addRole(
         nameFor(step.name, world.ruledRoleName),
         createId(world, step.id)
@@ -831,7 +795,7 @@ const createOperationOf = (
     { id: createId(world, step.id) }
   );
 
-  return { kind: "accessRule", operation: rule.op };
+  return { operation: rule.op };
 };
 
 /**
@@ -958,14 +922,12 @@ const requestOf = Effect.fn("SchemaFuzz.requestOf")(function* requestOf(
   }
 
   if (step.op !== "lifecycle") {
-    const { bogusType, kind, operation } = createOperationOf(world, step);
+    const { bogusType, operation } = createOperationOf(world, step);
 
-    if ("definition" in operation) {
-      world.siteDefinitions.add(operation.definition.id);
-    }
+    world.siteDefinitions.add(operation.definition.id);
 
     const json = toJson(operation);
-    const body = genericBody(operation);
+    const body = inApiNames(createBodyOf(operation));
 
     if (bogusType !== undefined) {
       json.definition = { ...objectOf(json.definition), type: bogusType };
@@ -983,13 +945,18 @@ const requestOf = Effect.fn("SchemaFuzz.requestOf")(function* requestOf(
           body,
           caller: step.caller,
           method: "POST",
-          path: listPath(`core.${tableOf(kind).table}`),
+          path: listPath(`core.${tableOf(operation.definition.kind).table}`),
         } satisfies FuzzRequest);
   }
 
-  const snapshot = yield* (yield* Catalog).refresh;
+  const snapshot =
+    step.via === "changeSet" ||
+    (step.version !== "missing" && step.version !== "malformed")
+      ? yield* (yield* Catalog).refresh
+      : undefined;
+
   const id = idOf(world, step.target);
-  const version = versionFor(snapshot.get(id), step.version);
+  const version = versionFor(snapshot?.get(id), step.version);
 
   if (step.via === "changeSet") {
     return {
@@ -1454,15 +1421,8 @@ const PAM = { login: "fuzz-pam", password: "fuzz-pam-password" } as const;
 
 const decodeRecordIds = Schema.decodeUnknownSync(Schema.Array(Schema.String));
 
-/** Whether the purging admin exists in this file's database. */
-let purgerCreated = false;
-
 /** Creates the admin holding `schema.purge`, once per database. */
 const createPurger = Effect.gen(function* createPurger() {
-  if (purgerCreated) {
-    return;
-  }
-
   const catalog = yield* Catalog;
   const { request } = yield* Transactions;
 
@@ -1477,8 +1437,6 @@ const createPurger = Effect.gen(function* createPurger() {
       });
     })
   ).pipe(Effect.orDie);
-
-  purgerCreated = true;
 });
 
 /**
@@ -1634,7 +1592,6 @@ const setUp = Effect.fn("SchemaFuzz.setUp")(function* setUp(tag: string) {
   const http = yield* TestHttpClient;
 
   yield* AcmeFixture;
-  yield* createPurger;
 
   const world = yield* prepare(tag);
 
@@ -1679,13 +1636,17 @@ const checkSequences = async (
     { endOnFailure: true, numRuns: RUNS }
   );
 
+const fuzzTestLayer = Layer.effectDiscard(createPurger).pipe(
+  Layer.provideMerge(readsTestLayer())
+);
+
 describe("schema-fuzz", () => {
   it("every required outcome has a targeted step", () => {
     assert.sameMembers([...TARGETED.keys()], REQUIRED_OUTCOMES);
     assert.isTrue(parseJson('{"a": 1}').ok);
   });
 
-  layer(readsTestLayer(), { excludeTestServices: true, timeout: TIMEOUT })(
+  layer(fuzzTestLayer, { excludeTestServices: true, timeout: TIMEOUT })(
     (dbTest) => {
       dbTest.effect(
         "every targeted step reaches its outcome",

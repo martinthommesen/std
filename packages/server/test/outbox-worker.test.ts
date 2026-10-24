@@ -51,9 +51,9 @@ import {
 } from "../src/outbox/worker.ts";
 import { createRecord } from "../src/records/save-pipeline.ts";
 import { deliveriesWhere, subscribe } from "./outbox-support.ts";
+import { asUser } from "./records-support.ts";
 import { values } from "./schema-support.ts";
 import {
-  actingAs,
   asLoadedUser,
   createAsset,
   deleteAsset,
@@ -64,6 +64,8 @@ import {
   setDeliveryOf,
   updateAsset,
   workerTestLayer,
+  effectWrites,
+  writeEffectAsset,
 } from "./worker-support.ts";
 
 // One subscription's rows of a record, as `version:status:attempts`.
@@ -235,12 +237,6 @@ const leaseFencing = Effect.fn("WorkerTest.leaseFencing")(function* fencing(
   );
 });
 
-// Assets created by a record effect for a change.
-const effectWrites = (changeId: string) =>
-  values(`SELECT id::text AS value FROM "acme"."asset" WHERE name = $1`, [
-    `effect ${changeId}`,
-  ]);
-
 // Creates an asset named after the change; attempt 1 of version 2 then
 // stalls inside its delivery transaction until released.
 const writingEffect = (
@@ -248,11 +244,7 @@ const writingEffect = (
   release: Deferred.Deferred<boolean>
 ) =>
   Effect.fnUntraced(function* writeOnce(delivery: Delivery) {
-    yield* createRecord({
-      body: { name: `effect ${delivery.changeId}`, status: "new" },
-      cause: delivery.cause,
-      endpointClassId: ACME.asset,
-    });
+    yield* writeEffectAsset(delivery);
 
     if (delivery.attempts === 1 && delivery.recordVersion === 2) {
       yield* Deferred.succeed(wrote, true);
@@ -611,7 +603,7 @@ const secretCanary = Effect.gen(function* secretCanaryTest() {
   yield* createRecord({
     body: { active: true, login: "dora", name: "Dora", password: canary },
     endpointClassId: USER_CLASS_ID,
-  }).pipe(actingAs(admin));
+  }).pipe(asUser(admin));
 
   assert.strictEqual(yield* workerPass(), 1);
 

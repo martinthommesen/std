@@ -439,10 +439,10 @@ describe("test-database", () => {
         const later = now + TEST_DATABASE_MAX_AGE_MS + 60_000;
         // Random suffixes: concurrent runs plant databases in the same
         // millisecond, and names are cluster-wide.
-        const owned = `std_test_${now.toString(36)}_${process.pid}_${randomHex(4)}`;
-        const unmarked = `std_test_${now.toString(36)}_${process.pid}_${randomHex(4)}`;
+        const owned = testDatabaseName();
+        const unmarked = testDatabaseName();
         const foreign = `std_test_1_accounts_backup_${randomHex(4)}`;
-        const fresh = `std_test_${now.toString(36)}_${process.pid}_${randomHex(4)}`;
+        const fresh = testDatabaseName();
         const names = [owned, unmarked, foreign, fresh];
 
         yield* Effect.addFinalizer(() =>

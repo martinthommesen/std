@@ -34,15 +34,16 @@ import {
   workerPass,
 } from "../src/outbox/worker.ts";
 import type { WorkerProbesApi } from "../src/outbox/worker.ts";
-import { createRecord } from "../src/records/save-pipeline.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { deliveriesWhere, subscribe } from "./outbox-support.ts";
-import { change, values } from "./schema-support.ts";
+import { change } from "./schema-support.ts";
 import {
   createAsset,
   expireLease,
   serveOnly,
   workerTestLayer,
+  effectWrites,
+  writeEffectAsset,
 } from "./worker-support.ts";
 
 /** The effect deadline of the overrun tests; the lease is minutes longer. */
@@ -83,12 +84,6 @@ const rowOf = (subscriptionId: string, recordId: string) =>
     recordId,
   ]).pipe(Effect.map(([row]) => row));
 
-// Assets a record effect created for a change.
-const effectWrites = (changeId: string) =>
-  values(`SELECT id::text AS value FROM "acme"."asset" WHERE name = $1`, [
-    `effect ${changeId}`,
-  ]);
-
 // A counting effect of either kind; the record kind also writes.
 const countingEffect = (
   kind: DeliveryEffect["kind"],
@@ -102,11 +97,7 @@ const countingEffect = (
     : {
         kind,
         run: (delivery: Delivery) =>
-          createRecord({
-            body: { name: `effect ${delivery.changeId}`, status: "new" },
-            cause: delivery.cause,
-            endpointClassId: ACME.asset,
-          }).pipe(Effect.andThen(count(delivery))),
+          writeEffectAsset(delivery).pipe(Effect.andThen(count(delivery))),
       };
 };
 

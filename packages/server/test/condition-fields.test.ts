@@ -16,7 +16,6 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { AccessRuleDraft } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
@@ -33,16 +32,17 @@ import {
   recordPath,
   resourceOf,
 } from "./reads-support.ts";
+import { rootVersion } from "./records-support.ts";
 import { postChangeSet } from "./schema-paths-support.ts";
 import {
   definitionVersion,
   addField,
   createClass,
   ensureSite,
-  freshId,
   SITE_NAMESPACE_ID,
+  addAccessRule,
 } from "./schema-support.ts";
-import { ASSET, create, patch, versionOf } from "./writes-support.ts";
+import { ASSET, create, patch } from "./writes-support.ts";
 
 /** The condition field's name. */
 const MATCHES = "matches";
@@ -91,7 +91,7 @@ const patchCurrent = Effect.fn("ConditionFields.patchCurrent")(
     id: string,
     body: Readonly<Record<string, JsonValue>>
   ) {
-    const version = (yield* versionOf(id)) ?? 0;
+    const version = (yield* rootVersion(id)) ?? 0;
 
     return yield* patch(token, ASSET, id, version, body);
   }
@@ -133,25 +133,17 @@ const addMatches = Effect.fn("ConditionFields.addMatches")(function* addMatches(
     profile: "filter",
   });
 
-  const writeRule: AccessRuleDraft = {
-    actions: ["create", "update"],
-    active: true,
-    classId: ACME.asset,
-    condition: null,
-    description: "employees may write matches",
-    effect: "allow",
-    id: freshId(),
-    kind: "accessRule",
-    name: null,
-    owner: { layer: "local" },
-    protected: false,
-    roleIds: [employee],
-    target: { fields: [matches.id], kind: "fields" },
-  };
-
   yield* applied(token, [
     matches.op,
-    { definition: writeRule, op: "createAccessRule" },
+    addAccessRule(
+      ACME.asset,
+      [employee],
+      {
+        description: "employees may write matches",
+        fields: [matches.id],
+      },
+      { actions: ["create", "update"] }
+    ).op,
   ]);
 
   return matches.id;
@@ -266,7 +258,7 @@ describe("condition-fields", () => {
             ["not an AST", { op: "nope" }, "malformed"],
           ];
 
-          const before = (yield* versionOf(id)) ?? 0;
+          const before = (yield* rootVersion(id)) ?? 0;
 
           for (const [label, value, issue] of invalid) {
             const refused = yield* write(value);
@@ -284,7 +276,7 @@ describe("condition-fields", () => {
             assert.include(body.fieldErrors[0]?.hint ?? "", issue, label);
           }
 
-          assert.strictEqual(yield* versionOf(id), before);
+          assert.strictEqual(yield* rootVersion(id), before);
 
           // Creates are checked the same way.
           const createdBad = yield* create(tokens.alice, ASSET, {

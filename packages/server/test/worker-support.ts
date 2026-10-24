@@ -30,6 +30,8 @@ import {
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { asUser } from "./records-support.ts";
+import { values } from "./schema-support.ts";
 
 /** Handler selection owned by one worker test layer. */
 class TestHandlers extends Context.Service<
@@ -103,16 +105,6 @@ export const workerTestLayer = (
   ).pipe(Layer.provideMerge(acmeTestLayer(options)));
 
 /**
- * Runs an effect as a user (the test saves are allowed regardless).
- * @param userId - The acting user.
- * @returns A function providing the actor.
- */
-export const actingAs =
-  (userId: DefinitionId) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.provideService(effect, Actor, Actor.of({ roleIds: [], userId }));
-
-/**
  * Runs an effect as a user with the user's real roles, read in their own
  * request transaction (operator actions check them).
  * @param userId - The acting user.
@@ -147,7 +139,7 @@ export const createAsset = (
 ) =>
   createRecord({ body, endpointClassId: ACME.asset }).pipe(
     Effect.map((saved) => saved.id),
-    actingAs(userId)
+    asUser(userId)
   );
 
 /**
@@ -171,7 +163,7 @@ export const updateAsset = (
     id,
   }).pipe(
     Effect.map((saved) => saved.version),
-    actingAs(userId)
+    asUser(userId)
   );
 
 /**
@@ -192,7 +184,7 @@ export const deleteAsset = (
     id,
   }).pipe(
     Effect.map((deleted) => deleted.version),
-    actingAs(userId)
+    asUser(userId)
   );
 
 /**
@@ -261,3 +253,25 @@ export const dueNow = (
  */
 export const keyOf = (delivery: Delivery): string =>
   `${delivery.recordId}@${delivery.recordVersion}`;
+
+/**
+ * Assets written by the worker fixture for one change.
+ * @param changeId - The triggering change.
+ * @returns The written asset IDs.
+ */
+export const effectWrites = (changeId: string) =>
+  values(`SELECT id::text AS value FROM "acme"."asset" WHERE name = $1`, [
+    `effect ${changeId}`,
+  ]);
+
+/**
+ * Writes the worker fixture asset in the caller's actor and transaction context.
+ * @param delivery - The triggering delivery.
+ * @returns The record-service save.
+ */
+export const writeEffectAsset = (delivery: Delivery) =>
+  createRecord({
+    body: { name: `effect ${delivery.changeId}`, status: "new" },
+    cause: delivery.cause,
+    endpointClassId: ACME.asset,
+  });

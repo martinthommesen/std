@@ -25,7 +25,7 @@ import { Effect } from "effect";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { count, entriesOf, versionOf } from "./aggregates-support.ts";
-import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
+import { patchOptions, asArray, asObject, textOf } from "./api-support.ts";
 import { addRecordRule, change, values } from "./schema-support.ts";
 import {
   createFixtureTicket,
@@ -43,16 +43,6 @@ const notesOf = (ticketId: string) =>
     `SELECT count(*)::text AS value FROM ${NOTES} WHERE ticket = $1::uuid`,
     [ticketId]
   );
-
-const patchOptions = (
-  caller: TestRequestOptions,
-  contentType: string,
-  body: JsonValue
-): TestRequestOptions => ({
-  ...caller,
-  headers: { "content-type": contentType },
-  rawBody: JSON.stringify(body),
-});
 
 const newTicket = (caller: TestRequestOptions, body: JsonObject = {}) =>
   createFixtureTicket(caller, { description: "Arrays", ...body });
@@ -121,7 +111,14 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* addThroughTmf() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
+
           const ticket = yield* newTicket(alice);
           const id = textOf(ticket.id);
 
@@ -152,7 +149,14 @@ describe("tmf-arrays", () => {
     dbTest.effect("adding a note through the generic API does the same", () =>
       Effect.gen(function* addThroughGeneric() {
         const http = yield* TestHttpClient;
-        const { alice } = yield* apiCallers;
+
+        const alice = {
+          token: yield* (yield* TestHttpClient).signIn(
+            "alice",
+            "alice-password"
+          ),
+        };
+
         const ticket = yield* newTicket(alice);
         const id = textOf(ticket.id);
 
@@ -182,7 +186,13 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* replaceArray() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const ticket = yield* newTicket(alice, {
             note: [
@@ -249,7 +259,14 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* jsonPatchArray() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
+
           const ticket = yield* newTicket(alice);
           const id = textOf(ticket.id);
 
@@ -315,7 +332,13 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* reorder() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const ticket = yield* newTicket(alice, {
             note: [
@@ -388,7 +411,18 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* lockedNote() {
           const http = yield* TestHttpClient;
-          const { alice, bob } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
+
+          const bob = {
+            token: yield* (yield* TestHttpClient).signIn("bob", "bob-password"),
+          };
+
           const ticket = yield* newTicket(alice);
           const id = textOf(ticket.id);
 
@@ -461,7 +495,17 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* unreadableOrder() {
           const http = yield* TestHttpClient;
-          const { alice, bob } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
+
+          const bob = {
+            token: yield* (yield* TestHttpClient).signIn("bob", "bob-password"),
+          };
 
           const ticket = yield* newTicket(alice, {
             note: [
@@ -511,7 +555,13 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* keptPositions() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const ticket = yield* newTicket(alice, {
             note: [
@@ -602,7 +652,13 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* maskedPosition() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const ticket = yield* newTicket(alice, {
             note: [
@@ -649,7 +705,14 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* emptyAndBound() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
+
           const ticket = yield* newTicket(alice, { note: [{ text: "a" }] });
           const id = textOf(ticket.id);
           const path = `${FIXTURE_TICKETS}/${id}`;
@@ -748,7 +811,13 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* maskInSameRequest() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const masking = yield* newTicket(alice, {
             note: [
@@ -822,7 +891,18 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* readNotWrite() {
           const http = yield* TestHttpClient;
-          const { admin, alice } = yield* apiCallers;
+
+          const admin = {
+            token: yield* (yield* TestHttpClient).signIn("ada", "ada-password"),
+          };
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
+
           const ticket = yield* newTicket(alice);
           const id = textOf(ticket.id);
           const path = `${FIXTURE_TICKETS}/${id}`;
@@ -886,7 +966,13 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* afterSettling() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           yield* change([SETTLE_POSITION.op, SETTLE_MASK.op]);
 

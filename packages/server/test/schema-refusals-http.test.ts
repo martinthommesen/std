@@ -11,6 +11,7 @@
  * purge refusal runs through the change-set endpoint.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import type { Definition } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
 import {
   CORE_NAMESPACE_ID,
@@ -32,6 +33,8 @@ import { committedState } from "./committed-state.ts";
 import { subscribe } from "./outbox-support.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
+  genericFormOf,
+  sendGeneric,
   createBodyOf,
   definitionTable,
   inApiNames,
@@ -53,7 +56,7 @@ import {
   values,
 } from "./schema-support.ts";
 import type { BuiltOperation } from "./schema-support.ts";
-import { create, patch, remove } from "./writes-support.ts";
+import { create, patch } from "./writes-support.ts";
 
 /** The site tables' rows, as one digest. */
 const siteData = values(
@@ -73,6 +76,48 @@ interface Refusal {
   /** More of the body to check: a purge refusal's reason, or the IDs a dependency conflict names. */
   readonly detail?: JsonValue;
 }
+
+/**
+ * The generic and change-set observations of one refused lifecycle operation.
+ * @param token - The caller.
+ * @param definition - The stored definition.
+ * @param action - The lifecycle operation.
+ * @param labels - The existing generic and endpoint diagnostics.
+ * @param expected - The expected refusal.
+ * @returns Both requests, in generic then endpoint order.
+ */
+const refusalPair = (
+  token: string,
+  definition: Definition | undefined,
+  action: "delete" | "retire",
+  labels: readonly [string, string],
+  expected: Omit<Refusal, "label" | "send">
+): readonly [Refusal, Refusal] => {
+  if (definition === undefined) {
+    throw new Error(`Missing definition for ${labels[0]}`);
+  }
+
+  const operation: Operation = {
+    id: definition.id,
+    op: action,
+    version: definition.version,
+  };
+
+  const generic = genericFormOf(definition, operation);
+
+  if (generic === undefined) {
+    throw new Error(`No generic form for ${labels[0]}`);
+  }
+
+  return [
+    {
+      ...expected,
+      label: labels[0],
+      send: sendGeneric(token, definition, generic),
+    },
+    { ...expected, label: labels[1], send: postChangeSet(token, [operation]) },
+  ];
+};
 
 /** Refusals whose `reason` member is STD's own detail, not the fixed text. */
 const REASON_CODES: ReadonlySet<string> = new Set([
@@ -239,23 +284,22 @@ const siteDefinitions = Effect.gen(function* siteDefinitions() {
 });
 
 /**
- * A purge of a definition at its current version.
- *
+ * A purge at the version read for its batch.
  * @param id - The definition.
+ * @param version - Its stored version.
  * @param confirmVersion - The version the confirmation names.
  * @returns The operation.
  */
-const purgeAt = (id: string, confirmVersion?: number) =>
-  Effect.gen(function* purgeOperation() {
-    const version = yield* definitionVersion(id);
-
-    return {
-      confirm: { id, version: confirmVersion ?? version },
-      id,
-      op: "purge",
-      version,
-    } satisfies Operation;
-  });
+const purgeAt = (
+  id: string,
+  version: number,
+  confirmVersion = version
+): Operation => ({
+  confirm: { id, version: confirmVersion },
+  id,
+  op: "purge",
+  version,
+});
 
 /**
  * A retire of a definition at its current version.
@@ -327,111 +371,47 @@ describe("schema-refusals-http", () => {
             const site = yield* siteDefinitions;
             const token = yield* userWithRoles("retirer", ["admin"]);
 
+            const snapshot = yield* (yield* Catalog).refresh;
+
             yield* expectRefusals([
-              {
-                label: "generic DELETE of a field",
-                send: remove(
-                  token,
-                  "core.field",
-                  site.notes,
-                  yield* definitionVersion(site.notes)
-                ),
-                status: 409,
-                tag: "UseRetireOrPurge",
-              },
-              {
-                label: "endpoint delete of a field",
-                send: postChangeSet(token, [
-                  {
-                    id: site.notes,
-                    op: "delete",
-                    version: yield* definitionVersion(site.notes),
-                  },
-                ]),
-                status: 409,
-                tag: "UseRetireOrPurge",
-              },
-              {
-                label: "generic DELETE of a table",
-                send: remove(
-                  token,
-                  "core.class",
-                  site.ledger,
-                  yield* definitionVersion(site.ledger)
-                ),
-                status: 409,
-                tag: "UseRetireOrPurge",
-              },
-              {
-                label: "endpoint delete of a table",
-                send: postChangeSet(token, [
-                  {
-                    id: site.ledger,
-                    op: "delete",
-                    version: yield* definitionVersion(site.ledger),
-                  },
-                ]),
-                status: 409,
-                tag: "UseRetireOrPurge",
-              },
-              {
-                detail: [site.uniquePair],
-                label:
+              ...refusalPair(
+                token,
+                snapshot.get(site.notes),
+                "delete",
+                ["generic DELETE of a field", "endpoint delete of a field"],
+                { status: 409, tag: "UseRetireOrPurge" }
+              ),
+              ...refusalPair(
+                token,
+                snapshot.get(site.ledger),
+                "delete",
+                ["generic DELETE of a table", "endpoint delete of a table"],
+                { status: 409, tag: "UseRetireOrPurge" }
+              ),
+              ...refusalPair(
+                token,
+                snapshot.get(site.memo),
+                "retire",
+                [
                   "generic retire of a field in a multi-field unique index",
-                send: patch(
-                  token,
-                  "core.field",
-                  site.memo,
-                  yield* definitionVersion(site.memo),
-                  {
-                    state: "retired",
-                  }
-                ),
-                status: 409,
-                tag: "DependencyConflict",
-              },
-              {
-                detail: [site.uniquePair],
-                label:
                   "endpoint retire of a field in a multi-field unique index",
-                send: postChangeSet(token, [
-                  {
-                    id: site.memo,
-                    op: "retire",
-                    version: yield* definitionVersion(site.memo),
-                  },
-                ]),
-                status: 409,
-                tag: "DependencyConflict",
-              },
-              {
-                label:
+                ],
+                {
+                  detail: [site.uniquePair],
+                  status: 409,
+                  tag: "DependencyConflict",
+                }
+              ),
+              ...refusalPair(
+                token,
+                snapshot.get(site.shelf),
+                "retire",
+                [
                   "generic retire of a table an active reference points at",
-                send: patch(
-                  token,
-                  "core.class",
-                  site.shelf,
-                  yield* definitionVersion(site.shelf),
-                  {
-                    state: "retired",
-                  }
-                ),
-                status: 409,
-                tag: "DependencyConflict",
-              },
-              {
-                label:
                   "endpoint retire of a table an active reference points at",
-                send: postChangeSet(token, [
-                  {
-                    id: site.shelf,
-                    op: "retire",
-                    version: yield* definitionVersion(site.shelf),
-                  },
-                ]),
-                status: 409,
-                tag: "DependencyConflict",
-              },
+                ],
+                { status: 409, tag: "DependencyConflict" }
+              ),
             ]);
           })
       );
@@ -455,7 +435,9 @@ describe("schema-refusals-http", () => {
               {
                 detail: "notRetired",
                 label: "purge of an active field",
-                send: postChangeSet(purger, [yield* purgeAt(site.notes)]),
+                send: postChangeSet(purger, [
+                  purgeAt(site.notes, notesVersion),
+                ]),
                 status: 409,
                 tag: "PurgeRefused",
               },
@@ -497,14 +479,16 @@ describe("schema-refusals-http", () => {
                 detail: "confirmation",
                 label: "purge with a confirmation naming another version",
                 send: postChangeSet(purger, [
-                  yield* purgeAt(site.notes, retiredVersion + 1),
+                  purgeAt(site.notes, retiredVersion, retiredVersion + 1),
                 ]),
                 status: 409,
                 tag: "PurgeRefused",
               },
               {
                 label: "purge by an admin without schema.purge",
-                send: postChangeSet(admin, [yield* purgeAt(site.notes)]),
+                send: postChangeSet(admin, [
+                  purgeAt(site.notes, retiredVersion),
+                ]),
                 status: 403,
                 tag: "PermissionRequired",
               },
@@ -512,7 +496,9 @@ describe("schema-refusals-http", () => {
                 detail: [site.notesRule, site.pair].toSorted(),
                 label:
                   "purge of a field an access rule reads and a multi-field index covers",
-                send: postChangeSet(purger, [yield* purgeAt(site.notes)]),
+                send: postChangeSet(purger, [
+                  purgeAt(site.notes, retiredVersion),
+                ]),
                 status: 409,
                 tag: "DependencyConflict",
               },
@@ -553,7 +539,9 @@ describe("schema-refusals-http", () => {
                 detail: "hasRecords",
                 label:
                   "purge of a retired child class with records in its root",
-                send: postChangeSet(purger, [yield* purgeAt(carton.id)]),
+                send: postChangeSet(purger, [
+                  purgeAt(carton.id, yield* definitionVersion(carton.id)),
+                ]),
                 status: 409,
                 tag: "PurgeRefused",
               },
@@ -575,44 +563,36 @@ describe("schema-refusals-http", () => {
           Effect.gen(function* roleRefusals() {
             const site = yield* siteDefinitions;
             const token = yield* userWithRoles("role_admin", ["admin"]);
-            const version = yield* definitionVersion(site.auditor);
-            const naming = [site.auditorRule];
+            const snapshot = yield* (yield* Catalog).refresh;
+            const definition = snapshot.get(site.auditor);
+
+            const expected = {
+              detail: [site.auditorRule],
+              status: 409,
+              tag: "DependencyConflict",
+            };
+
+            const deletes = refusalPair(
+              token,
+              definition,
+              "delete",
+              ["generic DELETE of the role", "endpoint delete of the role"],
+              expected
+            );
+
+            const retires = refusalPair(
+              token,
+              definition,
+              "retire",
+              ["generic retire of the role", "endpoint retire of the role"],
+              expected
+            );
 
             yield* expectRefusals([
-              {
-                detail: naming,
-                label: "generic DELETE of the role",
-                send: remove(token, "core.role", site.auditor, version),
-                status: 409,
-                tag: "DependencyConflict",
-              },
-              {
-                detail: naming,
-                label: "generic retire of the role",
-                send: patch(token, "core.role", site.auditor, version, {
-                  state: "retired",
-                }),
-                status: 409,
-                tag: "DependencyConflict",
-              },
-              {
-                detail: naming,
-                label: "endpoint delete of the role",
-                send: postChangeSet(token, [
-                  { id: site.auditor, op: "delete", version },
-                ]),
-                status: 409,
-                tag: "DependencyConflict",
-              },
-              {
-                detail: naming,
-                label: "endpoint retire of the role",
-                send: postChangeSet(token, [
-                  { id: site.auditor, op: "retire", version },
-                ]),
-                status: 409,
-                tag: "DependencyConflict",
-              },
+              deletes[0],
+              retires[0],
+              deletes[1],
+              retires[1],
             ]);
 
             const http = yield* TestHttpClient;
@@ -664,34 +644,19 @@ describe("schema-refusals-http", () => {
             assert.include(listed.text, '"drawer 1"');
 
             // Alone, through both paths: refused, naming the table.
-            yield* expectRefusals([
-              {
-                detail: [drawer.id],
-                label: "generic retire of the display field alone",
-                send: patch(
-                  token,
-                  "core.field",
-                  caption.id,
-                  yield* definitionVersion(caption.id),
-                  { state: "retired" }
-                ),
-                status: 409,
-                tag: "DependencyConflict",
-              },
-              {
-                detail: [drawer.id],
-                label: "endpoint retire of the display field alone",
-                send: postChangeSet(token, [
-                  {
-                    id: caption.id,
-                    op: "retire",
-                    version: yield* definitionVersion(caption.id),
-                  },
-                ]),
-                status: 409,
-                tag: "DependencyConflict",
-              },
-            ]);
+            const pairSnapshot = yield* (yield* Catalog).refresh;
+            yield* expectRefusals(
+              refusalPair(
+                token,
+                pairSnapshot.get(caption.id),
+                "retire",
+                [
+                  "generic retire of the display field alone",
+                  "endpoint retire of the display field alone",
+                ],
+                { detail: [drawer.id], status: 409, tag: "DependencyConflict" }
+              )
+            );
 
             // With its table, in one change set: accepted.
             const retiredSnapshot = yield* (yield* Catalog).refresh;
@@ -759,28 +724,19 @@ describe("schema-refusals-http", () => {
 
             yield* change([bin.op, tray.op]);
 
-            yield* expectRefusals([
-              {
-                detail: [tray.id],
-                label: "generic retire of a table with an active child class",
-                send: patch(
-                  token,
-                  "core.class",
-                  bin.id,
-                  yield* definitionVersion(bin.id),
-                  { state: "retired" }
-                ),
-                status: 409,
-                tag: "DependencyConflict",
-              },
-              {
-                detail: [tray.id],
-                label: "endpoint retire of a table with an active child class",
-                send: postChangeSet(token, [yield* retireAt(bin.id)]),
-                status: 409,
-                tag: "DependencyConflict",
-              },
-            ]);
+            const pairSnapshot = yield* (yield* Catalog).refresh;
+            yield* expectRefusals(
+              refusalPair(
+                token,
+                pairSnapshot.get(bin.id),
+                "retire",
+                [
+                  "generic retire of a table with an active child class",
+                  "endpoint retire of a table with an active child class",
+                ],
+                { detail: [tray.id], status: 409, tag: "DependencyConflict" }
+              )
+            );
 
             // The child first, then the table, in one change set: accepted.
             const retiredHierarchy = yield* (yield* Catalog).refresh;
@@ -992,11 +948,18 @@ describe("schema-refusals-http", () => {
               }))
             );
 
+            const purgeSnapshot = yield* (yield* Catalog).refresh;
+
             yield* expectRefusals([
               {
                 detail: [skid.id],
                 label: "purge of a table whose child class is not purged",
-                send: postChangeSet(purger, [yield* purgeAt(pallet.id)]),
+                send: postChangeSet(purger, [
+                  purgeAt(
+                    pallet.id,
+                    purgeSnapshot.get(pallet.id)?.version ?? 0
+                  ),
+                ]),
                 status: 409,
                 tag: "DependencyConflict",
               },
@@ -1004,7 +967,9 @@ describe("schema-refusals-http", () => {
                 detail: [atDock.id],
                 label:
                   "purge of a table a reference field not purged points at",
-                send: postChangeSet(purger, [yield* purgeAt(dock.id)]),
+                send: postChangeSet(purger, [
+                  purgeAt(dock.id, purgeSnapshot.get(dock.id)?.version ?? 0),
+                ]),
                 status: 409,
                 tag: "DependencyConflict",
               },
@@ -1012,21 +977,27 @@ describe("schema-refusals-http", () => {
                 detail: [bayRule.id, dormantBayRule.id].toSorted(),
                 label:
                   "purge of a table access rules are on (one active, one not)",
-                send: postChangeSet(purger, [yield* purgeAt(bay.id)]),
+                send: postChangeSet(purger, [
+                  purgeAt(bay.id, purgeSnapshot.get(bay.id)?.version ?? 0),
+                ]),
                 status: 409,
                 tag: "DependencyConflict",
               },
               {
                 detail: [craneSubscription],
                 label: "purge of a table a subscription is on",
-                send: postChangeSet(purger, [yield* purgeAt(crane.id)]),
+                send: postChangeSet(purger, [
+                  purgeAt(crane.id, purgeSnapshot.get(crane.id)?.version ?? 0),
+                ]),
                 status: 409,
                 tag: "DependencyConflict",
               },
               {
                 detail: [readsMeter.id],
                 label: "purge of a table a condition field not purged names",
-                send: postChangeSet(purger, [yield* purgeAt(meter.id)]),
+                send: postChangeSet(purger, [
+                  purgeAt(meter.id, purgeSnapshot.get(meter.id)?.version ?? 0),
+                ]),
                 status: 409,
                 tag: "DependencyConflict",
               },
@@ -1034,8 +1005,8 @@ describe("schema-refusals-http", () => {
 
             // The child purged first, in the same change set: accepted.
             const purged = yield* postChangeSet(purger, [
-              yield* purgeAt(skid.id),
-              yield* purgeAt(pallet.id),
+              purgeAt(skid.id, purgeSnapshot.get(skid.id)?.version ?? 0),
+              purgeAt(pallet.id, purgeSnapshot.get(pallet.id)?.version ?? 0),
             ]);
 
             assert.strictEqual(purged.status, 201, purged.text);
@@ -1061,28 +1032,21 @@ describe("schema-refusals-http", () => {
 
             yield* change([archivist.op, dormant.op]);
 
-            const version = yield* definitionVersion(archivist.id);
-
             // Contracts 1.7: a delete is refused while any access rule
             // names the role.
-            yield* expectRefusals([
-              {
-                detail: [dormant.id],
-                label: "generic DELETE of a role an inactive rule names",
-                send: remove(token, "core.role", archivist.id, version),
-                status: 409,
-                tag: "DependencyConflict",
-              },
-              {
-                detail: [dormant.id],
-                label: "endpoint delete of a role an inactive rule names",
-                send: postChangeSet(token, [
-                  { id: archivist.id, op: "delete", version },
-                ]),
-                status: 409,
-                tag: "DependencyConflict",
-              },
-            ]);
+            const pairSnapshot = yield* (yield* Catalog).refresh;
+            yield* expectRefusals(
+              refusalPair(
+                token,
+                pairSnapshot.get(archivist.id),
+                "delete",
+                [
+                  "generic DELETE of a role an inactive rule names",
+                  "endpoint delete of a role an inactive rule names",
+                ],
+                { detail: [dormant.id], status: 409, tag: "DependencyConflict" }
+              )
+            );
 
             // A retire is refused only by an active rule: allowed on both
             // paths (reactivated in between).

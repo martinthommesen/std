@@ -71,10 +71,11 @@ import {
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
+import { rootVersion } from "./records-support.ts";
 import { CHANGE_SETS } from "./schema-paths-support.ts";
 import { definitionVersion, createRole, values } from "./schema-support.ts";
 import { errorOf } from "./support.ts";
-import { ASSET, LAPTOP, MONITOR, versionOf } from "./writes-support.ts";
+import { ASSET, LAPTOP, MONITOR } from "./writes-support.ts";
 
 /** The services the rows use: the acme fixture and the HTTP client. */
 type Services = Layer.Success<ReturnType<typeof readsTestLayer>>;
@@ -361,14 +362,14 @@ const sessionLifecycle = (callers: Callers, who: Who) =>
 /**
  * A fresh record owned by `owner`, named uniquely.
  *
- * @param callers - The fixture's callers.
+ * @param fixture - The fixture.
  * @param owner - The owner.
  * @param classId - The class.
  * @param extra - More values.
  * @returns The record's ID and name.
  */
 const fresh = (
-  callers: Callers,
+  fixture: AcmeFixture["Service"],
   owner: Who,
   classId: string,
   extra: Readonly<Record<string, JsonValue>> = {}
@@ -381,7 +382,7 @@ const fresh = (
         ? { purchased_on: "2026-01-01", serial: `SN-${name}` }
         : {};
 
-    const id = yield* freshAsset(userOf(callers.fixture, owner), classId, {
+    const id = yield* freshAsset(userOf(fixture, owner), classId, {
       name,
       status: "in_use",
       ...required,
@@ -831,7 +832,11 @@ const READ_ROWS: readonly PathRow[] = [
   },
 ];
 
-const WRITE_ROWS: readonly PathRow[] = [
+interface WriteRow extends PathRow {
+  readonly successfulDeliveryDelta: number | null;
+}
+
+const WRITE_ROWS: readonly WriteRow[] = [
   {
     alice: { status: 201 },
     bob: { status: 201 },
@@ -840,6 +845,7 @@ const WRITE_ROWS: readonly PathRow[] = [
       send(callers, who, "POST", listPath(ASSET), {
         body: { name: "mine", owner: userOf(callers.fixture, who) },
       }).pipe(Effect.map(writeStatus)),
+    successfulDeliveryDelta: 1,
   },
   {
     alice: { status: 201 },
@@ -849,6 +855,7 @@ const WRITE_ROWS: readonly PathRow[] = [
       send(callers, who, "POST", listPath(ASSET), {
         body: { name: "theirs", owner: userOf(callers.fixture, other(who)) },
       }).pipe(Effect.map(writeStatus)),
+    successfulDeliveryDelta: 1,
   },
   {
     alice: { status: 201 },
@@ -862,6 +869,7 @@ const WRITE_ROWS: readonly PathRow[] = [
           purchasedOn: "2026-01-01",
         },
       }).pipe(Effect.map(writeStatus)),
+    successfulDeliveryDelta: 1,
   },
   {
     alice: { status: 201 },
@@ -871,6 +879,7 @@ const WRITE_ROWS: readonly PathRow[] = [
       send(callers, who, "POST", listPath(MONITOR), {
         body: { name: "monitor", owner: userOf(callers.fixture, who) },
       }).pipe(Effect.map(writeStatus)),
+    successfulDeliveryDelta: 1,
   },
   {
     alice: refused(400, "UnknownField"),
@@ -880,6 +889,7 @@ const WRITE_ROWS: readonly PathRow[] = [
       send(callers, who, "POST", listPath(ASSET), {
         body: { name: "x", serial: "S" },
       }).pipe(Effect.map(writeStatus)),
+    successfulDeliveryDelta: 1,
   },
   {
     alice: { status: 200 },
@@ -887,7 +897,7 @@ const WRITE_ROWS: readonly PathRow[] = [
     path: "PATCH /acme.asset/{own laptop} name",
     run: (callers, who) =>
       Effect.gen(function* patchName() {
-        const { id } = yield* fresh(callers, who, ACME.laptop);
+        const { id } = yield* fresh(callers.fixture, who, ACME.laptop);
 
         return writeStatus(
           yield* send(callers, who, "PATCH", recordPath(ASSET, id), {
@@ -896,6 +906,7 @@ const WRITE_ROWS: readonly PathRow[] = [
           })
         );
       }),
+    successfulDeliveryDelta: 1,
   },
   {
     alice: { status: 200 },
@@ -903,7 +914,7 @@ const WRITE_ROWS: readonly PathRow[] = [
     path: "PATCH /acme.laptop/{own laptop} status (rule 9)",
     run: (callers, who) =>
       Effect.gen(function* patchStatus() {
-        const { id } = yield* fresh(callers, who, ACME.laptop);
+        const { id } = yield* fresh(callers.fixture, who, ACME.laptop);
 
         return writeStatus(
           yield* send(callers, who, "PATCH", recordPath(LAPTOP, id), {
@@ -912,6 +923,7 @@ const WRITE_ROWS: readonly PathRow[] = [
           })
         );
       }),
+    successfulDeliveryDelta: 1,
   },
   {
     alice: { status: 200 },
@@ -919,7 +931,7 @@ const WRITE_ROWS: readonly PathRow[] = [
     path: "PATCH /acme.asset/{own asset} handing it over (proposed state)",
     run: (callers, who) =>
       Effect.gen(function* handOver() {
-        const { id } = yield* fresh(callers, who, ACME.asset);
+        const { id } = yield* fresh(callers.fixture, who, ACME.asset);
 
         return writeStatus(
           yield* send(callers, who, "PATCH", recordPath(ASSET, id), {
@@ -928,6 +940,7 @@ const WRITE_ROWS: readonly PathRow[] = [
           })
         );
       }),
+    successfulDeliveryDelta: 1,
   },
   {
     alice: { status: 200 },
@@ -935,7 +948,7 @@ const WRITE_ROWS: readonly PathRow[] = [
     path: "PATCH /acme.asset/{someone else's asset}",
     run: (callers, who) =>
       Effect.gen(function* patchOthers() {
-        const { id } = yield* fresh(callers, other(who), ACME.monitor);
+        const { id } = yield* fresh(callers.fixture, other(who), ACME.monitor);
 
         return writeStatus(
           yield* send(callers, who, "PATCH", recordPath(ASSET, id), {
@@ -944,6 +957,7 @@ const WRITE_ROWS: readonly PathRow[] = [
           })
         );
       }),
+    successfulDeliveryDelta: 1,
   },
   {
     alice: refused(412, "VersionConflict"),
@@ -951,7 +965,7 @@ const WRITE_ROWS: readonly PathRow[] = [
     path: "PATCH with a stale If-Match",
     run: (callers, who) =>
       Effect.gen(function* stalePatch() {
-        const { id } = yield* fresh(callers, who, ACME.asset);
+        const { id } = yield* fresh(callers.fixture, who, ACME.asset);
 
         return writeStatus(
           yield* send(callers, who, "PATCH", recordPath(ASSET, id), {
@@ -960,6 +974,7 @@ const WRITE_ROWS: readonly PathRow[] = [
           })
         );
       }),
+    successfulDeliveryDelta: null,
   },
   {
     alice: refused(428, "VersionRequired"),
@@ -973,6 +988,7 @@ const WRITE_ROWS: readonly PathRow[] = [
         recordPath(ASSET, callers.fixture.records.M),
         { body: { name: "no version" } }
       ).pipe(Effect.map(writeStatus)),
+    successfulDeliveryDelta: null,
   },
   {
     alice: { status: 204 },
@@ -980,7 +996,7 @@ const WRITE_ROWS: readonly PathRow[] = [
     path: "DELETE /acme.asset/{own asset} (no delete rule for Bob)",
     run: (callers, who) =>
       Effect.gen(function* deleteOwn() {
-        const { id } = yield* fresh(callers, who, ACME.asset);
+        const { id } = yield* fresh(callers.fixture, who, ACME.asset);
 
         return writeStatus(
           yield* send(callers, who, "DELETE", recordPath(ASSET, id), {
@@ -988,6 +1004,7 @@ const WRITE_ROWS: readonly PathRow[] = [
           })
         );
       }),
+    successfulDeliveryDelta: 1,
   },
   {
     alice: { status: 204 },
@@ -995,7 +1012,7 @@ const WRITE_ROWS: readonly PathRow[] = [
     path: "DELETE /acme.laptop/{someone else's laptop}",
     run: (callers, who) =>
       Effect.gen(function* deleteOthers() {
-        const { id } = yield* fresh(callers, other(who), ACME.laptop);
+        const { id } = yield* fresh(callers.fixture, other(who), ACME.laptop);
 
         return writeStatus(
           yield* send(callers, who, "DELETE", recordPath(LAPTOP, id), {
@@ -1003,6 +1020,7 @@ const WRITE_ROWS: readonly PathRow[] = [
           })
         );
       }),
+    successfulDeliveryDelta: 1,
   },
   {
     alice: refused(409, "Referenced"),
@@ -1010,9 +1028,11 @@ const WRITE_ROWS: readonly PathRow[] = [
     path: "DELETE /acme.monitor/{own monitor a laptop docks to}",
     run: (callers, who) =>
       Effect.gen(function* deleteReferenced() {
-        const monitor = yield* fresh(callers, who, ACME.monitor);
+        const monitor = yield* fresh(callers.fixture, who, ACME.monitor);
 
-        yield* fresh(callers, who, ACME.laptop, { docked_to: monitor.id });
+        yield* fresh(callers.fixture, who, ACME.laptop, {
+          docked_to: monitor.id,
+        });
 
         return writeStatus(
           yield* send(callers, who, "DELETE", recordPath(MONITOR, monitor.id), {
@@ -1020,6 +1040,7 @@ const WRITE_ROWS: readonly PathRow[] = [
           })
         );
       }),
+    successfulDeliveryDelta: 1,
   },
   {
     alice: refused(404, "UnknownTable"),
@@ -1029,12 +1050,14 @@ const WRITE_ROWS: readonly PathRow[] = [
       send(callers, who, "POST", listPath("core.access_rule"), {
         body: { description: "mine" },
       }).pipe(Effect.map(writeStatus)),
+    successfulDeliveryDelta: null,
   },
 ];
 
 /** A path on definitions, with the administrator's outcome too. */
 interface DefinitionRow extends PathRow {
   readonly admin: Observation;
+  readonly requiresWebClient: boolean;
 }
 
 /**
@@ -1103,6 +1126,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     alice: refused(403, "NotAllowed"),
     bob: refused(403, "NotAllowed"),
     path: "POST /applyChangeSet (create a local role)",
+    requiresWebClient: true,
     run: (callers, who) =>
       postChangeSet(callers, who, [
         createRole(`role_${randomUUID().slice(0, 8)}`),
@@ -1113,6 +1137,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     alice: refused(422, "DefinitionInvalid"),
     bob: refused(422, "DefinitionInvalid"),
     path: "POST /applyChangeSet (rename an app table; hidden is missing)",
+    requiresWebClient: true,
     run: (callers, who) =>
       Effect.gen(function* renameApp() {
         const version = yield* definitionVersion(ACME.asset);
@@ -1129,6 +1154,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     alice: refused(404, "NotFound"),
     bob: refused(404, "NotFound"),
     path: "GET /applyChangeSet/{id} (a committed change set)",
+    requiresWebClient: false,
     run: (callers, who) =>
       Effect.gen(function* readChangeSet() {
         const { changeSetId } = yield* freshRole(callers);
@@ -1143,6 +1169,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     alice: refused(404, "NotFound"),
     bob: refused(404, "NotFound"),
     path: "GET /applyChangeSet/{random ID}",
+    requiresWebClient: false,
     run: (callers, who) =>
       send(callers, who, "GET", `${CHANGE_SETS}/${randomUUID()}`).pipe(
         Effect.map(writeStatus)
@@ -1153,6 +1180,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     alice: refused(404, "UnknownTable"),
     bob: refused(404, "UnknownTable"),
     path: "POST /core.role (generic create, a one-operation change set)",
+    requiresWebClient: true,
     run: (callers, who) =>
       send(callers, who, "POST", listPath("core.role"), {
         body: { label: "Generic", name: `role_${randomUUID().slice(0, 8)}` },
@@ -1163,6 +1191,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     alice: refused(404, "UnknownTable"),
     bob: refused(404, "UnknownTable"),
     path: "PATCH /core.role/{local role} (label)",
+    requiresWebClient: true,
     run: (callers, who) =>
       Effect.gen(function* relabelRole() {
         const { id } = yield* freshRole(callers);
@@ -1180,6 +1209,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     alice: refused(404, "UnknownTable"),
     bob: refused(404, "UnknownTable"),
     path: "PATCH /core.role/{local role} (retire)",
+    requiresWebClient: true,
     run: (callers, who) =>
       Effect.gen(function* retireRole() {
         const { id } = yield* freshRole(callers);
@@ -1197,6 +1227,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     alice: refused(404, "UnknownTable"),
     bob: refused(404, "UnknownTable"),
     path: "DELETE /core.role/{local role}",
+    requiresWebClient: true,
     run: (callers, who) =>
       Effect.gen(function* deleteRole() {
         const { id } = yield* freshRole(callers);
@@ -1213,6 +1244,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     alice: refused(404, "UnknownTable"),
     bob: refused(404, "UnknownTable"),
     path: "PATCH /core.class/{acme.asset} (label: a local override)",
+    requiresWebClient: true,
     run: (callers, who) =>
       Effect.gen(function* relabelApp() {
         const version = yield* definitionVersion(ACME.asset);
@@ -1230,6 +1262,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     alice: refused(404, "UnknownTable"),
     bob: refused(404, "UnknownTable"),
     path: "DELETE /core.field/{acme cost}",
+    requiresWebClient: true,
     run: (callers, who) =>
       Effect.gen(function* deleteField() {
         const version = yield* definitionVersion(ACME.cost);
@@ -1246,6 +1279,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     alice: refused(404, "UnknownTable"),
     bob: refused(404, "UnknownTable"),
     path: "POST /core.change (the history, never written generically)",
+    requiresWebClient: true,
     run: (callers, who) =>
       send(callers, who, "POST", listPath("core.change"), {
         body: { kind: "update" },
@@ -1502,8 +1536,12 @@ describe("authz-paths", () => {
 
                 if (seen.status >= 400) {
                   assert.strictEqual(written, 0, `deliveries after ${where}`);
-                } else if (row.path.includes("acme.")) {
-                  assert.strictEqual(written, 1, `deliveries after ${where}`);
+                } else if (row.successfulDeliveryDelta !== null) {
+                  assert.strictEqual(
+                    written,
+                    row.successfulDeliveryDelta,
+                    `deliveries after ${where}`
+                  );
                 }
               }
             }
@@ -1569,7 +1607,7 @@ describe("authz-paths", () => {
 
               assert.deepStrictEqual(
                 seen,
-                row.path.startsWith("GET ") ? row[who] : unauthenticated,
+                row.requiresWebClient ? unauthenticated : row[who],
                 `${who}: ${row.path}`
               );
             }
@@ -1581,13 +1619,13 @@ describe("authz-paths", () => {
       "a nested save from an after-write hook acts as the acting user",
       () =>
         Effect.gen(function* nestedSaves() {
-          const callers = yield* signInAllBy("bearer");
-          const { records } = callers.fixture;
-          const bob = userOf(callers.fixture, "bob");
-          const alice = userOf(callers.fixture, "alice");
-          const outer = yield* fresh(callers, "bob", ACME.asset);
-          const ownAsset = yield* fresh(callers, "bob", ACME.asset);
-          const ownLaptop = yield* fresh(callers, "bob", ACME.laptop);
+          const fixture = yield* AcmeFixture;
+          const { records } = fixture;
+          const bob = userOf(fixture, "bob");
+          const alice = userOf(fixture, "alice");
+          const outer = yield* fresh(fixture, "bob", ACME.asset);
+          const ownAsset = yield* fresh(fixture, "bob", ACME.asset);
+          const ownLaptop = yield* fresh(fixture, "bob", ACME.laptop);
           const spare = { status: "spare" };
 
           // The write test's subscription to every asset save is in place,
@@ -1600,8 +1638,8 @@ describe("authz-paths", () => {
             yield* nestedSave(bob, outer.id, records.AM, spare),
             { nested: ["NotFound"], outer: "refused" }
           );
-          assert.strictEqual(yield* versionOf(outer.id), 1);
-          assert.strictEqual(yield* versionOf(records.AM), 1);
+          assert.strictEqual(yield* rootVersion(outer.id), 1);
+          assert.strictEqual(yield* rootVersion(records.AM), 1);
 
           // Rule 9 refuses Bob a laptop's status, through the parent
           // endpoint too.
@@ -1609,7 +1647,7 @@ describe("authz-paths", () => {
             yield* nestedSave(bob, outer.id, ownLaptop.id, spare),
             { nested: ["NotAllowed"], outer: "refused" }
           );
-          assert.strictEqual(yield* versionOf(ownLaptop.id), 1);
+          assert.strictEqual(yield* rootVersion(ownLaptop.id), 1);
 
           // A record the save is saving: RecordInSave.
           assert.deepStrictEqual(
@@ -1623,7 +1661,7 @@ describe("authz-paths", () => {
             yield* nestedSave(bob, outer.id, ownAsset.id, spare),
             { nested: ["saved"], outer: "saved" }
           );
-          assert.strictEqual(yield* versionOf(ownAsset.id), 2);
+          assert.strictEqual(yield* rootVersion(ownAsset.id), 2);
           // One delivery for the outer save, one for the nested one.
           assert.strictEqual(yield* deliveries(), before + 2);
           assert.deepStrictEqual(
@@ -1643,7 +1681,7 @@ describe("authz-paths", () => {
           );
 
           // The same nested save as Alice, whose rules reach her monitor.
-          const aliceOuter = yield* fresh(callers, "alice", ACME.asset);
+          const aliceOuter = yield* fresh(fixture, "alice", ACME.asset);
 
           assert.deepStrictEqual(
             yield* nestedSave(alice, aliceOuter.id, records.AM, spare),

@@ -130,6 +130,15 @@ interface Operation {
 const segmentsOf = (text: string): readonly string[] =>
   text.split("/").filter((segment) => segment !== "");
 
+interface DocumentRoute {
+  readonly template: string;
+  readonly parts: readonly string[];
+  readonly literalCount: number;
+  readonly item: JsonObject;
+}
+
+const documentRoutes = new WeakMap<JsonObject, readonly DocumentRoute[]>();
+
 const operationOf = (
   document: JsonObject,
   method: string,
@@ -137,34 +146,38 @@ const operationOf = (
 ): Operation | undefined => {
   const verb = (method === "HEAD" ? "GET" : method).toLowerCase();
   const segments = segmentsOf(relativePath);
+  let routes = documentRoutes.get(document);
 
-  const candidates = Object.entries(asObject(document.paths)).filter(
-    ([template, item]) => {
-      const parts = segmentsOf(template);
+  if (routes === undefined) {
+    routes = Object.entries(asObject(document.paths))
+      .map(([template, item]) => {
+        const parts = segmentsOf(template);
 
-      return (
-        asObject(item)[verb] !== undefined &&
-        parts.length === segments.length &&
-        parts.every(
-          (part, index) => part.startsWith("{") || part === segments[index]
-        )
-      );
-    }
-  );
+        return {
+          item: asObject(item),
+          literalCount: parts.filter((part) => !part.startsWith("{")).length,
+          parts,
+          template,
+        };
+      })
+      .toSorted((left, right) => right.literalCount - left.literalCount);
+    documentRoutes.set(document, routes);
+  }
 
-  // Literal segments win over parameters, as routers decide.
-  const literals = (template: string) =>
-    segmentsOf(template).filter((part) => !part.startsWith("{")).length;
-
-  const [found] = candidates.toSorted(
-    ([left], [right]) => literals(right) - literals(left)
+  const found = routes.find(
+    ({ item, parts }) =>
+      item[verb] !== undefined &&
+      parts.length === segments.length &&
+      parts.every(
+        (part, index) => part.startsWith("{") || part === segments[index]
+      )
   );
 
   return found === undefined
     ? undefined
     : {
-        responses: asObject(asObject(asObject(found[1])[verb]).responses),
-        template: found[0],
+        responses: asObject(asObject(found.item[verb]).responses),
+        template: found.template,
       };
 };
 

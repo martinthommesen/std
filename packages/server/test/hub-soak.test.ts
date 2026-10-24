@@ -18,7 +18,8 @@ import { asObject, textOf, apiCallers } from "./api-support.ts";
 import { killAndAwait } from "./cli-support.ts";
 import { hubTestLayer, listener, register } from "./hub-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
-import { actingAs, expireLease } from "./worker-support.ts";
+import { asUser } from "./records-support.ts";
+import { expireLease } from "./worker-support.ts";
 import {
   create as createAsset,
   patch as patchAsset,
@@ -144,7 +145,7 @@ describe("hub-soak", () => {
               });
 
               return yield* new DeliveryFailed({ reason: "Test rollback" });
-            }).pipe(actingAs("1970f1d9-a830-4414-ba8e-210e07952a85"))
+            }).pipe(asUser("1970f1d9-a830-4414-ba8e-210e07952a85"))
           )
           .pipe(Effect.exit);
 

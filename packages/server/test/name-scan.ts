@@ -38,10 +38,10 @@
  * It cannot catch a deliberately disguised name (assembled at run time, or
  * reached through reflection); review covers those.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { Predicate, Schema } from "effect";
+import { Predicate } from "effect";
 import { parseSync, Visitor } from "oxc-parser";
 import type {
   BindingPattern,
@@ -51,7 +51,6 @@ import type {
   PropertyKey,
   VisitorObject,
 } from "oxc-parser";
-import { parse } from "yaml";
 
 /** The declaration site of the lookups. */
 const SNAPSHOT_FILE = "packages/definitions/src/snapshot.ts";
@@ -517,46 +516,6 @@ export const nameChecksIn = (
   }).visit(program);
 
   return [...findings].toSorted(([a], [b]) => a - b).map(([, text]) => text);
-};
-
-/** The part of `pnpm-workspace.yaml` the scan reads. */
-const decodeWorkspace = Schema.decodeUnknownSync(
-  Schema.Struct({ packages: Schema.Array(Schema.String) })
-);
-
-/**
- * The workspace packages' directories, from `pnpm-workspace.yaml`: each
- * `<dir>/*` entry expanded to its subdirectories, other entries as is.
- *
- * @param root - The repository root.
- * @returns Package directories relative to the root, sorted.
- */
-export const workspacePackages = (root: string): string[] => {
-  const { packages } = decodeWorkspace(
-    parse(readFileSync(path.join(root, "pnpm-workspace.yaml"), "utf-8"))
-  );
-
-  const isDirectory = (entry: string): boolean =>
-    statSync(path.join(root, entry), {
-      throwIfNoEntry: false,
-    })?.isDirectory() === true;
-
-  return packages
-    .flatMap((pattern) => {
-      if (!pattern.endsWith("/*")) {
-        return [pattern];
-      }
-
-      const parent = pattern.slice(0, -2);
-
-      return isDirectory(parent)
-        ? readdirSync(path.join(root, parent)).map((entry) =>
-            path.join(parent, entry)
-          )
-        : [];
-    })
-    .filter(isDirectory)
-    .toSorted();
 };
 
 /**

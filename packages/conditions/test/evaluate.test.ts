@@ -443,16 +443,9 @@ describe("browser evaluator", () => {
             );
 
           const partial: ImageSource = {
-            previous:
-              full.previous === null || full.previous === undefined
-                ? null
-                : strip(full.previous),
+            previous: full.previous === null ? null : strip(full.previous),
             record: strip(full.record),
-            targets: new Map(
-              [
-                ...(full.targets ?? new Map<string, RecordImage | null>()),
-              ].filter(([id]) => !gone.has(id))
-            ),
+            targets: new Map([...full.targets].filter(([id]) => !gone.has(id))),
           };
 
           const expected = evaluateCondition(resolved.value, full);
@@ -568,11 +561,9 @@ describe("negation normal form and simplification", () => {
 
           const source: ImageSource = {
             previous:
-              full.previous === null || full.previous === undefined
-                ? null
-                : maskImage(full.previous, hidden),
+              full.previous === null ? null : maskImage(full.previous, hidden),
             record: maskImage(full.record, hidden),
-            targets: full.targets ?? new Map(),
+            targets: full.targets,
           };
 
           const context = { ...CONTEXT, me };

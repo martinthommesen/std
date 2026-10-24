@@ -25,6 +25,7 @@ import {
   API,
   withQuery,
 } from "./api-support.ts";
+import { linksOf } from "./paging.ts";
 
 // The security regression workload requested in F6: 2,000 versions, far beyond a one-entry page.
 const LARGE_HISTORY = 2000;
@@ -50,12 +51,7 @@ const linkOf = (
   response: TestResponse,
   relation: string
 ): string | undefined => {
-  const entry = response.headers
-    .get("link")
-    ?.split(", ")
-    .find((part) => part.endsWith(`; rel="${relation}"`));
-
-  const href = entry?.slice(1, entry.indexOf(">"));
+  const href = linksOf(response.headers.get("link")).get(relation);
 
   if (href === undefined) {
     return undefined;

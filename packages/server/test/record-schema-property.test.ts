@@ -24,14 +24,14 @@
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { TableMetadata } from "@std/api/table-metadata";
-import type { AccessRuleDraft, ChoiceDraft } from "@std/definitions/definition";
+import type { AccessRuleDraft } from "@std/definitions/definition";
 import { FieldErrorSchema } from "@std/definitions/field-errors";
 import type { FieldError } from "@std/definitions/field-errors";
 import type { Operation } from "@std/definitions/operation";
 import { validateRecord } from "@std/definitions/record-schema";
 import type { RecordMode, StoredRecord } from "@std/definitions/record-schema";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
-import type { FieldType } from "@std/values/field-type";
+import type { FieldTypeOf } from "@std/values/field-type";
 import { parseJson } from "@std/values/json";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
@@ -70,6 +70,8 @@ import {
   createClass,
   ensureSite,
   freshId,
+  addChoice,
+  addAccessRule,
 } from "./schema-support.ts";
 import { create, patch } from "./writes-support.ts";
 
@@ -101,8 +103,7 @@ type Kind = (typeof KINDS)[number];
 
 /** One generated field. */
 interface FieldSpec {
-  readonly kind: Kind;
-  readonly type: FieldType;
+  readonly type: FieldTypeOf<Kind>;
   readonly required: boolean;
   readonly readOnly: boolean;
   readonly useDefault: boolean;
@@ -130,7 +131,7 @@ interface TableSpec {
 const CHOICE_KEYS = ["alpha", "beta", "gamma"] as const;
 const SOME_UUID = "0192f6a1-7b2c-7d3e-8f40-123456789abc";
 
-const typeArb = (kind: Kind): Arbitrary<FieldType> => {
+const typeArb = (kind: Kind): Arbitrary<FieldTypeOf<Kind>> => {
   switch (kind) {
     case "text": {
       return tuple(constantFrom(undefined, 1, 3, 10), boolean()).map(
@@ -142,14 +143,14 @@ const typeArb = (kind: Kind): Arbitrary<FieldType> => {
     }
 
     case "longText": {
-      return constantFrom<FieldType>(
+      return constantFrom<FieldTypeOf<Kind>>(
         { kind: "longText" },
         { kind: "longText", maxLength: 5 }
       );
     }
 
     case "integer": {
-      return constantFrom<FieldType>(
+      return constantFrom<FieldTypeOf<Kind>>(
         { kind: "integer" },
         { kind: "integer", max: 10, min: 0 },
         { kind: "integer", min: -5 }
@@ -157,7 +158,7 @@ const typeArb = (kind: Kind): Arbitrary<FieldType> => {
     }
 
     case "bigInteger": {
-      return constantFrom<FieldType>(
+      return constantFrom<FieldTypeOf<Kind>>(
         { kind: "bigInteger" },
         {
           kind: "bigInteger",
@@ -168,7 +169,7 @@ const typeArb = (kind: Kind): Arbitrary<FieldType> => {
     }
 
     case "decimal": {
-      return constantFrom<FieldType>(
+      return constantFrom<FieldTypeOf<Kind>>(
         { kind: "decimal", precision: 5, scale: 2 },
         { kind: "decimal", max: "99.99", min: "-1.5", precision: 5, scale: 2 },
         { kind: "decimal", precision: 3, scale: 0 },
@@ -177,14 +178,14 @@ const typeArb = (kind: Kind): Arbitrary<FieldType> => {
     }
 
     case "reference": {
-      return constantFrom<FieldType>({
+      return constantFrom<FieldTypeOf<Kind>>({
         kind: "reference",
         targetClassId: USER_CLASS_ID,
       });
     }
 
     case "condition": {
-      return constantFrom<FieldType>({
+      return constantFrom<FieldTypeOf<Kind>>({
         classId: ACME.asset,
         kind: "condition",
         profile: "filter",
@@ -198,7 +199,7 @@ const typeArb = (kind: Kind): Arbitrary<FieldType> => {
     case "json":
     case "password":
     case "uuid": {
-      return constantFrom<FieldType>({ kind });
+      return constantFrom<FieldTypeOf<Kind>>({ kind });
     }
 
     default: {
@@ -224,7 +225,6 @@ const fieldArb: Arbitrary<FieldSpec> = constantFrom(...KINDS).chain((kind) =>
       childMaxLength: type.kind === "text" && textMax >= 3 ? 2 : null,
       childSubset: kind === "choice" ? subset : null,
       hiddenFromTester: other === 0,
-      kind,
       readOnly,
       required: writable && !readOnly && !retire && dice >= 7,
       retire,
@@ -354,7 +354,7 @@ const defaultOf = (field: FieldSpec): JsonValue | null => {
     return (field.type.maxLength ?? 255) >= 2 ? "ab" : null;
   }
 
-  return DEFAULTS.get(field.kind) ?? null;
+  return DEFAULTS.get(field.type.kind) ?? null;
 };
 
 /** What one generated table became. */
@@ -387,20 +387,14 @@ const buildTable = Effect.fn("RecordSchemaProperty.buildTable")(
       ids.push(added.id);
       operations.push(added.op);
 
-      if (field.kind === "choice") {
+      if (field.type.kind === "choice") {
         for (const [order, key] of CHOICE_KEYS.entries()) {
-          const definition: ChoiceDraft = {
-            ...local,
-            fieldId: added.id,
-            hidden: key === "gamma",
-            id: freshId(),
-            key,
-            kind: "choice",
-            label: key,
-            order: order + 1,
-          };
-
-          operations.push({ definition, op: "createChoice" });
+          operations.push(
+            addChoice(added.id, key, {
+              hidden: key === "gamma",
+              order: order + 1,
+            }).op
+          );
         }
       }
 
@@ -431,23 +425,8 @@ const buildTable = Effect.fn("RecordSchemaProperty.buildTable")(
       effect: "allow" | "deny",
       target: AccessRuleDraft["target"],
       actions: AccessRuleDraft["actions"]
-    ): Operation => ({
-      definition: {
-        ...local,
-        actions,
-        active: true,
-        classId: root.id,
-        condition: null,
-        description: null,
-        effect,
-        id: freshId(),
-        kind: "accessRule",
-        name: null,
-        roleIds: [testerRole],
-        target,
-      },
-      op: "createAccessRule",
-    });
+    ): Operation =>
+      addAccessRule(root.id, [testerRole], {}, { actions, effect, target }).op;
 
     const hidden = ids.filter(
       (_, index) => spec.fields[index]?.hiddenFromTester === true
@@ -668,7 +647,7 @@ const bodyOf = (
     const name = built.names[index];
 
     if (field !== undefined && name !== undefined && visible.has(name)) {
-      const pool = POOLS[field.kind];
+      const pool = POOLS[field.type.kind];
       const raw = pick < 0 ? null : (pool[pick % pool.length] ?? null);
 
       values[name] = PLACEHOLDERS.get(raw)?.(admin) ?? raw;
@@ -703,8 +682,8 @@ const baseBody = (
         ? [
             [
               built.names[index] ?? "",
-              PLACEHOLDERS.get(SAFE_VALUES[field.kind])?.(admin) ??
-                SAFE_VALUES[field.kind],
+              PLACEHOLDERS.get(SAFE_VALUES[field.type.kind])?.(admin) ??
+                SAFE_VALUES[field.type.kind],
             ],
           ]
         : []
@@ -1065,14 +1044,12 @@ const REQUIRED_CODES = [
 ] as const;
 
 const plainField = (
-  kind: Kind,
-  type: FieldType,
+  type: FieldTypeOf<Kind>,
   options: Partial<FieldSpec> = {}
 ): FieldSpec => ({
   childMaxLength: null,
   childSubset: null,
   hiddenFromTester: false,
-  kind,
   readOnly: false,
   required: false,
   retire: false,
@@ -1093,9 +1070,9 @@ const ALL_HIDDEN_TABLE: TableSpec = {
     { extra: "unknown", values: [] },
   ],
   fields: [
-    plainField("text", { kind: "text" }, { hiddenFromTester: true }),
-    plainField("integer", { kind: "integer" }, { hiddenFromTester: true }),
-    plainField("boolean", { kind: "boolean" }, { hiddenFromTester: true }),
+    plainField({ kind: "text" }, { hiddenFromTester: true }),
+    plainField({ kind: "integer" }, { hiddenFromTester: true }),
+    plainField({ kind: "boolean" }, { hiddenFromTester: true }),
   ],
 };
 
@@ -1135,15 +1112,15 @@ const COVERAGE_TABLE: TableSpec = {
     },
   ],
   fields: [
-    plainField("boolean", { kind: "boolean" }),
-    plainField("text", { kind: "text", maxLength: 3 }, { required: true }),
-    plainField("decimal", { kind: "decimal", precision: 10, scale: 2 }),
-    plainField("date", { kind: "date" }),
-    plainField("uuid", { kind: "uuid" }),
-    plainField("choice", { kind: "choice" }),
-    plainField("password", { kind: "password" }),
-    plainField("text", { kind: "text" }, { readOnly: true }),
-    plainField("text", { kind: "text" }, { retire: true }),
+    plainField({ kind: "boolean" }),
+    plainField({ kind: "text", maxLength: 3 }, { required: true }),
+    plainField({ kind: "decimal", precision: 10, scale: 2 }),
+    plainField({ kind: "date" }),
+    plainField({ kind: "uuid" }),
+    plainField({ kind: "choice" }),
+    plainField({ kind: "password" }),
+    plainField({ kind: "text" }, { readOnly: true }),
+    plainField({ kind: "text" }, { retire: true }),
   ],
 };
 

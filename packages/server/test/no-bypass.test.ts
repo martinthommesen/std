@@ -27,6 +27,7 @@ import type { Operation } from "@std/definitions/operation";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
+import { listWorkspacePackages } from "../../../tooling/lib/workspace.ts";
 import { createFixtureUser } from "../../testing/src/acme-fixture.ts";
 import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -50,7 +51,6 @@ import {
   nameChecksIn,
   SOURCE_EXTENSIONS,
   sourceFiles,
-  workspacePackages,
 } from "./name-scan.ts";
 import {
   collectionOf,
@@ -506,7 +506,10 @@ describe("no-bypass", () => {
 
   it("no source file checks a built-in role or permission by name", () => {
     const used = new Set<string>();
-    const packages = workspacePackages(ROOT);
+
+    const packages = listWorkspacePackages(ROOT)
+      .filter((pkg) => pkg.label !== ".")
+      .map((pkg) => pkg.label);
 
     // The workspace's packages, not a hand-written list.
     assert.includeMembers(packages, [
@@ -550,15 +553,18 @@ describe("no-bypass", () => {
       "packages/server/src/records/save-pipeline.ts",
     ];
 
-    const naming = workspacePackages(ROOT).flatMap((name) => {
-      const src = path.join(ROOT, name, "src");
+    const naming = listWorkspacePackages(ROOT)
+      .filter((pkg) => pkg.label !== ".")
+      .map((pkg) => pkg.label)
+      .flatMap((name) => {
+        const src = path.join(ROOT, name, "src");
 
-      return existsSync(src)
-        ? sourceFiles(src)
-            .filter((file) => readFileSync(file, "utf-8").includes(writer))
-            .map((file) => path.relative(ROOT, file))
-        : [];
-    });
+        return existsSync(src)
+          ? sourceFiles(src)
+              .filter((file) => readFileSync(file, "utf-8").includes(writer))
+              .map((file) => path.relative(ROOT, file))
+          : [];
+      });
 
     assert.sameMembers(naming, allowed);
   });

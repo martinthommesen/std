@@ -3,8 +3,6 @@
  * the two-user example of 3.3 with TMF630 paths, API names and shapes,
  * alongside the standalone authorization, history and session suites.
  */
-import { randomUUID } from "node:crypto";
-
 import { assert, describe, it, layer } from "@effect/vitest";
 import { apiTableNameOf } from "@std/definitions/names";
 import type { Operation } from "@std/definitions/operation";
@@ -47,6 +45,8 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { DEFINITION_KIND_OF_TABLE } from "../src/http/change-sets.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
+  patchOptions,
+  MERGE_PATCH,
   asArray,
   asObject,
   idsOf,
@@ -67,7 +67,13 @@ import {
 import { committedState } from "./committed-state.ts";
 import { allPagesV2, nextOf } from "./paging.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import { change, createRole, freshId, values } from "./schema-support.ts";
+import {
+  change,
+  createRole,
+  freshId,
+  values,
+  addAccessRule,
+} from "./schema-support.ts";
 
 class SignedInCallers extends Context.Service<SignedInCallers, ApiCallers>()(
   "std/test/Contracts3Callers"
@@ -93,14 +99,8 @@ export const merge = (
   caller: TestRequestOptions,
   revision: number,
   body: JsonObject
-): TestRequestOptions => ({
-  ...caller,
-  headers: {
-    "content-type": "application/merge-patch+json",
-    "if-match": `"${revision}"`,
-  },
-  rawBody: JSON.stringify(body),
-});
+): TestRequestOptions =>
+  patchOptions(caller, MERGE_PATCH, body, `"${revision}"`);
 
 const codeOf = (response: TestResponse) => asObject(response.json).code;
 
@@ -911,28 +911,20 @@ const replaceRule7ForName = Effect.gen(function* replaceRule7() {
       op: "update",
       version: rule.version,
     },
-    {
-      definition: {
-        actions: ["create", "update"],
-        active: true,
-        classId: ACME.asset,
+    addAccessRule(
+      ACME.asset,
+      [EMPLOYEE],
+      {
         condition: {
           left: { path: [ACME.status] },
           op: "eq",
           right: { value: "in_use" },
         },
         description: "employees may write name while in use",
-        effect: "allow",
-        id: randomUUID(),
-        kind: "accessRule",
-        name: null,
-        owner: { layer: "local" },
-        protected: false,
-        roleIds: [EMPLOYEE],
-        target: { fields: [ACME.name], kind: "fields" },
+        fields: [ACME.name],
       },
-      op: "createAccessRule",
-    },
+      { actions: ["create", "update"] }
+    ).op,
   ];
 
   return yield* change(operations);
@@ -1662,31 +1654,36 @@ const routesOf = (collection: string, caller: TestRequestOptions) => {
     ["GET", one, caller],
     ["GET", `${one}/history`, caller],
     ["POST", path, { ...caller, body: { name: "x" } }],
-    [
-      "PATCH",
-      one,
-      {
-        ...caller,
-        headers: {
-          "content-type": "application/merge-patch+json",
-          "if-match": REVISION_ONE,
-        },
-        rawBody: JSON.stringify({ name: "x" }),
-      },
-    ],
+    ["PATCH", one, merge(caller, 1, { name: "x" })],
     ["DELETE", one, { ...caller, headers: { "if-match": REVISION_ONE } }],
   ] as const;
 };
+
+const missingFor = Effect.fn("Contracts3V2.missingRoutes")(function* missingFor(
+  caller: TestRequestOptions
+) {
+  const http = yield* TestHttpClient;
+  const responses: TestResponse[] = [];
+
+  for (const [method, path, options] of routesOf(
+    collectionOf(MISSING),
+    caller
+  )) {
+    responses.push(yield* http.request(method, path, options));
+  }
+
+  return responses;
+});
 
 const unknownOnEveryRoute = Effect.fn("Contracts3V2.unknownOnEveryRoute")(
   function* unknownOnEveryRoute(
     caller: TestRequestOptions,
     table: string,
-    label: string
+    label: string,
+    missingResponses: readonly TestResponse[]
   ) {
     const http = yield* TestHttpClient;
     const collection = collectionOf(table);
-    const missingRoutes = routesOf(collectionOf(MISSING), caller);
 
     for (const [index, [method, path, options]] of routesOf(
       collection,
@@ -1694,17 +1691,15 @@ const unknownOnEveryRoute = Effect.fn("Contracts3V2.unknownOnEveryRoute")(
     ).entries()) {
       const response = yield* http.request(method, path, options);
 
-      const [, missingPath = "", missingOptions = {}] =
-        missingRoutes[index] ?? [];
-
-      const missing = yield* http.request(method, missingPath, missingOptions);
+      const missing = missingResponses[index];
+      assert.isDefined(missing);
       const where = `${label} ${method} ${path}`;
 
       assert.strictEqual(response.status, 404, where);
       assert.strictEqual(codeOf(response), "UnknownTable", where);
       assert.strictEqual(
         response.text.replaceAll(collection, "?"),
-        missing.text.replaceAll(collectionOf(MISSING), "?"),
+        missing?.text.replaceAll(collectionOf(MISSING), "?"),
         where
       );
     }
@@ -1744,7 +1739,7 @@ describe("platform-tables", () => {
             assert.strictEqual(codeOf(response), "UnknownTable");
             assert.strictEqual(
               response.text.replaceAll(collection, "?"),
-              missing.text.replaceAll(collectionOf(MISSING), "?")
+              missing?.text.replaceAll(collectionOf(MISSING), "?")
             );
           }
         })
@@ -1771,14 +1766,18 @@ describe("platform-tables", () => {
             ["alice", callers.alice],
             ["bob", callers.bob],
           ] as const) {
+            const missing = yield* missingFor(caller);
+
             for (const table of [...platform, ...CONFIG_TABLES, ...internal]) {
-              yield* unknownOnEveryRoute(caller, table, who);
+              yield* unknownOnEveryRoute(caller, table, who, missing);
             }
           }
 
           // Tables no definition describes are unknown to admins too.
+          const missing = yield* missingFor(callers.admin);
+
           for (const table of internal) {
-            yield* unknownOnEveryRoute(callers.admin, table, "admin");
+            yield* unknownOnEveryRoute(callers.admin, table, "admin", missing);
           }
         })
     );

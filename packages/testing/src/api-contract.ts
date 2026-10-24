@@ -58,6 +58,10 @@ const pathSegments = (path: string): readonly string[] =>
 const literalCount = (endpoint: ApiEndpoint): number =>
   endpoint.segments.filter((segment) => !segment.startsWith(":")).length;
 
+const orderedEndpoints = API_ENDPOINTS.toSorted(
+  (left, right) => literalCount(right) - literalCount(left)
+);
+
 /**
  * The documented endpoint a request reaches, if any.
  *
@@ -71,7 +75,7 @@ export const apiEndpointOf = (
 ): ApiEndpoint | undefined => {
   const segments = pathSegments(path);
 
-  const candidates = API_ENDPOINTS.filter(
+  return orderedEndpoints.find(
     (endpoint) =>
       endpoint.method === method &&
       endpoint.segments.length === segments.length &&
@@ -81,10 +85,6 @@ export const apiEndpointOf = (
           (segment.startsWith(":") || segment === segments[index])
       )
   );
-
-  return candidates.toSorted(
-    (left, right) => literalCount(right) - literalCount(left)
-  )[0];
 };
 
 // Whether a body is a value of one of the schemas. The shared schemas'

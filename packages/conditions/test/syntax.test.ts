@@ -1,5 +1,4 @@
 import { assert, describe, it } from "@effect/vitest";
-import type { ConditionProfile } from "@std/values/field-type";
 import {
   assert as check,
   constantFrom,
@@ -12,10 +11,9 @@ import {
 import type { Expr } from "../src/ast.ts";
 import { checkCondition } from "../src/check.ts";
 import { InvalidCondition } from "../src/issue.ts";
-import { PROFILES } from "../src/profile.ts";
 import { locateIssues, parseCondition } from "../src/syntax-parse.ts";
 import { printCondition } from "../src/syntax-print.ts";
-import { exprArb } from "./support/generate.ts";
+import { profiledExprArb } from "./support/generate.ts";
 import {
   ASSET,
   ASSET_FIELDS as A,
@@ -183,48 +181,27 @@ ${String.fromCodePoint(0x20_28)}`,
   });
 
   it("round-trips every checked condition: parse(print(a)) = a", () => {
-    const cases = tuple(
-      constantFrom(...PROFILES),
-      constantFrom(ASSET, LAPTOP)
-    ).chain(([profile, classId]) =>
-      exprArb({
-        classId,
-        depth: 6,
-        profile,
-        profileOptions: { accessRuleHops: 1, myGroups: true },
-      }).map((expr) => ({ classId, expr, profile }))
-    );
+    const cases = profiledExprArb(6);
 
     let checked = 0;
 
     check(
-      property(
-        cases,
-        ({
+      property(cases, ({ classId, expr, profile, profileOptions }) => {
+        const result = checkCondition(expr, {
           classId,
-          expr,
           profile,
-        }: {
-          classId: string;
-          expr: Expr;
-          profile: ConditionProfile;
-        }) => {
-          const result = checkCondition(expr, {
-            classId,
-            profile,
-            profileOptions: { accessRuleHops: 1, myGroups: true },
-            purpose: "store",
-            view: fixtureView,
-          });
+          profileOptions,
+          purpose: "store",
+          view: fixtureView,
+        });
 
-          if (!result.ok) {
-            return;
-          }
-
-          checked += 1;
-          assert.deepStrictEqual(parsed(print(expr, classId), classId), expr);
+        if (!result.ok) {
+          return;
         }
-      ),
+
+        checked += 1;
+        assert.deepStrictEqual(parsed(print(expr, classId), classId), expr);
+      }),
       { numRuns: 2000, seed: 61 }
     );
 

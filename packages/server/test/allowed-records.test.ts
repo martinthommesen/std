@@ -14,7 +14,6 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { AccessRuleDraft } from "@std/definitions/definition";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
@@ -32,9 +31,12 @@ import {
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
-import { definitionVersion, addField, change } from "./schema-support.ts";
-
-const local = { owner: { layer: "local" }, protected: false } as const;
+import {
+  definitionVersion,
+  addField,
+  change,
+  addAccessRule,
+} from "./schema-support.ts";
 
 const PICKER = "acmeAsset/dock";
 
@@ -74,22 +76,17 @@ const setup = Effect.gen(function* setupAllowedRecords() {
 
   yield* change([dock.op, dockLaptop.op]);
 
-  const writeDock: AccessRuleDraft = {
-    ...local,
-    actions: ["create", "update"],
-    active: true,
-    classId: ACME.asset,
-    condition: null,
-    description: "employees may set dock",
-    effect: "allow",
-    id: randomUUID(),
-    kind: "accessRule",
-    name: null,
-    roleIds: [ACME.employee],
-    target: { fields: [dock.id], kind: "fields" },
-  };
-
-  yield* change([{ definition: writeDock, op: "createAccessRule" }]);
+  yield* change([
+    addAccessRule(
+      ACME.asset,
+      [ACME.employee],
+      {
+        description: "employees may set dock",
+        fields: [dock.id],
+      },
+      { actions: ["create", "update"] }
+    ).op,
+  ]);
 
   return { dock: dock.id } satisfies Added;
 });

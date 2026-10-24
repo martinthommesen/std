@@ -22,7 +22,7 @@ import {
   USER_CLASS_ID,
   USER_ROLE_CLASS_ID,
 } from "@std/definitions/well-known";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 
 import { Catalog } from "../src/catalog/catalog.ts";
 import {
@@ -111,20 +111,22 @@ const lastJournal = values(
    WHERE first_revision = (SELECT max(first_revision) FROM core."schema_change")`
 );
 
+const lifecycleTestLayer = Layer.effectDiscard(loadCoreAndAcme).pipe(
+  Layer.provideMerge(schemaTestLayer())
+);
+
 describe("schema-lifecycle", () => {
   it("purges need the schema.purge permission, which admin does not hold", () => {
     assert.notInclude(ADMIN.roleIds, BUILT_IN_ROLE_IDS.schema_purger);
     assert.include(PURGER.roleIds, BUILT_IN_ROLE_IDS.schema_purger);
   });
 
-  layer(schemaTestLayer(), { excludeTestServices: true, timeout: 120_000 })(
+  layer(lifecycleTestLayer, { excludeTestServices: true, timeout: 120_000 })(
     (dbTest) => {
       dbTest.effect(
         "rename of a local field used by an index and an access rule",
         () =>
           Effect.gen(function* renameField() {
-            yield* loadCoreAndAcme;
-
             const gadget = createClass("gadget");
             const serial = addField(gadget.id, "serial", { kind: "text" });
             const index = addIndex(gadget.id, [serial.id], true);
@@ -265,8 +267,6 @@ describe("schema-lifecycle", () => {
         "a retired required field: hidden, not writable, values kept; reactivated it is optional",
         () =>
           Effect.gen(function* retireRequired() {
-            yield* loadCoreAndAcme;
-
             const gizmo = createClass("gizmo");
             const name = addField(gizmo.id, "name", { kind: "text" });
 
@@ -345,8 +345,6 @@ describe("schema-lifecycle", () => {
         "purge is refused until its causes are removed, then leaves a tombstone",
         () =>
           Effect.gen(function* purgeField() {
-            yield* loadCoreAndAcme;
-
             const ledger = createClass("ledger");
             const title = addField(ledger.id, "title", { kind: "text" });
             const notes = addField(ledger.id, "notes", { kind: "text" });
@@ -474,8 +472,6 @@ describe("schema-lifecycle", () => {
         "deleting or retiring a role an active access rule names is refused",
         () =>
           Effect.gen(function* roleDependency() {
-            yield* loadCoreAndAcme;
-
             const crate = createClass("crate");
             const auditor = addRole("auditor");
             const rule = addAccessRule(crate.id, [auditor.id]);
@@ -551,8 +547,6 @@ describe("schema-lifecycle", () => {
         "a rename and a unique index in one change set: the preflight reads the names before the rename",
         () =>
           Effect.gen(function* renameWithIndex() {
-            yield* loadCoreAndAcme;
-
             const card = createClass("card");
             const serial = addField(card.id, "serial", { kind: "text" });
             const alias = addField(card.id, "alias", { kind: "integer" });
@@ -612,8 +606,6 @@ describe("schema-lifecycle", () => {
         "DELETE of a field definition is refused; column and data unchanged",
         () =>
           Effect.gen(function* deleteField() {
-            yield* loadCoreAndAcme;
-
             const bin = createClass("bin");
             const label = addField(bin.id, "label", { kind: "text" });
 
@@ -648,8 +640,6 @@ describe("schema-lifecycle", () => {
         "tables and namespaces are renamed by ID; a retired table is purged with its rows",
         () =>
           Effect.gen(function* tableLifecycle() {
-            yield* loadCoreAndAcme;
-
             const shelf = createClass("shelf");
             const size = addField(shelf.id, "size", { kind: "integer" });
             const index = addIndex(shelf.id, [size.id], false);

@@ -754,8 +754,6 @@ const attributesOf = (response: TestResponse): JsonValue[] =>
 interface Sent {
   readonly path: string;
   readonly body: JsonValue | undefined;
-  /** The record the request targets, if the model knows it. */
-  readonly target: Tracked | null;
 }
 
 const textsOf = (value: JsonValue | undefined): string[] => {
@@ -936,7 +934,6 @@ interface StepRequest {
   readonly token: string;
   readonly body?: JsonObject;
   readonly headers?: Readonly<Record<string, string>>;
-  readonly target: Tracked | null;
 }
 
 const optionsOf = (request: StepRequest): TestRequestOptions => {
@@ -969,7 +966,7 @@ const send = Effect.fn("ErrorFuzz.send")(function* send(
 
   checkResponse(
     context.model,
-    { body: request.body, path: request.path, target: request.target },
+    { body: request.body, path: request.path },
     response
   );
 
@@ -1035,7 +1032,7 @@ const runItemStep = Effect.fn("ErrorFuzz.itemStep")(function* runItemStep(
       body,
       method: "POST",
       path: listPath(table),
-      target: null,
+
       token: context.admin,
     });
 
@@ -1062,7 +1059,7 @@ const runItemStep = Effect.fn("ErrorFuzz.itemStep")(function* runItemStep(
       headers: versionHeader(target, step.version),
       method: "PATCH",
       path: recordPath(table, id),
-      target,
+
       token: context.admin,
     });
 
@@ -1075,7 +1072,7 @@ const runItemStep = Effect.fn("ErrorFuzz.itemStep")(function* runItemStep(
     headers: versionHeader(target, step.version),
     method: "DELETE",
     path: recordPath(table, id),
-    target,
+
     token: context.admin,
   });
 
@@ -1107,7 +1104,7 @@ const runUserStep = Effect.fn("ErrorFuzz.userStep")(function* runUserStep(
       body,
       method: "POST",
       path: listPath(USER),
-      target: null,
+
       token: context.admin,
     });
 
@@ -1130,7 +1127,7 @@ const runUserStep = Effect.fn("ErrorFuzz.userStep")(function* runUserStep(
       headers: versionHeader(target, step.stale ? "stale" : "current"),
       method: "PATCH",
       path: recordPath(USER, target.id),
-      target,
+
       token: context.admin,
     });
 
@@ -1143,7 +1140,7 @@ const runUserStep = Effect.fn("ErrorFuzz.userStep")(function* runUserStep(
     headers: versionHeader(target, "current"),
     method: "DELETE",
     path: recordPath(USER, target.id),
-    target,
+
     token: context.admin,
   });
 
@@ -1171,7 +1168,7 @@ const runAliceCreate = Effect.fn("ErrorFuzz.aliceCreate")(
       body,
       method: "POST",
       path: listPath(table),
-      target: null,
+
       token: context.alice,
     });
 
@@ -1199,7 +1196,7 @@ const runAliceUpdate = Effect.fn("ErrorFuzz.aliceUpdate")(
       headers: versionHeader(target, step.stale ? "stale" : "current"),
       method: "PATCH",
       path: recordPath(step.viaParent ? ASSET : target.concrete, target.id),
-      target,
+
       token: context.alice,
     });
 
@@ -1571,7 +1568,7 @@ const freshRecord = Effect.fn("ErrorMatrix.freshRecord")(function* freshRecord(
     body,
     method: "POST",
     path: listPath(endpoint),
-    target: null,
+
     token: context.admin,
   });
 
@@ -1681,7 +1678,7 @@ const takeCell = Effect.fn("ErrorMatrix.cell")(function* takeCell(
         headers: { "if-match": '"1"' },
         method: "DELETE",
         path: recordPath(cell.endpoint, target.id),
-        target: null,
+
         token: context.admin,
       })
     );
@@ -1702,7 +1699,7 @@ const takeCell = Effect.fn("ErrorMatrix.cell")(function* takeCell(
         subject === null
           ? listPath(cell.endpoint)
           : recordPath(cell.endpoint, subject.id),
-      target: null,
+
       token: context.admin,
     });
   };
@@ -1787,7 +1784,7 @@ const adminSends = (
     ...options,
     method,
     path,
-    target: null,
+
     token: context.admin,
   });
 
@@ -1963,7 +1960,6 @@ describe("error-fuzz", () => {
     const sent: Sent = {
       body: { name: "nmnewvalue" },
       path: recordPath(ITEM, target.id),
-      target,
     };
 
     // A synthetic leak: a refusal repeating the target's old name.
@@ -2041,7 +2037,7 @@ describe("error-fuzz", () => {
               body: { code: uniqueCode, name: "nmfirst", note: "ntfirst" },
               method: "POST",
               path: listPath(ITEM),
-              target: null,
+
               token: context.admin,
             });
 
@@ -2057,7 +2053,7 @@ describe("error-fuzz", () => {
               },
               method: "POST",
               path: listPath(SPECIAL),
-              target: null,
+
               token: context.admin,
             });
 
@@ -2085,7 +2081,7 @@ describe("error-fuzz", () => {
               },
               method: "POST",
               path: listPath(ITEM),
-              target: null,
+
               token: context.admin,
             });
 
@@ -2095,7 +2091,7 @@ describe("error-fuzz", () => {
               headers: { "if-match": '"1"' },
               method: "DELETE",
               path: recordPath(ITEM, firstId),
-              target: null,
+
               token: context.admin,
             });
 
@@ -2112,7 +2108,7 @@ describe("error-fuzz", () => {
                 body,
                 method: "POST",
                 path: listPath(ITEM),
-                target: null,
+
                 token: context.admin,
               });
 

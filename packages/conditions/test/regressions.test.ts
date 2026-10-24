@@ -354,17 +354,13 @@ describe("the browser checks code points on every text read", () => {
 
           const source: ImageSource = {
             previous:
-              full.previous === null || full.previous === undefined
-                ? null
-                : poison(full.previous, ids),
+              full.previous === null ? null : poison(full.previous, ids),
             record: poison(full.record, ids),
             targets: new Map(
-              [...(full.targets ?? new Map<string, RecordImage | null>())].map(
-                ([id, image]) => [
-                  id,
-                  image === null ? null : poison(image, ids),
-                ]
-              )
+              [...full.targets].map(([id, image]) => [
+                id,
+                image === null ? null : poison(image, ids),
+              ])
             ),
           };
 

@@ -5,7 +5,7 @@
  * tightened over existing rows.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Clock, Deferred, Duration, Effect, Fiber, Ref } from "effect";
+import { Clock, Duration, Effect, Fiber, Ref } from "effect";
 
 import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
@@ -61,17 +61,15 @@ interface HoldRecorder {
   readonly spans: Ref.Ref<readonly number[]>;
   /** Set by the test once the change set has returned. */
   readonly done: Ref.Ref<boolean>;
-  /** Completed by the sampler once it has seen the lock free after `done`. */
-  readonly settled: Deferred.Deferred<boolean>;
 }
 
 /**
  * Samples `CONFIG_KEY` in Postgres every `POLL` and records how long each
- * exclusive hold lasted; completes `settled` once the test is done and the
+ * exclusive hold lasted; returns once the test is done and the
  * last hold has been recorded. Sampling real time is the point here: the
  * hold durations are what the test measures.
  * @param recorder - The shared state.
- * @returns An effect that ends after `settled` completes.
+ * @returns An effect that ends once the last hold has been recorded.
  */
 const recordHolds = (recorder: HoldRecorder) =>
   Effect.gen(function* sampleConfigKey() {
@@ -91,8 +89,6 @@ const recordHolds = (recorder: HoldRecorder) =>
       }
 
       if (holder === undefined && (yield* Ref.get(recorder.done))) {
-        yield* Deferred.succeed(recorder.settled, true);
-
         return;
       }
 
@@ -169,11 +165,10 @@ describe("schema-locks", () => {
 
             const recorder: HoldRecorder = {
               done: yield* Ref.make(false),
-              settled: yield* Deferred.make<boolean>(),
               spans,
             };
 
-            yield* Effect.forkChild(recordHolds(recorder));
+            const sampler = yield* Effect.forkChild(recordHolds(recorder));
             yield* Effect.forkChild(
               Effect.sleep("1500 millis").pipe(
                 Effect.andThen(first.query("COMMIT"))
@@ -201,7 +196,7 @@ describe("schema-locks", () => {
             );
 
             yield* Ref.set(recorder.done, true);
-            yield* Deferred.await(recorder.settled).pipe(
+            yield* Fiber.join(sampler).pipe(
               Effect.timeout(Duration.seconds(5))
             );
 
@@ -249,11 +244,10 @@ describe("schema-locks", () => {
 
             const recorder: HoldRecorder = {
               done: yield* Ref.make(false),
-              settled: yield* Deferred.make<boolean>(),
               spans,
             };
 
-            yield* Effect.forkChild(recordHolds(recorder));
+            const sampler = yield* Effect.forkChild(recordHolds(recorder));
             yield* Effect.forkChild(
               Effect.sleep("1700 millis").pipe(
                 Effect.andThen(tableHolder.query("COMMIT"))
@@ -271,7 +265,7 @@ describe("schema-locks", () => {
             );
 
             yield* Ref.set(recorder.done, true);
-            yield* Deferred.await(recorder.settled).pipe(
+            yield* Fiber.join(sampler).pipe(
               Effect.timeout(Duration.seconds(5))
             );
 

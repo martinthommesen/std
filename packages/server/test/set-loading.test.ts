@@ -5,7 +5,8 @@ import { assert, describe, it, layer } from "@effect/vitest";
  * mutually referencing tables, and refused `extends` cycles.
  */
 import type { NamedSetFile, SetFile } from "@std/definitions/set-file";
-import { Effect, Layer } from "effect";
+import type { Layer } from "effect";
+import { Effect } from "effect";
 
 import { loadSet } from "../src/config/load-set.ts";
 import { readSetDirectory } from "../src/config/set-files.ts";
@@ -33,21 +34,7 @@ const DDL = /^(?:CREATE|ALTER|LOCK|DROP)\b/u;
  */
 const inOtherDatabase = <A, E>(
   effect: Effect.Effect<A, E, Layer.Success<ReturnType<typeof schemaTestLayer>>>
-) =>
-  Effect.scoped(
-    Effect.gen(function* buildOtherDatabase() {
-      const memoMap = yield* Layer.makeMemoMap;
-      const scope = yield* Effect.scope;
-
-      const context = yield* Layer.buildWithMemoMap(
-        schemaTestLayer(),
-        memoMap,
-        scope
-      );
-
-      return yield* Effect.provideContext(effect, context);
-    })
-  );
+) => Effect.provide(effect, schemaTestLayer(), { local: true });
 
 /**
  * Reverses the lists in every file and renames the files so that they sort

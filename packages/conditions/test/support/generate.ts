@@ -56,6 +56,7 @@ import type {
 } from "../../src/ast.ts";
 import type { FieldInfo } from "../../src/class-view.ts";
 import {
+  PROFILES,
   OPERATOR_KINDS,
   profileAllowsOperator,
   profileRules,
@@ -770,3 +771,22 @@ export const coverageKeys = (expr: Expr, classId: string): string[] => {
 
   return walk(expr);
 };
+
+/**
+ * A condition with its profile and class over the shared fixture schema.
+ * @param depth - The expression depth used by the property.
+ * @returns The generated expression and its check setup.
+ */
+export const profiledExprArb = (depth: number) =>
+  tuple(constantFrom(...PROFILES), constantFrom(ASSET, LAPTOP)).chain(
+    ([profile, classId]) => {
+      const profileOptions: ProfileOptions = {
+        accessRuleHops: 1,
+        myGroups: true,
+      };
+
+      return exprArb({ classId, depth, profile, profileOptions }).map(
+        (expr) => ({ classId, expr, profile, profileOptions })
+      );
+    }
+  );

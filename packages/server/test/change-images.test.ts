@@ -44,6 +44,7 @@ import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { apiCallers } from "./api-support.ts";
 import { hubTestLayer, register } from "./hub-support.ts";
+import { asUser } from "./records-support.ts";
 import {
   addField,
   addRole,
@@ -52,7 +53,7 @@ import {
   createClass,
   ensureSite,
 } from "./schema-support.ts";
-import { actingAs, asLoadedUser } from "./worker-support.ts";
+import { asLoadedUser } from "./worker-support.ts";
 
 const test = it.effect;
 
@@ -70,7 +71,7 @@ const asset = Effect.gen(function* asset() {
   const saved = yield* createRecord({
     body: { name: "one", status: "in_use" },
     endpointClassId: ACME.asset,
-  }).pipe(actingAs(fixture.admin.id));
+  }).pipe(asUser(fixture.admin.id));
 
   const update = (version: number) =>
     updateRecord({
@@ -78,14 +79,14 @@ const asset = Effect.gen(function* asset() {
       endpointClassId: ACME.asset,
       expectedVersion: version,
       id: saved.id,
-    }).pipe(actingAs(fixture.admin.id));
+    }).pipe(asUser(fixture.admin.id));
 
   const remove = (version: number) =>
     deleteRecord({
       endpointClassId: ACME.asset,
       expectedVersion: version,
       id: saved.id,
-    }).pipe(actingAs(fixture.admin.id));
+    }).pipe(asUser(fixture.admin.id));
 
   return { fixture, id: saved.id, remove, update };
 });
@@ -159,9 +160,7 @@ describe("change images", () => {
       const { id, fixture, update } = yield* asset;
       yield* update(1);
       assert.strictEqual(
-        yield* request(migration0028.remaining).pipe(
-          actingAs(fixture.admin.id)
-        ),
+        yield* request(migration0028.remaining).pipe(asUser(fixture.admin.id)),
         0
       );
 
@@ -172,7 +171,7 @@ describe("change images", () => {
       yield* sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid)`;
 
       const first = yield* request(migration0028.batch(null, 1)).pipe(
-        actingAs(fixture.admin.id)
+        asUser(fixture.admin.id)
       );
 
       yield* ensureSite;
@@ -188,12 +187,10 @@ describe("change images", () => {
       assert.strictEqual(bump?.version, 2);
       assert.strictEqual(bump?.image, true);
       yield* request(migration0028.batch(first.next, 10)).pipe(
-        actingAs(fixture.admin.id)
+        asUser(fixture.admin.id)
       );
       assert.strictEqual(
-        yield* request(migration0028.remaining).pipe(
-          actingAs(fixture.admin.id)
-        ),
+        yield* request(migration0028.remaining).pipe(asUser(fixture.admin.id)),
         0
       );
     }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
@@ -231,7 +228,7 @@ describe("change images", () => {
           JSON.stringify({ recordId: id, version: firstVersion - 1 }),
           batchSize
         )
-      ).pipe(actingAs(fixture.admin.id));
+      ).pipe(asUser(fixture.admin.id));
       const statements = yield* log.texts;
       assert.lengthOf(
         statements.filter((text) => text.includes("WITH history")),
@@ -317,7 +314,7 @@ describe("change images", () => {
 
       const origins = yield* request(
         readFieldOrigins(snapshot, ACME.asset)
-      ).pipe(actingAs(fixture.admin.id));
+      ).pipe(asUser(fixture.admin.id));
 
       const caller = { roleIds: [BUILT_IN_ROLE_IDS.admin] };
       const context = { me: fixture.admin.id, now: 0, timeZone: "UTC" };
@@ -344,7 +341,7 @@ describe("change images", () => {
       }
 
       const remaining = request(migration0028.remaining).pipe(
-        actingAs(fixture.admin.id)
+        asUser(fixture.admin.id)
       );
 
       assert.strictEqual(yield* remaining, 5);
@@ -429,14 +426,14 @@ describe("change images", () => {
       const saved = yield* createRecord({
         body,
         endpointClassId: table.id,
-      }).pipe(actingAs(fixture.admin.id));
+      }).pipe(asUser(fixture.admin.id));
 
       yield* updateRecord({
         body: { field_0: "changed-abcdefghijkl" },
         endpointClassId: table.id,
         expectedVersion: 1,
         id: saved.id,
-      }).pipe(actingAs(fixture.admin.id));
+      }).pipe(asUser(fixture.admin.id));
 
       const [size] =
         yield* sql`SELECT pg_column_size(i.after_image || '{}'::jsonb) AS image_bytes, pg_column_size(i) AS row_bytes, pg_column_size(c) AS change_bytes, i.before_image IS NULL AS single_image FROM core.change c JOIN core.change_image i ON i.change_id = c.id WHERE c.record_id = ${saved.id}::uuid AND c.record_version = 2`.pipe(
@@ -594,7 +591,7 @@ const entriesAtGap = Effect.gen(function* entriesAtGap() {
     endpointClassId: ACME.asset,
     expectedVersion: 1,
     id,
-  }).pipe(actingAs(fixture.admin.id));
+  }).pipe(asUser(fixture.admin.id));
 
   for (const version of [2, 3, 4]) {
     yield* update(version);
@@ -663,7 +660,7 @@ layer(hubTestLayer, { excludeTestServices: true })(
             endpointClassId: ACME.asset,
             expectedVersion: 1,
             id,
-          }).pipe(actingAs(fixture.admin.id));
+          }).pipe(asUser(fixture.admin.id));
           yield* update(2);
           yield* update(3);
           yield* update(4);

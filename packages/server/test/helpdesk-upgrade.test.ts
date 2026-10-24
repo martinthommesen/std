@@ -84,13 +84,6 @@ const fieldIds = (elements: readonly LayoutElement[] | undefined) =>
     element.kind === "field" ? element.fieldId : `#${element.label}`
   );
 
-const layoutOf = (classId: string, type: "form" | "list") =>
-  Effect.gen(function* readLayout() {
-    const snapshot = yield* (yield* Catalog).refresh;
-
-    return fieldIds(effectiveLayout(snapshot, classId, type)?.elements);
-  });
-
 describe("helpdesk-upgrade", () => {
   it("shows a layout as field IDs and section labels", () => {
     assert.deepStrictEqual(
@@ -247,25 +240,33 @@ describe("helpdesk-upgrade", () => {
             "Canceled false"
           );
 
+          const snapshot = yield* (yield* Catalog).refresh;
+
           // The overridden layout stays whole: exactly the local list, none
           // of v2's additions; the list layout, not overridden, is v2's.
           assert.deepStrictEqual(
-            yield* layoutOf(HELPDESK.incident, "form"),
+            fieldIds(
+              effectiveLayout(snapshot, HELPDESK.incident, "form")?.elements
+            ),
             fieldIds(LOCAL_FORM)
           );
-          assert.deepStrictEqual(yield* layoutOf(HELPDESK.incident, "list"), [
-            fields.number,
-            fields.shortDescription,
-            fields.category,
-            fields.impact,
-            fields.priority,
-            fields.status,
-            fields.assignee,
-          ]);
+          assert.deepStrictEqual(
+            fieldIds(
+              effectiveLayout(snapshot, HELPDESK.incident, "list")?.elements
+            ),
+            [
+              fields.number,
+              fields.shortDescription,
+              fields.category,
+              fields.impact,
+              fields.priority,
+              fields.status,
+              fields.assignee,
+            ]
+          );
           assert.lengthOf(yield* conflictsOf(layouts.incidentForm), 1);
 
           // The rename went by ID.
-          const snapshot = yield* (yield* Catalog).refresh;
 
           assert.strictEqual(snapshot.field(fields.assignee)?.name, "assignee");
           assert.strictEqual(

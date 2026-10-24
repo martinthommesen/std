@@ -35,6 +35,7 @@ import {
   Fiber,
   Layer,
   Option,
+  Queue,
   Ref,
   Result,
   Schema,
@@ -244,21 +245,6 @@ const adminToken = Effect.gen(function* signInAdmin() {
 
   return yield* http.signIn("alice", "alice-password");
 });
-
-/**
- * Appends a response to the ones kept.
- * @param endpoint - Where it came from.
- * @param response - The response.
- * @returns The update.
- */
-const appendResponse =
-  (endpoint: string, response: TestResponse) =>
-  (
-    all: readonly (readonly [string, TestResponse])[]
-  ): readonly (readonly [string, TestResponse])[] => [
-    ...all,
-    [endpoint, response],
-  ];
 
 /** One armed stop: reached by the server, released by the test. */
 interface Stop {
@@ -923,6 +909,23 @@ const refIdsOf = (refs: MatrixRefs): readonly string[] => [
 ];
 
 /**
+ * A role create under a given ID.
+ * @param id - The ID.
+ * @returns The operation.
+ */
+const matrixRole = (id: string): Operation => ({
+  definition: {
+    ...LOCAL,
+    helpText: null,
+    id,
+    kind: "role",
+    label: "Matrix",
+    name: "m_role",
+  },
+  op: "createRole",
+});
+
+/**
  * Every operation kind the change-set endpoint accepts. The record is
  * keyed by the operation schema's tags, so a new kind fails to compile
  * until it has a case; the test also checks the keys against the schema
@@ -1097,17 +1100,7 @@ const OPERATION_CASES: Readonly<Record<Operation["op"], OperationCase>> = {
   },
   createRole: {
     create: {
-      build: (id) => ({
-        definition: {
-          ...LOCAL,
-          helpText: null,
-          id,
-          kind: "role",
-          label: "Matrix",
-          name: "m_role",
-        },
-        op: "createRole",
-      }),
+      build: (id) => matrixRole(id),
       references: false,
     },
     target: "none",
@@ -1251,23 +1244,6 @@ const normalized = (response: TestResponse, ids: readonly string[]): string => {
 
   return `${response.status} ${text}`;
 };
-
-/**
- * A role create under a given ID.
- * @param id - The ID.
- * @returns The operation.
- */
-const matrixRole = (id: string): Operation => ({
-  definition: {
-    ...LOCAL,
-    helpText: null,
-    id,
-    kind: "role",
-    label: "Matrix",
-    name: "m_role",
-  },
-  op: "createRole",
-});
 
 /**
  * The requests of the occupied-ID test, each naming one ID: a create, a
@@ -2785,14 +2761,13 @@ describe("schema-http", () => {
 
             const done = yield* Ref.make(false);
 
-            const responses = yield* Ref.make<
-              readonly (readonly [string, TestResponse])[]
-            >([]);
+            const responses =
+              yield* Queue.unbounded<readonly [string, TestResponse]>();
 
             const addedAt = new Map<string, number>();
 
             const keep = (endpoint: string, response: TestResponse) =>
-              Ref.update(responses, appendResponse(endpoint, response));
+              Queue.offer(responses, [endpoint, response]);
 
             const reader = Effect.gen(function* readLaptops() {
               while (!(yield* Ref.get(done))) {
@@ -2853,7 +2828,7 @@ describe("schema-http", () => {
             yield* Ref.set(done, true);
             yield* Fiber.join(readers);
 
-            const all = yield* Ref.get(responses);
+            const all = yield* Queue.clear(responses);
 
             assert.isAbove(all.length, 50);
             assert.isFalse(all.some(([, response]) => response.status >= 500));

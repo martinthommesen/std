@@ -22,7 +22,7 @@ import {
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { asArray, asObject, textOf } from "./api-support.ts";
-import { freshId } from "./schema-support.ts";
+import { addAccessRule } from "./schema-support.ts";
 
 /** `/tmf-api/troubleTicket/v5/troubleTicket`. */
 export const TICKETS = `${TMF621_BASE_PATH}/troubleTicket` as const;
@@ -230,21 +230,8 @@ export const denyRead = (
     readonly condition?: Condition;
     readonly actions?: readonly AccessAction[];
   }
-): AccessRuleDraft => ({
-  actions: rule.actions ?? ["read"],
-  active: true,
-  classId,
-  condition: rule.condition ?? null,
-  description: null,
-  effect: "deny",
-  id: freshId(),
-  kind: "accessRule",
-  name: null,
-  owner: { layer: "local" },
-  protected: false,
-  roleIds: [HELPDESK.agentRole],
-  target:
-    rule.fields === undefined
-      ? { kind: "records" }
-      : { fields: rule.fields, kind: "fields" },
-});
+): AccessRuleDraft =>
+  addAccessRule(classId, [HELPDESK.agentRole], rule, {
+    actions: rule.actions ?? ["read"],
+    effect: "deny",
+  }).op.definition;

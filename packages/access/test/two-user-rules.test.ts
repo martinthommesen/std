@@ -12,6 +12,7 @@ import {
   USER_CLASS_ID,
 } from "@std/definitions/well-known";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import type { Decision } from "../src/decision.ts";
 import { fieldDecision, knowsTable, recordDecision } from "../src/rules.ts";
 import type { Caller, FieldAction } from "../src/rules.ts";
@@ -22,23 +23,23 @@ import { coreAndAcme } from "./acme-snapshot.ts";
 const snapshot = coreAndAcme();
 
 const CLASS = {
-  asset: "989151bb-a69f-4b18-b73d-9e19a4e7514c",
-  laptop: "6a365314-6d1b-4e4d-b166-73f29f808504",
-  monitor: "87363f0e-8122-4569-8fc8-ec8c5277a71b",
+  asset: ACME.asset,
+  laptop: ACME.laptop,
+  monitor: ACME.monitor,
 } as const;
 
 type ClassName = keyof typeof CLASS;
 
 const FIELD = {
-  cost: "6dfdc15e-7b81-40ba-aaac-6d7ad5a0d717",
-  disk_key: "6972d40e-504c-492c-ae3c-3b2021f6e21f",
-  docked_to: "83ec3835-6898-46f3-ae2e-afdbc3f5d407",
-  name: "6438aa02-739d-46c0-94cc-ecea44488210",
-  owner: "6a373fb5-bd18-4d7f-b0b4-182470f5421e",
-  purchased_on: "4da75c5e-eb4d-499d-ae10-ed167bfb3185",
-  serial: "35989424-54b4-4d99-adfe-649cb4bac237",
-  size_inches: "9ecc19c5-8401-4887-ac05-d5dbdd937297",
-  status: "5ed5f951-f6da-47ed-967a-c726af083d44",
+  cost: ACME.cost,
+  disk_key: ACME.diskKey,
+  docked_to: ACME.dockedTo,
+  name: ACME.name,
+  owner: ACME.owner,
+  purchased_on: ACME.purchasedOn,
+  serial: ACME.serial,
+  size_inches: ACME.sizeInches,
+  status: ACME.status,
 } as const;
 
 type FieldName = keyof typeof FIELD;
@@ -58,22 +59,12 @@ const FIELDS_OF: Readonly<Record<ClassName, readonly FieldName[]>> = {
   monitor: [...ASSET_FIELDS, "size_inches"],
 };
 
-const role = (name: string): string => {
-  const found = snapshot.roleByName(name);
-
-  if (found === undefined) {
-    throw new Error(`no role ${name}`);
-  }
-
-  return found.id;
-};
-
 const alice: Caller = {
-  roleIds: [BUILT_IN_ROLE_IDS.authenticated, role("asset_manager")],
+  roleIds: [BUILT_IN_ROLE_IDS.authenticated, ACME.assetManager],
 };
 
 const bob: Caller = {
-  roleIds: [BUILT_IN_ROLE_IDS.authenticated, role("employee")],
+  roleIds: [BUILT_IN_ROLE_IDS.authenticated, ACME.employee],
 };
 
 const deactivated: Caller = { roleIds: [] };

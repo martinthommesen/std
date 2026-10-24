@@ -12,7 +12,7 @@ import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
+import { patchOptions, asArray, asObject, textOf } from "./api-support.ts";
 import {
   createFixtureTicket,
   FIXTURE_TICKETS,
@@ -33,7 +33,13 @@ describe("tmf-framework", () => {
       () =>
         Effect.gen(function* crud() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const created = yield* createFixtureTicket(alice, {
             description: "Mail is down",
@@ -106,7 +112,13 @@ describe("tmf-framework", () => {
       () =>
         Effect.gen(function* versions() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const created = yield* createFixtureTicket(alice, {
             description: "Printer jam",
@@ -148,7 +160,13 @@ describe("tmf-framework", () => {
       () =>
         Effect.gen(function* polymorphism() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const incident = yield* createFixtureTicket(alice, {
             description: "Incident",
@@ -244,7 +262,13 @@ describe("tmf-framework", () => {
       () =>
         Effect.gen(function* filters() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const states = ["pending", "held", "inProgress", "pending"];
 
@@ -337,7 +361,13 @@ describe("tmf-framework", () => {
       () =>
         Effect.gen(function* errors() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const missing = yield* http.request("POST", FIXTURE_TICKETS, {
             ...alice,
@@ -423,7 +453,13 @@ describe("tmf-framework", () => {
       () =>
         Effect.gen(function* exactJson() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const created = yield* createFixtureTicket(alice, {
             customData: { keep: 1, remove: 2 },
@@ -433,11 +469,7 @@ describe("tmf-framework", () => {
           const path = `${FIXTURE_TICKETS}/${textOf(created.id)}`;
 
           const patchWith = (contentType: string, body: JsonValue) =>
-            http.request("PATCH", path, {
-              ...alice,
-              headers: { "content-type": contentType },
-              rawBody: JSON.stringify(body),
-            });
+            http.request("PATCH", path, patchOptions(alice, contentType, body));
 
           const removed = yield* patchWith("application/json-patch+json", [
             { op: "remove", path: "/customData/remove" },

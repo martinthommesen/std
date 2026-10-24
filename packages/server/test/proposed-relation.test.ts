@@ -47,9 +47,9 @@ import {
   createClass,
   createRole,
   ensureSite,
-  freshId,
   loadCore,
   schemaTestLayer,
+  addAccessRule,
 } from "./schema-support.ts";
 
 const UUID_A = "0192f000-0000-7000-8000-00000000000a";
@@ -177,7 +177,10 @@ const PROBES: readonly ProbeField[] = [
 /** The probe class, its fields by name and the prober's role. */
 interface ProbeSchema {
   readonly classId: string;
-  readonly fieldIds: ReadonlyMap<string, string>;
+  readonly probes: readonly {
+    readonly probe: ProbeField;
+    readonly id: string;
+  }[];
   readonly roleId: string;
 }
 
@@ -187,13 +190,14 @@ const setUpProbes = Effect.gen(function* setUpProbes() {
 
   const probeClass = createClass("probe_all");
 
-  const fields = PROBES.map((probe) =>
-    addField(probeClass.id, probe.name, probe.type)
-  );
+  const fields = PROBES.map((probe) => ({
+    field: addField(probeClass.id, probe.name, probe.type),
+    probe,
+  }));
 
   yield* change([
     probeClass.op,
-    ...fields.map((field) => field.op),
+    ...fields.map(({ field }) => field.op),
     createRole("prober"),
   ]);
 
@@ -204,42 +208,25 @@ const setUpProbes = Effect.gen(function* setUpProbes() {
     effect: "allow" | "deny",
     target: AccessTarget,
     condition: Condition | null
-  ): Operation => ({
-    definition: {
-      actions: ["read"],
-      active: true,
-      classId: probeClass.id,
-      condition,
-      description: null,
-      effect,
-      id: freshId(),
-      kind: "accessRule",
-      name: null,
-      owner: { layer: "local" },
-      protected: false,
-      roleIds: [roleId],
-      target,
-    },
-    op: "createAccessRule",
-  });
+  ): Operation =>
+    addAccessRule(probeClass.id, [roleId], {}, { condition, effect, target })
+      .op;
 
   yield* change([
     rule("allow", { kind: "records" }, null),
     rule("allow", { fields: "*", kind: "fields" }, null),
-    ...PROBES.map((probe, index) =>
+    ...fields.map(({ probe, field }) =>
       rule(
         "deny",
-        { fields: [fields[index]?.id ?? ""], kind: "fields" },
-        probe.deny({ path: [fields[index]?.id ?? ""] })
+        { fields: [field.id], kind: "fields" },
+        probe.deny({ path: [field.id] })
       )
     ),
   ]);
 
   return {
     classId: probeClass.id,
-    fieldIds: new Map(
-      PROBES.map((probe, index) => [probe.name, fields[index]?.id ?? ""])
-    ),
+    probes: fields.map(({ probe, field }) => ({ id: field.id, probe })),
     roleId,
   } satisfies ProbeSchema;
 });
@@ -263,14 +250,14 @@ const sampleArb: Arbitrary<Sample> = record(
 const inputs = (schema: ProbeSchema, sample: Sample) => {
   const values = new Map<string, DecodedInput>();
 
-  for (const probe of PROBES) {
+  for (const { probe, id } of schema.probes) {
     const decoded = decodeIn(probe.type, sample[probe.name] ?? null);
 
     if (!decoded.ok) {
       throw new RangeError(`Sample value of ${probe.name} is invalid`);
     }
 
-    values.set(schema.fieldIds.get(probe.name) ?? "", decoded.value);
+    values.set(id, decoded.value);
   }
 
   return values;
@@ -306,9 +293,7 @@ const compare = Effect.fn("ProposedRelation.compare")(function* compare(
   const stored = yield* readableOnRecord(scope, schema.classId, saved.id);
 
   const names = (ids: ReadonlySet<string>) =>
-    PROBES.flatMap((probe) =>
-      ids.has(schema.fieldIds.get(probe.name) ?? "") ? [probe.name] : []
-    );
+    schema.probes.flatMap(({ probe, id }) => (ids.has(id) ? [probe.name] : []));
 
   return {
     standIn: names(standIn),

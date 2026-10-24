@@ -23,7 +23,7 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { DeliveryHandlers, effectFor } from "../src/outbox/delivery-effects.ts";
 import type { DeliveryEffect } from "../src/outbox/delivery-effects.ts";
 import { workerPass } from "../src/outbox/worker.ts";
-import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
+import { asArray, asObject, textOf } from "./api-support.ts";
 import { hubTestLayer, listener } from "./hub-support.ts";
 import { subscribe } from "./outbox-support.ts";
 import { change, createClass, ensureSite } from "./schema-support.ts";
@@ -108,7 +108,11 @@ describe("tmf688-topics", () => {
   test("pending client events are suppressed when topic read rights are revoked", () =>
     Effect.gen(function* revokedTopic() {
       const http = yield* TestHttpClient;
-      const { admin } = yield* apiCallers;
+
+      const admin = {
+        token: yield* (yield* TestHttpClient).signIn("ada", "ada-password"),
+      };
+
       const callback = yield* listener();
       yield* http.request("POST", `${BASE}/hub`, {
         ...admin,
@@ -201,7 +205,11 @@ describe("tmf688-topics", () => {
     () =>
       Effect.gen(function* resourceTopicLifecycle() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* apiCallers;
+
+        const admin = {
+          token: yield* (yield* TestHttpClient).signIn("ada", "ada-password"),
+        };
+
         yield* ensureSite;
         const callback = yield* listener();
 
@@ -242,7 +250,11 @@ describe("tmf688-topics", () => {
     () =>
       Effect.gen(function* scenario1() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* apiCallers;
+
+        const admin = {
+          token: yield* (yield* TestHttpClient).signIn("ada", "ada-password"),
+        };
+
         const callback = yield* listener();
 
         const topic = yield* http.request("POST", `${BASE}/topic`, {
@@ -371,7 +383,11 @@ describe("tmf-oas-contract", () => {
     () =>
       Effect.gen(function* fieldSelections() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* apiCallers;
+
+        const admin = {
+          token: yield* (yield* TestHttpClient).signIn("ada", "ada-password"),
+        };
+
         const callback = yield* listener();
 
         const topic = yield* http.request("POST", `${BASE}/topic`, {
@@ -485,7 +501,10 @@ describe("tmf-oas-contract", () => {
     () =>
       Effect.gen(function* tmfRequiredFields() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* apiCallers;
+
+        const admin = {
+          token: yield* (yield* TestHttpClient).signIn("ada", "ada-password"),
+        };
 
         const first = yield* http.request("POST", `${BASE}/topic`, {
           ...admin,
@@ -552,7 +571,15 @@ describe("tmf-oas-contract", () => {
     () =>
       Effect.gen(function* scenario2() {
         const http = yield* TestHttpClient;
-        const { admin, bob } = yield* apiCallers;
+
+        const admin = {
+          token: yield* (yield* TestHttpClient).signIn("ada", "ada-password"),
+        };
+
+        const bob = {
+          token: yield* (yield* TestHttpClient).signIn("bob", "bob-password"),
+        };
+
         const callback = yield* listener();
 
         const topic = yield* http.request("POST", `${BASE}/topic`, {
@@ -657,7 +684,11 @@ describe("tmf-oas-contract", () => {
     () =>
       Effect.gen(function* scenario3() {
         const http = yield* TestHttpClient;
-        const { admin } = yield* apiCallers;
+
+        const admin = {
+          token: yield* (yield* TestHttpClient).signIn("ada", "ada-password"),
+        };
+
         const callback = yield* listener();
         yield* http.request("POST", `${BASE}/hub`, {
           ...admin,

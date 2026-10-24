@@ -5,15 +5,12 @@ import type { FieldType } from "@std/values/field-type";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
-import { assert as check, constantFrom, property, tuple } from "fast-check";
+import { assert as check, property } from "fast-check";
 
 import type { Expr } from "../src/ast.ts";
-import { checkCondition } from "../src/check.ts";
 import type { FieldInfo } from "../src/class-view.ts";
 import { staticClassView } from "../src/class-view.ts";
 import { evaluateCondition } from "../src/evaluate.ts";
-import { PROFILES } from "../src/profile.ts";
-import { resolveCondition } from "../src/resolve.ts";
 import type { ConditionContext } from "../src/resolve.ts";
 import {
   arrayParameter,
@@ -27,11 +24,10 @@ import {
 import { compileCondition, compileNegatedCondition } from "../src/sql.ts";
 import type { ResolvedCondition } from "../src/typed.ts";
 import { hooks as fixtureHooks } from "./support/differential.ts";
-import { exprArb } from "./support/generate.ts";
+import { profiledExprArb } from "./support/generate.ts";
 import {
-  ASSET,
+  resolveFor,
   fixtureView,
-  LAPTOP,
   stableId,
   rowId,
   identHooks,
@@ -263,33 +259,23 @@ describe("SQL fragments", () => {
   });
 
   it("never writes an AST literal into the SQL text (compiler fuzz)", () => {
-    const cases = tuple(
-      constantFrom(...PROFILES),
-      constantFrom(ASSET, LAPTOP)
-    ).chain(([profile, classId]) =>
-      exprArb({
-        classId,
-        depth: 5,
-        profile,
-        profileOptions: { accessRuleHops: 1, myGroups: true },
-      }).map((expr) => ({ classId, expr, profile }))
-    );
+    const cases = profiledExprArb(5);
 
     check(
-      property(cases, ({ classId, expr, profile }) => {
-        const result = checkCondition(expr, {
-          classId,
-          profile,
-          profileOptions: { accessRuleHops: 1, myGroups: true },
-          purpose: "store",
-          view: fixtureView,
-        });
+      property(cases, ({ classId, expr, profile, profileOptions }) => {
+        const condition = resolveFor(
+          expr,
+          {
+            classId,
+            profile,
+            profileOptions,
+            purpose: "store",
+            view: fixtureView,
+          },
+          CONTEXT
+        );
 
-        const condition = result.ok
-          ? resolveCondition(result.value, CONTEXT)
-          : undefined;
-
-        if (condition === undefined || !condition.ok) {
+        if (!condition.ok) {
           return;
         }
 
