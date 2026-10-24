@@ -26,8 +26,14 @@ export const Resource = Schema.StructWithRest(
     "@baseType": Schema.optionalKey(Schema.String),
     "@schemaLocation": Schema.optionalKey(Schema.String),
     "@type": Schema.String,
+    creationDate: Schema.optionalKey(
+      Schema.String.annotate({ format: "date-time" })
+    ),
     href: Schema.String,
     id: Schema.String,
+    lastUpdate: Schema.optionalKey(
+      Schema.String.annotate({ format: "date-time" })
+    ),
     revision: Schema.optionalKey(Schema.Int),
     withheld: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
@@ -80,10 +86,15 @@ export const ChangeEntry = Schema.StructWithRest(
     action: Schema.optionalKey(Schema.String),
     actor: Schema.optionalKey(EntityRef),
     changes: Schema.optionalKey(Schema.Json),
-    creationDate: Schema.optionalKey(Schema.Json),
+    creationDate: Schema.optionalKey(
+      Schema.String.annotate({ format: "date-time" })
+    ),
     fields: Schema.optionalKey(Schema.Json),
     id: Schema.String,
     kind: Schema.optionalKey(Schema.String),
+    occurredAt: Schema.optionalKey(
+      Schema.String.annotate({ format: "date-time" })
+    ),
     revision: Schema.optionalKey(Schema.Json),
   }),
   [extensionMembers]
