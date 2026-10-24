@@ -6,11 +6,11 @@
  * added: a form whose DDL locks something unlisted fails here.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import { modeCovers } from "@std/testing/lock-modes";
 import { Effect } from "effect";
 
 import {
   DDL_LOCK_INVENTORY,
-  modeCovers,
   runLockInventoryProbe,
   UNBUDGETED_INDEX,
   UNBUDGETED_TOAST,

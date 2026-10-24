@@ -2,6 +2,7 @@ import { createHook } from "node:async_hooks";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import { SESSION_BODY_MAX_BYTES } from "@std/api/session";
+import { renderSql } from "@std/conditions/sql-fragment";
 import { planSet } from "@std/definitions/set-plan";
 import { resolveSet } from "@std/definitions/set-resolve";
 import { Deferred, Effect, Fiber, Layer, Result, Schema } from "effect";
@@ -14,6 +15,7 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import {
   ACTIVE_SESSION_LIMIT,
   deleteExpiredSessions,
+  deleteExpiredSessionsStatement,
   SESSION_CLEANUP_BATCH,
   SessionRetentionLayer,
 } from "../src/auth/session-retention.ts";
@@ -328,9 +330,12 @@ describe("http-edge-limits", () => {
       );
       yield* sql`ANALYZE core.session`;
 
-      const rawPlan =
-        yield* sql.unsafe(`EXPLAIN (ANALYZE, BUFFERS) DELETE FROM core.session WHERE ctid = ANY(ARRAY(
-      SELECT ctid FROM core.session WHERE expires_at <= now() ORDER BY expires_at, token_hash LIMIT ${SESSION_CLEANUP_BATCH} FOR UPDATE SKIP LOCKED))`);
+      const statement = renderSql(deleteExpiredSessionsStatement);
+
+      const rawPlan = yield* sql.unsafe(
+        `EXPLAIN (ANALYZE, BUFFERS) ${statement.text}`,
+        statement.values
+      );
 
       const plan = yield* decodeRows(
         Schema.Struct({ "QUERY PLAN": Schema.String })

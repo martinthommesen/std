@@ -2,18 +2,33 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { evaluateAggregate, partMatches } from "@std/conditions/aggregate";
 import { ConditionDefectError } from "@std/conditions/defect";
 import type { ResolvedNode } from "@std/conditions/typed";
+import {
+  PLATFORM_CLASS_IDS,
+  SYSTEM_USER_ID,
+} from "@std/definitions/well-known";
 import { fieldAttribute } from "@std/tmf/mapping";
 import type { SourceRecord } from "@std/tmf/mapping";
-import { Effect, Ref } from "effect";
+import { Effect, Ref, Result, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { AcmeFixture, acmeTestLayer } from "../../testing/src/acme-fixture.ts";
 import { ACME } from "../../testing/src/acme-ids.ts";
 import { withHistory } from "../src/http/tmf/sources.ts";
 import type { Delivery } from "../src/outbox/delivery-effects.ts";
-import { workerPass } from "../src/outbox/worker.ts";
+import {
+  entryTargetKey,
+  readEntriesAt,
+  readEntryResultsAt,
+} from "../src/outbox/delivery-payload.ts";
+import type { EntryTarget } from "../src/outbox/delivery-payload.ts";
+import {
+  workerPass,
+  deleteOldDeliveries,
+  RETENTION_BATCH,
+} from "../src/outbox/worker.ts";
 import { decodeCursor, finishPage } from "../src/records/read-cursor.ts";
 import { currentReadScope } from "../src/records/read-records.ts";
+import { decodeRows } from "../src/sql/rows.ts";
 import { analyzeStatement } from "../src/sql/statement-lexer.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
@@ -264,4 +279,107 @@ describe("runtime quality invariants", () => {
       () => historyEnrichment
     );
   });
+});
+
+const decodeId = decodeRows(Schema.Struct({ id: Schema.String }));
+
+const decodeTarget = decodeRows(
+  Schema.Struct({ id: Schema.String, record_id: Schema.String })
+);
+
+const decodeCount = decodeRows(Schema.Struct({ count: Schema.Int }));
+
+describe("retention and batched history invariants", () => {
+  it.effect(
+    "retention returns the total across batches and preserves dead and fresh deliveries",
+    () =>
+      Effect.gen(function* retentionBatches() {
+        const sql = yield* SqlClient.SqlClient;
+        const log = yield* StatementLog;
+
+        const [subscription] = yield* sql`INSERT INTO core.subscription
+          (id, class_id, version, created_at, created_by, updated_at, updated_by, owner_layer, owner_set_id, state, protected, name, table_id, operations, identity_id, max_attempts, dead_letter, enabled)
+          VALUES (uuidv7(), ${PLATFORM_CLASS_IDS.subscription}::uuid, 1, now(), ${SYSTEM_USER_ID}::uuid, now(), ${SYSTEM_USER_ID}::uuid, 'local', NULL, 'active', false, 'p2-retention', ${ACME.asset}::uuid, '["create"]'::jsonb, ${SYSTEM_USER_ID}::uuid, 1, 'skip', true) RETURNING id::text AS id`.pipe(
+          Effect.flatMap(decodeId)
+        );
+
+        assert.isDefined(subscription);
+
+        yield* sql`WITH inserted AS (
+          INSERT INTO core.change (id, class_id, version, created_at, created_by, updated_at, updated_by, operation_id, record_id, record_class_id, record_version, kind, actor_id, cause, schema_revision, occurred_at, fields)
+          SELECT uuidv7(), ${PLATFORM_CLASS_IDS.change}::uuid, 1, now(), ${SYSTEM_USER_ID}::uuid, now(), ${SYSTEM_USER_ID}::uuid, uuidv7(), uuidv7(), ${ACME.asset}::uuid, 1, 'create', ${SYSTEM_USER_ID}::uuid, '{}'::jsonb, 1, now(), jsonb_build_object('p2', i)
+          FROM generate_series(1, ${RETENTION_BATCH + 3}::int) AS i RETURNING id, record_id, fields
+        ) INSERT INTO core.delivery (subscription_id, change_id, record_id, record_version, status, attempts, next_attempt_at, finished_at)
+          SELECT ${subscription.id}::uuid, id, record_id, 1,
+          CASE WHEN (fields->>'p2')::int = ${RETENTION_BATCH + 2} THEN 'dead' ELSE 'done' END,
+          1, now(), CASE WHEN (fields->>'p2')::int = ${RETENTION_BATCH + 3} THEN now() ELSE now() - interval '8 days' END FROM inserted`;
+
+        yield* log.clear;
+        assert.strictEqual(yield* deleteOldDeliveries(), RETENTION_BATCH + 1);
+        assert.lengthOf(
+          (yield* log.texts).filter((text) =>
+            text.includes("DELETE FROM core.delivery")
+          ),
+          2
+        );
+        assert.strictEqual(yield* deleteOldDeliveries(), 0);
+
+        const [remaining] =
+          yield* sql`SELECT count(*)::int AS count FROM core.delivery WHERE subscription_id = ${subscription.id}::uuid`.pipe(
+            Effect.flatMap(decodeCount)
+          );
+
+        assert.strictEqual(remaining?.count, 2);
+      }).pipe(Effect.provide(acmeTestLayer()))
+  );
+
+  it.effect(
+    "batched history isolates unreadable saved and legacy targets while the fail-fast reader still fails",
+    () =>
+      Effect.gen(function* historyIsolation() {
+        const sql = yield* SqlClient.SqlClient;
+        const targets: (EntryTarget & { readonly malformed: boolean })[] = [];
+
+        for (const imaged of [true, false]) {
+          for (const malformed of [false, true]) {
+            const [row] =
+              yield* sql`INSERT INTO core.change (id, class_id, version, created_at, created_by, updated_at, updated_by, operation_id, record_id, record_class_id, record_version, kind, actor_id, cause, schema_revision, occurred_at, fields)
+              VALUES (uuidv7(), ${PLATFORM_CLASS_IDS.change}::uuid, 1, now(), ${SYSTEM_USER_ID}::uuid, now(), ${SYSTEM_USER_ID}::uuid, uuidv7(), uuidv7(), ${ACME.asset}::uuid, 1, 'create', ${SYSTEM_USER_ID}::uuid, '{}'::jsonb, 1, now(), ${malformed ? '{"x":9007199254740993}' : "{}"}::jsonb)
+              RETURNING id::text AS id, record_id::text AS record_id`.pipe(
+                Effect.flatMap(decodeTarget)
+              );
+
+            assert.isDefined(row);
+
+            if (imaged) {
+              yield* sql`INSERT INTO core.change_image (change_id, after_image) VALUES (${row.id}::uuid, '{}'::jsonb)`;
+            }
+
+            targets.push({ malformed, recordId: row.record_id, version: 1 });
+          }
+        }
+
+        const results = yield* readEntryResultsAt(targets);
+        assert.strictEqual(results.size, 4);
+
+        for (const target of targets) {
+          const result = results.get(entryTargetKey(target));
+          assert.isDefined(result);
+          assert.strictEqual(Result.isFailure(result), target.malformed);
+
+          if (Result.isFailure(result)) {
+            assert.strictEqual(result.failure._tag, "PayloadUnreadable");
+          } else {
+            assert.lengthOf(result.success, 1);
+          }
+        }
+
+        const failFast = yield* readEntriesAt(targets).pipe(Effect.result);
+        assert.isTrue(Result.isFailure(failFast));
+
+        if (Result.isFailure(failFast)) {
+          assert.strictEqual(failFast.failure._tag, "PayloadUnreadable");
+        }
+      }).pipe(Effect.provide(acmeTestLayer()))
+  );
 });

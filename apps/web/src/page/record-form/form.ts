@@ -1,3 +1,9 @@
+/**
+ * What the form page derives from its Model, for `update` and `view`
+ * alike: the fields, each field's input and base value, the write body,
+ * and the problems the client finds with it (Contracts 6.3: the same
+ * verdict as the server's for every field both see).
+ */
 import { Combobox, DatePicker } from "@foldkit/ui";
 import { evaluateFormConditionInBrowser } from "@std/conditions/browser";
 import type { FieldError } from "@std/definitions/field-errors";
@@ -7,12 +13,6 @@ import type { MetaFormRule } from "@std/definitions/table-metadata";
 import type { JsonValue } from "@std/values/json-value";
 // oxlint-disable-next-line sonarjs/no-built-in-override -- Foldkit requires Effect module names; this module does not use the global Array.
 import { Array, Match, Option, Predicate, Record, Result, pipe } from "effect";
-/**
- * What the form page derives from its Model, for `update` and `view`
- * alike: the fields, each field's input and base value, the write body,
- * and the problems the client finds with it (Contracts 6.3: the same
- * verdict as the server's for every field both see).
- */
 import { groupBy } from "effect/Array";
 import { AsyncData } from "foldkit";
 

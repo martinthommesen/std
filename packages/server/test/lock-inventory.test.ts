@@ -1,4 +1,14 @@
 import type { PgConnection } from "@effect/sql-pg";
+import { assert, describe, it, layer } from "@effect/vitest";
+import { applyOperations, LOCAL_CONTEXT } from "@std/definitions/apply";
+import type { ApplyContext } from "@std/definitions/apply";
+import { generatedName } from "@std/definitions/ids";
+import type { Operation } from "@std/definitions/operation";
+import { LOCAL_ORIGIN } from "@std/definitions/requester";
+import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
+import { Effect, Result, Schema } from "effect";
+
+import { ACME } from "../../testing/src/acme-ids.ts";
 /**
  * The lock inventory of every DDL form (Contracts 1.4): after a statement's
  * listed locks are taken explicitly, running the statement takes no other
@@ -20,16 +30,7 @@ import type { PgConnection } from "@effect/sql-pg";
  *   mode-checked instead;
  * - `missing`: anything else; the inventory is incomplete.
  */
-import { assert, describe, it, layer } from "@effect/vitest";
-import { applyOperations, LOCAL_CONTEXT } from "@std/definitions/apply";
-import type { ApplyContext } from "@std/definitions/apply";
-import { generatedName } from "@std/definitions/ids";
-import type { Operation } from "@std/definitions/operation";
-import { LOCAL_ORIGIN } from "@std/definitions/requester";
-import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
-import { Effect, Result, Schema } from "effect";
-
-import { ACME } from "../../testing/src/acme-ids.ts";
+import { modeCovers } from "../../testing/src/lock-modes.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import type {
@@ -52,55 +53,6 @@ import {
   schemaTestLayer,
   SITE_NAMESPACE_ID,
 } from "./schema-support.ts";
-
-/** Lock modes as `pg_locks.mode` names them, weakest first. */
-const MODES = [
-  "AccessShareLock",
-  "RowShareLock",
-  "RowExclusiveLock",
-  "ShareUpdateExclusiveLock",
-  "ShareLock",
-  "ShareRowExclusiveLock",
-  "ExclusiveLock",
-  "AccessExclusiveLock",
-] as const;
-
-/** Postgres's conflict table (explicit locking, table 13.2), by index in `MODES`. */
-const CONFLICT_INDEXES: readonly (readonly number[])[] = [
-  [7],
-  [6, 7],
-  [4, 5, 6, 7],
-  [3, 4, 5, 6, 7],
-  [2, 3, 5, 6, 7],
-  [2, 3, 4, 5, 6, 7],
-  [1, 2, 3, 4, 5, 6, 7],
-  [0, 1, 2, 3, 4, 5, 6, 7],
-];
-
-const CONFLICTS = new Map<string, ReadonlySet<string | undefined>>(
-  MODES.map((mode, index) => [
-    mode,
-    new Set((CONFLICT_INDEXES[index] ?? []).map((other) => MODES[other])),
-  ])
-);
-
-/**
- * Whether holding `held` already excludes every session that would block
- * `wanted`.
- * @param held - The listed mode.
- * @param wanted - The mode the statement took.
- * @returns True when `held` covers `wanted`.
- */
-export const modeCovers = (held: string, wanted: string): boolean => {
-  const heldConflicts = CONFLICTS.get(held);
-  const wantedConflicts = CONFLICTS.get(wanted);
-
-  return (
-    heldConflicts !== undefined &&
-    wantedConflicts !== undefined &&
-    [...wantedConflicts].every((mode) => heldConflicts.has(mode))
-  );
-};
 
 const PG_MODES: Readonly<Record<LockMode, string>> = {
   "ACCESS EXCLUSIVE": "AccessExclusiveLock",

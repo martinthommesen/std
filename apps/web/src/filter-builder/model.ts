@@ -1,4 +1,3 @@
-import { DatePicker } from "@foldkit/ui";
 /**
  * The filter builder's state: a tree that mirrors the condition AST
  * (Contracts 5.2) node for node, so any AST the builder can show loads
@@ -14,6 +13,7 @@ import { DatePicker } from "@foldkit/ui";
  * the filter is applied), so an unfinished value is never lost and never
  * reaches the server.
  */
+import { DatePicker } from "@foldkit/ui";
 import { ATOM_OPERATORS } from "@std/conditions/ast";
 import { Schema } from "effect";
 import { CalendarDate } from "foldkit/calendar";

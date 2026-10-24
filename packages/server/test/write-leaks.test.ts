@@ -1,3 +1,14 @@
+/**
+ * Review regressions of the write side (Contracts 3.7, 3.8, 6.4):
+ *
+ * - history reads permissions and entries under one snapshot, so a
+ *   concurrent change cannot pair a new value with old read rights;
+ * - validation errors name only fields the caller supplied or could read
+ *   on the proposed record;
+ * - a stale create is checked for fields that became required without a
+ *   default;
+ * - a stale write names fields by write rights as well as read rights.
+ */
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Operation } from "@std/definitions/operation";
 import type { JsonValue } from "@std/values/json-value";
@@ -23,17 +34,6 @@ import {
   recordPath,
 } from "./reads-support.ts";
 import { rootVersion } from "./records-support.ts";
-/**
- * Review regressions of the write side (Contracts 3.7, 3.8, 6.4):
- *
- * - history reads permissions and entries under one snapshot, so a
- *   concurrent change cannot pair a new value with old read rights;
- * - validation errors name only fields the caller supplied or could read
- *   on the proposed record;
- * - a stale create is checked for fields that became required without a
- *   default;
- * - a stale write names fields by write rights as well as read rights.
- */
 import { addAccessRule, addOverride, change } from "./schema-support.ts";
 import { lockWaiterCount, waitUntil } from "./support.ts";
 import { ASSET, create, history, LAPTOP, patch } from "./writes-support.ts";

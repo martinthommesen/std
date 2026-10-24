@@ -44,6 +44,7 @@ import { bumpRevision } from "@std/server/sql/config-commit";
 import { makeDedicatedConnection } from "@std/server/sql/dedicated";
 import { decodeRows } from "@std/server/sql/rows";
 import { lockWaiting } from "@std/server/sql/statement-marks";
+import { modeCovers } from "@std/testing/lock-modes";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -260,59 +261,6 @@ export interface FormResult {
   readonly catalogModes: readonly string[];
   readonly violations: readonly string[];
 }
-
-/** Lock modes as `pg_locks.mode` names them, weakest first. */
-const MODES = [
-  "AccessShareLock",
-  "RowShareLock",
-  "RowExclusiveLock",
-  "ShareUpdateExclusiveLock",
-  "ShareLock",
-  "ShareRowExclusiveLock",
-  "ExclusiveLock",
-  "AccessExclusiveLock",
-] as const;
-
-/**
- * Postgres's lock conflict table (explicit locking, table 13.2): for each
- * mode, by its index in `MODES`, the indexes of the modes it conflicts with.
- */
-const CONFLICT_INDEXES: readonly (readonly number[])[] = [
-  [7],
-  [6, 7],
-  [4, 5, 6, 7],
-  [3, 4, 5, 6, 7],
-  [2, 3, 5, 6, 7],
-  [2, 3, 4, 5, 6, 7],
-  [1, 2, 3, 4, 5, 6, 7],
-  [0, 1, 2, 3, 4, 5, 6, 7],
-];
-
-/** Each mode with the modes it conflicts with. */
-const CONFLICTS = new Map<string, ReadonlySet<string | undefined>>(
-  MODES.map((mode, index) => [
-    mode,
-    new Set((CONFLICT_INDEXES[index] ?? []).map((other) => MODES[other])),
-  ])
-);
-
-/**
- * Whether holding `held` already excludes every session that would block
- * `wanted`: everything `wanted` conflicts with, `held` conflicts with too.
- * @param held - The mode taken explicitly.
- * @param wanted - The mode the DDL took.
- * @returns `true` when `held` covers `wanted`.
- */
-export const modeCovers = (held: string, wanted: string): boolean => {
-  const heldConflicts = CONFLICTS.get(held);
-  const wantedConflicts = CONFLICTS.get(wanted);
-
-  if (heldConflicts === undefined || wantedConflicts === undefined) {
-    return false;
-  }
-
-  return [...wantedConflicts].every((mode) => heldConflicts.has(mode));
-};
 
 /** `LOCK TABLE` mode names to `pg_locks` mode names. */
 const PG_LOCK_MODE: Readonly<Record<TableLockMode, string>> = {

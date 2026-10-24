@@ -1,3 +1,10 @@
+/**
+ * The two-user write scenario of the plan's Stage 0 gate and Contracts 3
+ * (`two-user-write`), the 2.2 endpoint-independence tests through the HTTP
+ * API, `field-rule-states` with rule 7 replaced for `name`, the
+ * stale-request check of writes (6.4), and secret exclusion from history
+ * (4.3).
+ */
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
@@ -13,13 +20,6 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { objectOf } from "./authz-support.ts";
 import { codeOf, readsTestLayer, recordPath } from "./reads-support.ts";
 import { rootVersion, changeLog, rowCount } from "./records-support.ts";
-/**
- * The two-user write scenario of the plan's Stage 0 gate and Contracts 3
- * (`two-user-write`), the 2.2 endpoint-independence tests through the HTTP
- * API, `field-rule-states` with rule 7 replaced for `name`, the
- * stale-request check of writes (6.4), and secret exclusion from history
- * (4.3).
- */
 import { addAccessRule, change, values } from "./schema-support.ts";
 import {
   ASSET,

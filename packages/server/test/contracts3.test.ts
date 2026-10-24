@@ -1,3 +1,8 @@
+/**
+ * The Contracts 3 acceptance tests through `/api/v1` (Step 3 gate):
+ * the two-user example of 3.3 with TMF630 paths, API names and shapes,
+ * alongside the standalone authorization, history and session suites.
+ */
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Operation } from "@std/definitions/operation";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -36,11 +41,6 @@ import type {
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { DEFINITION_KIND_OF_TABLE } from "../src/http/change-sets.ts";
-/**
- * The Contracts 3 acceptance tests through `/api/v1` (Step 3 gate):
- * the two-user example of 3.3 with TMF630 paths, API names and shapes,
- * alongside the standalone authorization, history and session suites.
- */
 import { DatabaseConfig } from "../src/sql/database-config.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {

@@ -27,14 +27,16 @@ export const SESSION_CLEANUP_PERIOD = "1 minute";
  */
 export const ACTIVE_SESSION_LIMIT = 128;
 
+/** The bounded session deletion used by retention and its EXPLAIN cost check. */
+export const deleteExpiredSessionsStatement = sql`DELETE FROM core.session WHERE ctid = ANY(ARRAY(
+    SELECT ctid FROM core.session WHERE expires_at <= now()
+    ORDER BY expires_at, token_hash LIMIT ${textParameter(String(SESSION_CLEANUP_BATCH), "integer")}
+    FOR UPDATE SKIP LOCKED)) RETURNING token_hash::text AS token_hash`;
+
 /** Deletes one bounded, indexed batch; SKIP LOCKED lets instances cooperate. */
 export const deleteExpiredSessions = Effect.fn("Sessions.deleteExpired")(
   function* deleteExpiredSessions() {
-    const removed =
-      yield* writeRows(sql`DELETE FROM core.session WHERE ctid = ANY(ARRAY(
-    SELECT ctid FROM core.session WHERE expires_at <= now()
-    ORDER BY expires_at, token_hash LIMIT ${textParameter(String(SESSION_CLEANUP_BATCH), "integer")}
-    FOR UPDATE SKIP LOCKED)) RETURNING token_hash::text AS token_hash`);
+    const removed = yield* writeRows(deleteExpiredSessionsStatement);
 
     yield* writeRows(sql`DELETE FROM core.sign_in_attempt WHERE ctid = ANY(ARRAY(
     SELECT ctid FROM core.sign_in_attempt WHERE expires_at <= now()
