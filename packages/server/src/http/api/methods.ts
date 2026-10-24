@@ -9,7 +9,7 @@ import { API_PREFIX } from "@std/api/api";
  * record exists, is hidden or is missing (3.4).
  */
 import { Effect } from "effect";
-import { HttpBody, HttpRouter, HttpServerResponse } from "effect/http";
+import { HttpRouter, HttpServerResponse } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 /** One resource shape: its route path and the methods it offers. */
@@ -150,22 +150,15 @@ export const resourceRouteOf = (url: string): ResourceRoute | undefined => {
 
 /**
  * An answer without its body, for `HEAD`: the status, headers and cookies,
- * and the body's media type as `Content-Type`.
+ * including the selected GET representation's `Content-Type` and known
+ * byte length. Unknown lengths stay absent (RFC 9110 §§8.6, 9.3.2).
  *
  * @param response - The answer.
  * @returns It without a body.
  */
 export const withoutBody = (
   response: HttpServerResponse.HttpServerResponse
-): HttpServerResponse.HttpServerResponse => {
-  const { body } = response;
-  const contentType = body._tag === "Empty" ? undefined : body.contentType;
-  const bodiless = HttpServerResponse.setBody(response, HttpBody.empty);
-
-  return contentType === undefined
-    ? bodiless
-    : HttpServerResponse.setHeader(bodiless, "content-type", contentType);
-};
+): HttpServerResponse.HttpServerResponse => HttpServerResponse.empty(response);
 
 /**
  * A `GET` route and its `HEAD` twin, which answers as `GET` without the
