@@ -43,7 +43,7 @@ export const SessionCreate = Schema.Struct({
  */
 export const Session = Schema.Struct({
   "@type": Schema.Literal("Session"),
-  expiresAt: Schema.String,
+  expiresAt: Schema.String.annotate({ format: "date-time" }),
   href: Schema.String,
   id: Schema.Literal("current"),
   token: Schema.optionalKey(Schema.String),

@@ -18,6 +18,7 @@ import {
 } from "../../testing/src/tmf-oas-contract.ts";
 import { checkTmf688Notification } from "../../testing/src/tmf688-contract.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { isRfc3339DateTime } from "../src/http/tmf/rfc3339.ts";
 import { DeliveryHandlers, effectFor } from "../src/outbox/delivery-effects.ts";
 import type { DeliveryEffect } from "../src/outbox/delivery-effects.ts";
 import { workerPass } from "../src/outbox/worker.ts";
@@ -771,7 +772,35 @@ describe("tmf-oas-contract", () => {
         });
 
         assert.strictEqual(event.status, 201, event.text);
-        assert.isString(asObject(event.json).eventTime);
+        assert.isTrue(
+          isRfc3339DateTime(textOf(asObject(event.json).eventTime))
+        );
+        assert.match(textOf(asObject(event.json).eventTime), /\.\d{3}Z$/u);
+
+        for (const eventTime of [
+          "2026-10-20T10:15:30.123+02:00",
+          "2026-10-19T23:45:30.5000-08:30",
+        ]) {
+          const received = yield* http.request(
+            "POST",
+            `${BASE}/topic/${id}/event`,
+            {
+              ...admin,
+              body: { ...body, eventId: eventTime, eventTime },
+            }
+          );
+
+          assert.strictEqual(received.status, 201, received.text);
+          assert.strictEqual(asObject(received.json).eventTime, eventTime);
+
+          const read = yield* http.get(
+            new URL(textOf(asObject(received.json).href)).pathname,
+            admin
+          );
+
+          assert.strictEqual(read.status, 200, read.text);
+          assert.strictEqual(asObject(read.json).eventTime, eventTime);
+        }
 
         for (const invalid of [
           { source: {} },
@@ -779,6 +808,10 @@ describe("tmf-oas-contract", () => {
           { relatedParty: [{ id: "only" }] },
           { analyticCharacteristic: [{ name: "only" }] },
           { eventTime: "2025-02-30T00:00:00Z" },
+          { eventTime: "2026-10-20T08:15:30" },
+          { eventTime: "2026-10-20T08:15:30+24:00" },
+          { eventTime: "2026-10-20T08:15:30.1234Z" },
+          { eventTime: "2016-12-31T23:59:60Z" },
         ]) {
           const response = yield* http.request(
             "POST",
@@ -787,6 +820,14 @@ describe("tmf-oas-contract", () => {
           );
 
           assert.strictEqual(response.status, 400, response.text);
+
+          if ("eventTime" in invalid) {
+            assert.deepStrictEqual(response.json, {
+              code: "InvalidRequest",
+              reason: "The request could not be completed",
+              status: "400",
+            });
+          }
         }
       }).pipe(Effect.provide(hubTestLayer), TestClock.withLive)
   );

@@ -30,6 +30,7 @@ import type {
   TestRequestOptions,
 } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { isRfc3339DateTime } from "../src/http/tmf/rfc3339.ts";
 import { DeadDeliveryTimestamp } from "../src/outbox/dead-letters.ts";
 import { claimDeliveries } from "../src/outbox/delivery-claims.ts";
 import type {
@@ -230,6 +231,8 @@ describe("dead-letter API", () => {
             "subscriptionState",
           ]);
           const resource = asObject(asArray(first.json)[0]);
+          assert.isTrue(isRfc3339DateTime(textOf(resource.finishedAt)));
+          assert.match(textOf(resource.finishedAt), /\.\d{3}Z$/u);
           assert.strictEqual(resource.deadLetterPolicy, "block");
           assert.strictEqual(resource.recordId, seeded.recordId);
           assert.strictEqual(resource.attempts, 1);

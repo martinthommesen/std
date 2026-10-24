@@ -25,7 +25,9 @@ export const DeadDelivery = Schema.Struct({
   attempts: Schema.optionalKey(Schema.Int),
   changeId: Schema.optionalKey(Schema.String),
   deadLetterPolicy: Schema.optionalKey(Schema.Literals(["block", "skip"])),
-  finishedAt: Schema.optionalKey(Schema.String),
+  finishedAt: Schema.optionalKey(
+    Schema.String.annotate({ format: "date-time" })
+  ),
   href: Schema.String,
   id: Schema.String,
   lastError: Schema.optionalKey(Schema.String),

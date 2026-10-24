@@ -12,7 +12,7 @@ export const TmfEvent = Schema.StructWithRest(
     "@type": Schema.String,
     event: Schema.Json,
     eventId: Schema.String,
-    eventTime: Schema.String,
+    eventTime: Schema.String.annotate({ format: "date-time" }),
     eventType: Schema.String,
     href: Schema.String,
     id: Schema.String,
@@ -59,7 +59,9 @@ export const EventCreate = Schema.StructWithRest(
     ),
     event: Schema.Record(Schema.String, Schema.Json),
     eventId: Schema.NonEmptyString,
-    eventTime: Schema.optionalKey(Schema.String),
+    eventTime: Schema.optionalKey(
+      Schema.String.annotate({ format: "date-time" })
+    ),
     eventType: Schema.NonEmptyString,
     relatedParty: Schema.optionalKey(
       Schema.Array(
