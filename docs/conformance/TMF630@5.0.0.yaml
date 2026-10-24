@@ -244,7 +244,7 @@ rows:
     level: recommended
     requirement: The server should send Content-Length, so a client can check it read the whole body and learn a body's size with HEAD.
     status: pending
-    note: "gap: Contracts 10 says nothing about Content-Length or HEAD"
+    note: "C10.1: head-metadata proves offered generic/fixed/mapped HEAD retains GET byte lengths, including UTF8, projections, masks and errors over web and TCP transports. The broader server Content-Length recommendation remains pending; unknown stream lengths are not synthesized."
   - id: TMF630@5.0.0/P1/1.5.2/server-last-modified
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
     level: recommended
@@ -613,6 +613,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/api-review-2.test.ts#api-review-2
+      - packages/server/test/head-metadata.test.ts#head-metadata
     note: "C10.5: HEAD is offered wherever GET is and answers GET's status and headers without a body; OPTIONS is 204 with Allow."
   - id: TMF630@5.0.0/P1/3.1/get-by-id-retrieves-resource
     source: TMF630 v5.0.0 P1 §3.1 p.26
