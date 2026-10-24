@@ -6,6 +6,10 @@ Use cosign 2.6.1 or a compatible newer release and a GitHub CLI with `gh attesta
 
 Before tagging, set `packages/server/package.json`'s version to the intended release (main currently uses `0.0.3`). It is the sole source for `STD_VERSION`, PostgreSQL application names and delivery worker-version floors. Use canonical numeric `major.minor.patch`, without leading zeros, prerelease or build suffixes. Publish from the matching tag, for example `v0.0.3`; the release gate rejects any other tag/version pair before building or publishing. Keep old tags unchanged: release compatibility runs `v0.0.2` with its original code.
 
+Run `pnpm check:release` locally before requesting a release. It selects the conformance stage from the release tags in `docs/plan.md`: `0.0.3` → `step3`, `0.0.4` → `step4`, `0.1.0` → `step5`. Other versions fail until their stage is documented and mapped in `docker/release-conformance.sh`. The command runs `pnpm check:conformance --gate <stage>` (Contracts 15.4), rejecting pending rows, unaccepted exclusions and missing stage evidence. It performs no signing or publication. Ordinary `pnpm check:tooling` checks matrix structure without enforcing a release stage.
+
+Both release jobs install the pinned toolchain and run this conformance gate before building, signing or uploading deliverables. Publishing also requires the exact matching version tag; only a passing gate emits its tag output. A workflow dry run still contacts signing and artifact services after its gate passes; use the local command for a conformance-only check.
+
 ## Verify the image, SBOM and provenance
 
 Set the version to the published tag and the digest to the immutable digest in the signed release workflow's `image-digest.txt`. Replace the example values; use the same digest when deploying. Do not verify one digest and run a tag.

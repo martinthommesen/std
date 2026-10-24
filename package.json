@@ -11,6 +11,8 @@
     "test:canaries": "vitest run --config tooling/vitest.config.ts",
     "check": "ultracite check && node tooling/check-foldkit-lint.ts",
     "check:postgres": "node tooling/check-postgres.ts",
+    "check:conformance": "node tooling/check-conformance-matrix.ts",
+    "check:release": "bash docker/release-conformance.sh",
     "check:tooling": "node tooling/check-tsconfig.ts && node tooling/check-imports.ts && node tooling/check-lockfile.ts && node tooling/check-vendor.ts && node tooling/check-oda-component-schema.ts && node tooling/check-conformance-matrix.ts && node tooling/check-migration-phases.ts",
     "ci:local": "node tooling/ci-local.ts",
     "ctk": "node tooling/ctk/run.ts",
