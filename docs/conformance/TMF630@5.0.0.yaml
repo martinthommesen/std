@@ -250,7 +250,7 @@ rows:
     level: recommended
     requirement: The server should send a Last-Modified header giving the resource's timestamp.
     status: pending
-    note: "gap: STD exposes `updatedAt` in the body (C10.2) but sends no Last-Modified header"
+    note: "Bounded LM1 evidence: client-event-last-modified proves stored client-event single GET uses its authorized root audit time, independently of producer eventTime, with projection/privacy, persisted-date and TCP checks. P13 says creation time; RFC 9110 8.8.2 retains modification semantics after saves. Generic body audit is lastUpdate (C10.2). Broader coverage remains pending: generated resource events and unproven composite representations have no complete modification provenance; omission is not an exclusion or row closure."
   - id: TMF630@5.0.0/P1/1.5.2/server-etag
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
     level: recommended

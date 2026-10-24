@@ -14,12 +14,13 @@ import {
   isJsonNumber,
 } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Clock, Effect, Option, Schema, Stream } from "effect";
+import { Clock, DateTime, Effect, Option, Schema, Stream } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { tableOfCollection } from "../http/api/table-names.ts";
+import type { ModificationMetadata } from "../http/representation.ts";
 import { encodeCursor } from "../records/read-cursor.ts";
 import { systemField } from "../records/read-field.ts";
 import { getRecord, listRecords } from "../records/read-records.ts";
@@ -403,7 +404,12 @@ const authorizedClientEvent = Effect.fn("Tmf688.authorizedClientEvent")(
   ) {
     const id = yield* clientRecordId(topicId, eventId, lookupPending);
     const read = yield* getRecord({ id, table: "core.event" });
-    const { payload, topic } = objectOf(objectOf(read.record).values);
+
+    const {
+      payload,
+      topic,
+      updated_at: updatedAt,
+    } = objectOf(objectOf(read.record).values);
 
     if (
       payload === undefined ||
@@ -414,7 +420,20 @@ const authorizedClientEvent = Effect.fn("Tmf688.authorizedClientEvent")(
       return yield* new NotFound();
     }
 
-    return { id, resource: clientEvent(payload, topicId, origin) };
+    // getRecord's stored-value codec validates and canonicalizes updated_at
+    // from the same authorized row as payload. Producer eventTime is unrelated.
+    const metadata: ModificationMetadata =
+      updatedAt === undefined
+        ? {}
+        : {
+            modifiedAt: DateTime.makeUnsafe(
+              yield* Schema.decodeUnknownEffect(Schema.String)(updatedAt).pipe(
+                Effect.orDie
+              )
+            ),
+          };
+
+    return { id, resource: clientEvent(payload, topicId, origin), ...metadata };
   }
 );
 
@@ -433,7 +452,12 @@ export const findClientEvent = Effect.fn("Tmf688.findClientEvent")(
       lookupPending
     );
 
-    return authorized.resource;
+    return authorized.modifiedAt === undefined
+      ? { resource: authorized.resource }
+      : {
+          modifiedAt: authorized.modifiedAt,
+          resource: authorized.resource,
+        };
   }
 );
 

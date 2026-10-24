@@ -62,6 +62,8 @@ import { originOf } from "../api/resource.ts";
 import { isTmfFailure, tmfErrorResponse } from "../api/tmf-error.ts";
 import { hubRateLimitResponse } from "../hubs.ts";
 import { optionalExpectedVersionOf } from "../record-writes.ts";
+import { jsonAnswerWithMetadata } from "../representation.ts";
+import type { ModificationMetadata } from "../representation.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
 import { recordServedRevision } from "../schema-revision-header.ts";
 import {
@@ -353,13 +355,17 @@ const getEvent = Effect.fn("Tmf688.getEvent")(function* getEvent(
   topic: EventTopic,
   lookupPending: boolean
 ) {
-  const event =
+  const event: ModificationMetadata & {
+    readonly resource: JsonObject | undefined;
+  } =
     topic.version === null
-      ? (yield* listResourceEvents(topic, input.origin, {
-          eventId: input.params.id ?? "",
-          limit: 1,
-          lookupPending,
-        })).events[0]
+      ? {
+          resource: (yield* listResourceEvents(topic, input.origin, {
+            eventId: input.params.id ?? "",
+            limit: 1,
+            lookupPending,
+          })).events[0],
+        }
       : yield* findClientEvent(
           topic.resource.id,
           input.params.id ?? "",
@@ -367,13 +373,18 @@ const getEvent = Effect.fn("Tmf688.getEvent")(function* getEvent(
           lookupPending
         );
 
-  if (event === undefined) {
+  if (event.resource === undefined) {
     return yield* new NotFound();
   }
 
-  return jsonAnswer(
-    yield* selectedResource(event, input.query.get("fields"), EVENT_FIELDS),
-    200
+  return yield* jsonAnswerWithMetadata(
+    yield* selectedResource(
+      event.resource,
+      input.query.get("fields"),
+      EVENT_FIELDS
+    ),
+    200,
+    event
   );
 });
 
