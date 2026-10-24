@@ -961,6 +961,38 @@ describe("itil-incident", () => {
         // The flag at a priority other than 1: accepted (the form, not the
         // API, offers it only at priority 1).
         assert.strictEqual(bodyOf(major).priority, "Low");
+
+        const majorPath = `${TICKETS}/${textOf(bodyOf(major).id)}`;
+
+        const raised = yield* manager.patch(majorPath, {
+          severity: "Critical",
+          troubleTicketCharacteristic: characteristicsWith(bodyOf(major), {
+            urgency: "1",
+          }),
+        });
+
+        assert.strictEqual(raised.status, 200, raised.text);
+        assert.strictEqual(bodyOf(raised).priority, "Critical");
+
+        const lowered = yield* manager.patch(majorPath, {
+          severity: "Minor",
+          troubleTicketCharacteristic: characteristicsWith(bodyOf(raised), {
+            urgency: "3",
+          }),
+        });
+
+        assert.strictEqual(lowered.status, 200, lowered.text);
+        assert.strictEqual(bodyOf(lowered).priority, "Planning");
+        assert.strictEqual(
+          arrayOf(bodyOf(lowered), "troubleTicketCharacteristic").find(
+            (item) => item.name === "majorIncident"
+          )?.value,
+          true
+        );
+        const client = yield* clientFor();
+        const stored = yield* readIncident(client, textOf(bodyOf(major).id));
+        assert.strictEqual(stored.priority, "5");
+        assert.strictEqual(stored.majorIncident, true);
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 });

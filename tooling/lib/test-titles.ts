@@ -3,11 +3,12 @@ import { Predicate } from "effect";
  * Reads the test titles of a file statically, for the requirements matrix
  * (Contracts 15.4). A title counts only when it belongs to a test that runs:
  *
- * - the call is `describe(...)`, `it(...)` or `it.effect(...)`, where
+ * - the call is `describe(...)`, `it(...)`, `it.effect(...)` or `it.live(...)`, where
  *   `describe` and `it` are imported from `vitest` or `@effect/vitest` (under
  *   any local name). A file that binds such a local name anywhere else (a
  *   variable, a destructured name, a parameter, a function or class name, a
- *   catch binding or another import) is refused, because a shadowed `it`
+ *   catch binding or another import), or assigns to it or a member, is
+ *   refused, because a shadowed `it`
  *   could make any title look like a test;
  * - its title is a string literal or a template literal without expressions;
  * - it has a callback (a function argument after the title), so `it("x")`
@@ -19,9 +20,16 @@ import { Predicate } from "effect";
  * - it is a statement of the file's top level or of a counted `describe`'s
  *   callback, so a test inside a helper function, a condition or a loop does
  *   not count (conservatively: the reader cannot tell whether it runs).
+ *   An imported `@effect/vitest` `layer(...)(callback)` also registers tests:
+ *   only direct calls on its uniquely bound callback parameter count, inside
+ *   that callback. Arbitrary shared-registration helpers are not executed.
  */
 import type {
   ArrowFunctionExpression,
+  AssignmentExpression,
+  AssignmentTargetMaybeDefault,
+  AssignmentTargetProperty,
+  AssignmentTargetRest,
   BindingPattern,
   BindingProperty,
   BindingRestElement,
@@ -33,6 +41,7 @@ import type {
   Program,
   SpreadElement,
   Statement,
+  UpdateExpression,
 } from "oxc-parser";
 import { parseSync, Visitor } from "oxc-parser";
 
@@ -76,6 +85,13 @@ const calleeChain = (callee: Expression): CalleeChain => {
       node = node.object;
     } else if (node.type === "CallExpression") {
       node = node.callee;
+    } else if (
+      node.type === "TSAsExpression" ||
+      node.type === "TSSatisfiesExpression" ||
+      node.type === "TSNonNullExpression" ||
+      node.type === "TSTypeAssertion"
+    ) {
+      node = node.expression;
     } else {
       break;
     }
@@ -119,12 +135,15 @@ const testBodyOf = (node: CallExpression): TestBody | undefined => {
 };
 
 type PatternNode =
+  | AssignmentTargetMaybeDefault
+  | AssignmentTargetProperty
+  | AssignmentTargetRest
   | BindingPattern
   | BindingProperty
   | BindingRestElement
   | ParamPattern;
 
-// Every name a binding pattern declares, destructuring included.
+// Every name a binding declares or an assignment changes, destructuring included.
 const patternNames = (node: PatternNode | null | undefined): string[] => {
   if (node === null || node === undefined) {
     return [];
@@ -157,6 +176,21 @@ const patternNames = (node: PatternNode | null | undefined): string[] => {
 
     case "TSParameterProperty": {
       return patternNames(node.parameter);
+    }
+
+    case "TSAsExpression":
+    case "TSSatisfiesExpression":
+    case "TSNonNullExpression":
+    case "TSTypeAssertion": {
+      const chain = calleeChain(node.expression);
+
+      return chain.root === undefined ? [] : [chain.root];
+    }
+
+    case "MemberExpression": {
+      const chain = calleeChain(node);
+
+      return chain.root === undefined ? [] : [chain.root];
     }
 
     default: {
@@ -211,7 +245,16 @@ const collectFacts = (program: Program): FileFacts => {
           ? specifier.imported.name
           : undefined;
 
-      if (isTestModule && imported !== undefined && testExports.has(imported)) {
+      const supported = imported !== undefined && testExports.has(imported);
+
+      const effectLayer =
+        node.source.value === "@effect/vitest" && imported === "layer";
+
+      if (
+        isTestModule &&
+        imported !== undefined &&
+        (supported || effectLayer)
+      ) {
         facts.locals.set(localName, imported);
       } else if (isTestModule) {
         facts.otherTestImports.push(localName);
@@ -225,8 +268,17 @@ const collectFacts = (program: Program): FileFacts => {
     facts.declared.push(...patternNames(node.param));
   };
 
+  const onAssignment = (node: AssignmentExpression): void => {
+    facts.declared.push(...patternNames(node.left));
+  };
+
+  const onUpdate = (node: UpdateExpression): void => {
+    facts.declared.push(...patternNames(node.argument));
+  };
+
   new Visitor({
     ArrowFunctionExpression: declareFunction,
+    AssignmentExpression: onAssignment,
     CallExpression: onCall,
     CatchClause: onCatch,
     ClassDeclaration: declareId,
@@ -234,6 +286,7 @@ const collectFacts = (program: Program): FileFacts => {
     FunctionDeclaration: declareFunction,
     FunctionExpression: declareFunction,
     ImportDeclaration: onImport,
+    UpdateExpression: onUpdate,
     VariableDeclarator: declareId,
   }).visit(program);
 
@@ -273,22 +326,122 @@ const bodyCalls = (fn: TestBody): Set<number> => {
   return body.type === "CallExpression" ? new Set([body.start]) : new Set();
 };
 
-/**
- * Reads the titles of the tests in a file that run (see the module comment).
- *
- * @param fileName - The file's name, for the parser.
- * @param source - The file's text.
- * @returns The titles, and the parse errors and refusals.
- */
-export const readTestTitles = (
-  fileName: string,
-  source: string
-): TestTitles => {
-  const parsed = parseSync(fileName, source, { sourceType: "module" });
-  const facts = collectFacts(parsed.program);
+// A method directly on a test function, never the result of calling one.
+const directMethod = (
+  call: TestCall,
+  methods: ReadonlySet<string>
+): boolean => {
+  const { callee } = call.node;
+
+  if (
+    callee.type !== "MemberExpression" ||
+    callee.object.type !== "Identifier"
+  ) {
+    return false;
+  }
+
+  return (
+    call.chain.properties.length === 1 &&
+    methods.has(call.chain.properties[0] ?? "")
+  );
+};
+
+const layerCallback = (registration: CallExpression): TestBody | undefined => {
+  const factory = registration.callee;
+
+  if (
+    factory.type !== "CallExpression" ||
+    factory.callee.type !== "Identifier"
+  ) {
+    return undefined;
+  }
+
+  if (factory.arguments.length < 1 || factory.arguments.length > 2) {
+    return undefined;
+  }
+
+  if (registration.arguments.length === 2) {
+    if (literalTitle(registration.arguments[0]) === undefined) {
+      return undefined;
+    }
+  } else if (registration.arguments.length !== 1) {
+    return undefined;
+  }
+
+  const callback = registration.arguments.at(-1);
+
+  if (
+    callback?.type !== "ArrowFunctionExpression" &&
+    callback?.type !== "FunctionExpression"
+  ) {
+    return undefined;
+  }
+
+  if (callback.async || callback.generator || callback.params.length !== 1) {
+    return undefined;
+  }
+
+  return callback;
+};
+
+const layerTitles = (
+  call: TestCall,
+  facts: FileFacts,
+  admitted: ReadonlySet<number>,
+  bound: readonly string[]
+): readonly string[] => {
+  if (!admitted.has(call.node.start)) {
+    return [];
+  }
+
+  const callback = layerCallback(call.node);
+  const parameter = callback?.params[0];
+
+  if (callback === undefined || parameter?.type !== "Identifier") {
+    return [];
+  }
+
+  const local = parameter.name;
+
+  if (
+    facts.locals.has(local) ||
+    bound.filter((name) => name === local).length !== 1
+  ) {
+    return [];
+  }
+
+  const calls = bodyCalls(callback);
+
+  return facts.calls.flatMap((node) => {
+    if (!calls.has(node.start)) {
+      return [];
+    }
+
+    const candidate = { chain: calleeChain(node.callee), export: "it", node };
+
+    if (candidate.chain.root !== local || candidate.chain.unsupported) {
+      return [];
+    }
+
+    if (
+      !directMethod(candidate, new Set(["effect"])) ||
+      testBodyOf(node) === undefined
+    ) {
+      return [];
+    }
+
+    const title = literalTitle(node.arguments[0]);
+
+    return title === undefined ? [] : [title];
+  });
+};
+
+const checkedCalls = (
+  facts: FileFacts,
+  bound: readonly string[],
+  errors: string[]
+): readonly TestCall[] => {
   const { locals } = facts;
-  const errors = parsed.errors.map((error) => error.message);
-  const bound = [...facts.declared, ...facts.otherTestImports];
 
   for (const name of new Set(bound)) {
     if (locals.has(name)) {
@@ -314,6 +467,27 @@ export const readTestTitles = (
     }
   }
 
+  return testCalls;
+};
+
+/**
+ * Reads the titles of the tests in a file that run (see the module comment).
+ *
+ * @param fileName - The file's name, for the parser.
+ * @param source - The file's text.
+ * @returns The titles, and the parse errors and refusals.
+ */
+export const readTestTitles = (
+  fileName: string,
+  source: string
+): TestTitles => {
+  const parsed = parseSync(fileName, source, { sourceType: "module" });
+  const facts = collectFacts(parsed.program);
+  const errors = parsed.errors.map((error) => error.message);
+  const bound = [...facts.declared, ...facts.otherTestImports];
+
+  const testCalls = checkedCalls(facts, bound, errors);
+
   // Outer calls start first, so a describe's callback is admitted before the
   // calls inside it are looked at.
   const admitted = statementCalls(parsed.program.body);
@@ -322,14 +496,20 @@ export const readTestTitles = (
   for (const call of testCalls.toSorted(
     (left, right) => left.node.start - right.node.start
   )) {
-    const { properties } = call.chain;
-    const plain = properties.length === 0;
+    if (call.export === "layer") {
+      for (const title of layerTitles(call, facts, admitted, bound)) {
+        titles.add(title);
+      }
+
+      continue;
+    }
+
+    const plain =
+      call.chain.properties.length === 0 &&
+      call.node.callee.type === "Identifier";
 
     const effect =
-      call.export === "it" &&
-      properties.length === 1 &&
-      properties[0] === "effect" &&
-      call.node.callee.type === "MemberExpression";
+      call.export === "it" && directMethod(call, new Set(["effect", "live"]));
 
     const testBody = testBodyOf(call.node);
     const title = literalTitle(call.node.arguments[0]);
