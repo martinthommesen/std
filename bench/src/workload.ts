@@ -82,7 +82,6 @@ export interface ListInstance {
   readonly kind: "list";
   readonly caller: Caller;
   readonly query: ListQuery;
-  readonly count: boolean;
   /** Keyset depth: the page after this many rows (0 for the first page). */
   readonly depth: number;
 }
@@ -218,7 +217,6 @@ const q7 = (rng: Rng): ListQuery => ({
 
 const list = (caller: Caller, request: ListQuery, depth = 0): ListInstance => ({
   caller,
-  count: depth > 0,
   depth,
   kind: "list",
   query: request,
@@ -438,7 +436,7 @@ export const compileInstance: (
 
     const page = compileList(target, yield* withCursor(target, instance));
 
-    return instance.count
+    return instance.depth > 0
       ? { count: compileCount(target, instance.query), page, settings: [] }
       : { page, settings: [] };
   });

@@ -29,7 +29,7 @@ import { query } from "./execute.ts";
 import type { DisposableRecord } from "./generate.ts";
 import { addDisposableRecords } from "./generate.ts";
 import type { ClassName } from "./hierarchy.ts";
-import { classes, endpointFields } from "./hierarchy.ts";
+import { classById, endpointFields } from "./hierarchy.ts";
 import type { Rng } from "./random.ts";
 import { makeRng } from "./random.ts";
 import { percentile, round3 } from "./stats.ts";
@@ -114,16 +114,6 @@ const FlagsRow = Schema.Struct({
   allowed: Schema.Boolean,
   visible: Schema.Boolean,
 });
-
-const classById = (id: string): ClassName => {
-  const found = classes.find((cls) => cls.id === id);
-
-  if (found === undefined) {
-    throw new Error(`unknown class id ${id}`);
-  }
-
-  return found.name;
-};
 
 const mergeRow = (
   state: Map<string, string>,
@@ -455,7 +445,7 @@ const deleteInTransaction = Effect.fnUntraced(function* deleteSteps(
     new Map([["id", id]])
   );
 
-  const cls = classById(locked.get("class_id") ?? "");
+  const cls = classById(locked.get("class_id") ?? "").name;
 
   yield* check(context, caller, { cls, id }, "existing");
   yield* executeSteps(context.writes.remove(cls), locked);

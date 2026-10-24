@@ -9,6 +9,7 @@
 import type { ClassDef, ClassName, EndpointField } from "../hierarchy.ts";
 import {
   classes,
+  classById,
   endpointFields,
   fieldDef,
   hierarchyColumn,
@@ -57,16 +58,6 @@ const ownSystem = systemColumns.filter((column) => column !== "class_id");
 
 const tableOf = (ctx: ModelContext, cls: ClassName): string =>
   table(ctx.schema, cls);
-
-const classById = (id: string): ClassDef => {
-  const found = classes.find((cls) => cls.id === id);
-
-  if (found === undefined) {
-    throw new Error(`unknown class id ${id}`);
-  }
-
-  return found;
-};
 
 const createTable = (ctx: ModelContext, cls: ClassDef): string => {
   const definitions = [

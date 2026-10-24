@@ -15,7 +15,6 @@ import { compileBranchedList } from "./compile.ts";
 import type { DatabaseClientError, ServerConfig } from "./database.ts";
 import {
   clientLayer,
-  command,
   dropDatabase,
   ensureServer,
   serverConfig,
@@ -27,7 +26,7 @@ import { BenchError } from "./errors.ts";
 import { execute } from "./execute.ts";
 import type { ReadResult, ReadVariant } from "./measure.ts";
 import { measureRead } from "./measure.ts";
-import { prepareModel, samplesPerRun } from "./pipeline.ts";
+import { gitCommit, prepareModel, samplesPerRun } from "./pipeline.ts";
 import { writeReportFiles, planBlock } from "./report.ts";
 import type { Compiled } from "./sql-text.ts";
 import { q, table } from "./sql-text.ts";
@@ -299,15 +298,6 @@ const measureAll = Effect.fn("bench.measureAll")(function* measureRewrites(
 
   return { equivalence, variants: [...first, ...second] };
 });
-
-const gitCommit: Effect.Effect<string> = command("git", [
-  "rev-parse",
-  "--short",
-  "HEAD",
-]).pipe(
-  Effect.map((output) => output.trim()),
-  Effect.orElseSucceed(() => "unknown")
-);
 
 /**
  * Runs the rewrites measurement on class-table storage and writes

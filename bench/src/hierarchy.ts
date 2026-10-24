@@ -449,12 +449,21 @@ export const classDef = (name: ClassName): ClassDef => {
 };
 
 /**
- * The class and its ancestors.
- *
- * @param name - The class name.
- * @returns The chain, root first.
+ * Looks up a class by its stored ID.
+ * @param id - The class ID.
+ * @returns The class.
  */
-export const lineage = (name: ClassName): readonly ClassDef[] => {
+export const classById = (id: string): ClassDef => {
+  const found = classes.find((cls) => cls.id === id);
+
+  if (found === undefined) {
+    throw new Error(`unknown class id ${id}`);
+  }
+
+  return found;
+};
+
+const buildLineage = (name: ClassName): readonly ClassDef[] => {
   const chain: ClassDef[] = [];
   let current: ClassName | null = name;
 
@@ -468,6 +477,35 @@ export const lineage = (name: ClassName): readonly ClassDef[] => {
   return chain;
 };
 
+const lineages = new Map(
+  classes.map((cls) => [cls.name, buildLineage(cls.name)])
+);
+
+/**
+ * The class and its ancestors.
+ *
+ * @param name - The class name.
+ * @returns The chain, root first.
+ */
+export const lineage = (name: ClassName): readonly ClassDef[] => {
+  const chain = lineages.get(name);
+
+  if (chain === undefined) {
+    throw new Error(`unknown class ${name}`);
+  }
+
+  return chain;
+};
+
+const subtrees = new Map(
+  classes.map((parent) => [
+    parent.name,
+    classes.filter((cls) =>
+      lineage(cls.name).some((ancestor) => ancestor.name === parent.name)
+    ),
+  ])
+);
+
 /**
  * `subtree(T)`: the class and all its descendants.
  *
@@ -475,9 +513,7 @@ export const lineage = (name: ClassName): readonly ClassDef[] => {
  * @returns The classes, in hierarchy order.
  */
 export const subtree = (name: ClassName): readonly ClassDef[] =>
-  classes.filter((cls) =>
-    lineage(cls.name).some((ancestor) => ancestor.name === name)
-  );
+  subtrees.get(name) ?? [];
 
 /**
  * True when `ancestor` is `name` or one of its ancestors.
@@ -516,16 +552,32 @@ export interface EndpointField {
   readonly field: FieldDef;
 }
 
+const fieldsByEndpoint = new Map(
+  classes.map((endpoint) => [
+    endpoint.name,
+    lineage(endpoint.name).flatMap((cls) =>
+      cls.fields.map((own) => ({ cls: cls.name, field: own }))
+    ),
+  ])
+);
+
 /**
  * Fields visible at an endpoint: the endpoint's class and its ancestors.
  *
  * @param endpoint - The endpoint's class.
  * @returns The fields, root first.
  */
-export const endpointFields = (endpoint: ClassName): readonly EndpointField[] =>
-  lineage(endpoint).flatMap((cls) =>
-    cls.fields.map((own) => ({ cls: cls.name, field: own }))
-  );
+export const endpointFields = (
+  endpoint: ClassName
+): readonly EndpointField[] => {
+  const fields = fieldsByEndpoint.get(endpoint);
+
+  if (fields === undefined) {
+    throw new Error(`unknown class ${endpoint}`);
+  }
+
+  return fields;
+};
 
 const fieldNames = classes.flatMap((cls) => cls.fields.map((own) => own.name));
 

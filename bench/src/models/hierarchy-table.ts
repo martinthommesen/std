@@ -11,6 +11,7 @@ import {
   classes,
   fieldDef,
   hierarchyColumn,
+  endpointFields,
   lineage,
   subtree,
 } from "../hierarchy.ts";
@@ -32,6 +33,7 @@ import {
   auxSchema,
   classChangeTrigger,
   fieldDdl,
+  idKeys,
   loadValue,
   referenceFk,
   rootSystemDdl,
@@ -204,10 +206,7 @@ const keys = (
     ? [
         `ALTER TABLE ${item} ADD CONSTRAINT ${q("item_pkey")} PRIMARY KEY (id, class_id)`,
       ]
-    : [
-        `ALTER TABLE ${item} ADD CONSTRAINT ${q("item_pkey")} PRIMARY KEY (id)`,
-        `ALTER TABLE ${item} ADD CONSTRAINT ${q("item_id_class")} UNIQUE (id, class_id)`,
-      ];
+    : idKeys(item, root);
 
   return [itemKeys, ticketKeys(ctx)];
 };
@@ -288,15 +287,13 @@ const insertStep = (
   build: () => {
     const params = makeParams();
 
-    const bound = lineage(cls).flatMap((level) =>
-      level.fields.map((def) => ({
-        column: q(hierarchyColumn(level.name, def.name)),
-        value: params.bind(
-          values.get(`${level.name}.${def.name}`) ?? null,
-          castOf(def)
-        ),
-      }))
-    );
+    const bound = endpointFields(cls).map(({ cls: name, field }) => ({
+      column: q(hierarchyColumn(name, field.name)),
+      value: params.bind(
+        values.get(`${name}.${field.name}`) ?? null,
+        castOf(field)
+      ),
+    }));
 
     const classParam = params.bind(classDef(cls).id, "uuid");
     const actorParam = params.bind(actor, "uuid");

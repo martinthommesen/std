@@ -575,7 +575,7 @@ const runCustom: (
   }
 );
 
-const gitCommit: Effect.Effect<string> = command("git", [
+export const gitCommit: Effect.Effect<string> = command("git", [
   "rev-parse",
   "--short",
   "HEAD",
