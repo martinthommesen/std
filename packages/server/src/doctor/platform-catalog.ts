@@ -45,6 +45,7 @@ const ConstraintSchema = Schema.Struct({
 });
 
 const IndexSchema = Schema.Struct({
+  collations: Schema.Array(Schema.NullOr(Schema.String)),
   included: Schema.Array(Schema.String),
   keys: Schema.Array(Schema.String),
   method: Schema.String,
@@ -130,6 +131,7 @@ export const describeTable = (facts: TableFacts): PlatformTable => ({
   ),
   indexes: byName(
     facts.indexes.map((entry) => ({
+      collations: entry.collations,
       included: entry.included,
       keys: entry.keys,
       method: entry.method,

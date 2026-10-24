@@ -17,7 +17,7 @@ import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { fail, succeed } from "effect/Result";
 import type { Result } from "effect/Result";
 
-import { sameTypeApartFromAllowedRecords } from "./allowed-records.ts";
+import { sameFixedType } from "./allowed-records.ts";
 import {
   checkVersion,
   currentOf,
@@ -611,13 +611,13 @@ const immutableProblems = (
     if (
       before?.kind === "field" &&
       after.kind === "field" &&
-      !sameTypeApartFromAllowedRecords(before.type, after.type)
+      !sameFixedType(before.type, after.type)
     ) {
       return [
         problem(
           "unsupportedChange",
           after.id,
-          "A field's type cannot change in v0.1 (only a reference's allowedRecords can); add a new field and retire this one."
+          "A field's storage type and fixed settings cannot change; only allowedRecords and textPolicy/nonBlank are mutable. Add a new field and retire this one instead."
         ),
       ];
     }

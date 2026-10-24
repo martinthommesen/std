@@ -432,14 +432,16 @@ const checkClass = (
 /**
  * Checks a constant default against a field type.
  *
- * @param type - The (effective) field type.
+ * @param field - The effective field type and required constraint.
  * @param value - The default in canonical JSON.
  * @returns A message, or undefined when the default is valid.
  */
 export const defaultProblem = (
-  type: FieldType,
+  field: Pick<EffectiveField, "type" | "required">,
   value: JsonValue
 ): string | undefined => {
+  const { type } = field;
+
   if (!DEFAULTABLE_KINDS.has(type.kind)) {
     return `Fields of type ${type.kind} cannot have a default.`;
   }
@@ -450,7 +452,19 @@ export const defaultProblem = (
     return `The default is not a valid ${type.kind} value: ${decoded.error.message}`;
   }
 
-  return decoded.value === null ? "The default must not be empty." : undefined;
+  if (decoded.value === null) {
+    return "The default must not be empty.";
+  }
+
+  const textField = type.kind === "text" || type.kind === "longText";
+
+  if (!field.required || !textField) {
+    return undefined;
+  }
+
+  return isString(decoded.value) && decoded.value.trim() === ""
+    ? "A required text default must be non-blank."
+    : undefined;
 };
 
 /** An auto-number prefix: a letter, then up to 15 letters, digits, `_`, `-`. */
@@ -664,7 +678,7 @@ const checkField = (
 
   if (field.default !== null) {
     const found =
-      defaultProblem(field.type, field.default) ??
+      defaultProblem(field, field.default) ??
       choiceDefaultProblem(
         snapshot,
         effectiveField(snapshot, field.classId, field)
@@ -951,7 +965,7 @@ const checkOverrideTightening = (
 
   if (effective.default !== null && bounds === undefined) {
     const found =
-      defaultProblem(effective.type, effective.default) ??
+      defaultProblem(effective, effective.default) ??
       choiceDefaultProblem(snapshot, effective);
 
     if (found !== undefined) {

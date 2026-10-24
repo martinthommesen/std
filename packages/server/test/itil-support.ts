@@ -76,29 +76,48 @@ export const HELPDESK_V3 = new URL(
   import.meta.url
 ).pathname;
 
-/** A Step 2 helpdesk database upgraded to v3, with a major incident manager. */
-export const upgradedHelpdesk = Layer.effectDiscard(
-  Effect.gen(function* upgraded() {
-    yield* runUpgrade({ sets: [HELPDESK_V3] });
-    const snapshot = yield* (yield* Catalog).refresh;
-    const role = snapshot.roleByName("major_incident_manager");
+/** The text-preserving helpdesk set. */
+export const HELPDESK_V4 = new URL(
+  "../../../examples/helpdesk/v4",
+  import.meta.url
+).pathname;
 
-    if (role === undefined) {
-      return yield* Effect.die(new Error("Missing manager role"));
-    }
+/**
+ * A Step 2 database upgraded to a selected shipped release.
+ * @param directory - The shipped set version.
+ * @returns The upgraded fixture, including the incident manager.
+ */
+const upgradeHelpdesk = (directory: string) =>
+  Layer.effectDiscard(
+    Effect.gen(function* upgraded() {
+      yield* runUpgrade({ sets: [directory] });
+      const snapshot = yield* (yield* Catalog).refresh;
+      const role = snapshot.roleByName("major_incident_manager");
 
-    yield* ensureUser(
-      {
-        login: "itil-manager",
-        name: "Incident Manager",
-        password: Redacted.make("itil-manager-password"),
-      },
-      [role.id]
-    );
+      if (role === undefined) {
+        return yield* Effect.die(new Error("Missing manager role"));
+      }
 
-    return yield* Effect.void;
-  })
-).pipe(Layer.provideMerge(helpdeskTestLayer({ version: "v2" })));
+      yield* ensureUser(
+        {
+          login: "itil-manager",
+          name: "Incident Manager",
+          password: Redacted.make("itil-manager-password"),
+        },
+        [role.id]
+      );
+
+      return yield* Effect.void;
+    })
+  ).pipe(Layer.provideMerge(helpdeskTestLayer({ version: "v2" })));
+
+/** Current shipped helpdesk, with a major incident manager. */
+export const upgradedHelpdesk = upgradeHelpdesk(HELPDESK_V4);
+
+/** Historical v3 fixture keeps its independent released-upgrade guarantees. */
+export const itilV3Layer = TestHttpClient.layer.pipe(
+  Layer.provideMerge(upgradeHelpdesk(HELPDESK_V3))
+);
 
 /** Production HTTP app over an upgraded Step 2 database. */
 export const itilLayer = TestHttpClient.layer.pipe(

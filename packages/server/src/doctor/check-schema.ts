@@ -279,6 +279,46 @@ const indexFinding = (
     ];
   }
 
+  if (!actual.valid) {
+    return [
+      enforcementFinding(key, expected.name, "invalid", expected.enforcement),
+    ];
+  }
+
+  const keys = expected.keys?.((column) => quoteOf(facts, column));
+
+  const wrongKeys =
+    keys !== undefined &&
+    (keys.length !== actual.keys.length ||
+      keys.some((entry, index) => entry !== actual.keys[index]));
+
+  const wrongCollations =
+    expected.collations !== undefined &&
+    (expected.collations.length !== actual.collations.length ||
+      expected.collations.some(
+        (entry, index) => entry !== actual.collations[index]
+      ));
+
+  const wrongIndexOptions =
+    actual.method !== "btree" ||
+    actual.predicate !== null ||
+    actual.included.length !== 0;
+
+  if (
+    keys !== undefined &&
+    (wrongIndexOptions || wrongKeys || wrongCollations)
+  ) {
+    return [
+      finding(
+        2,
+        "error",
+        "indexMismatch",
+        `Index ${expected.name} on ${key} has keys ${JSON.stringify(actual.keys)} and collations ${JSON.stringify(actual.collations)}; expected ${JSON.stringify(keys)} and ${JSON.stringify(expected.collations)} with btree, no predicate and no included columns. Restore its declared index before serving.`,
+        `${key}/${expected.name}`
+      ),
+    ];
+  }
+
   return actual.valid
     ? []
     : [enforcementFinding(key, expected.name, "invalid", expected.enforcement)];

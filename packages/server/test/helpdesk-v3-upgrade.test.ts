@@ -57,7 +57,7 @@ import {
   createTicket,
   patchTicket,
   patchResponse,
-  itilLayer,
+  itilV3Layer as itilLayer,
   clientFor,
 } from "./itil-support.ts";
 import { subscribe } from "./outbox-support.ts";

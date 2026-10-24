@@ -37,6 +37,7 @@ import type {
   SourceKey,
   SourceValues,
   WriteTarget,
+  SortValue,
 } from "./mapping.ts";
 
 /** TMF621's status values (OAS v5.0.1 `TroubleTicketStatusType`). */
@@ -97,6 +98,29 @@ export const STATUS_SOURCES: readonly SourceKey[] = [
   F.holdReason,
   F.statusReason,
 ];
+
+/** Order by the exposed TMF status, including its reason-dependent states. */
+export const TMF621_STATUS_SORT: SortValue = {
+  cases: [
+    {
+      result: { value: "pending" },
+      when: { [F.status]: ON_HOLD, [F.holdReason]: AWAITING_CALLER },
+    },
+    { result: { value: "held" }, when: { [F.status]: ON_HOLD } },
+    {
+      result: { value: "rejected" },
+      when: { [F.status]: CANCELED, [F.statusReason]: REJECTED_REASON },
+    },
+    { result: { value: "cancelled" }, when: { [F.status]: CANCELED } },
+    ...TMF621_STATUSES.flatMap((status) =>
+      READ_GROUPS[status].map((stored) => ({
+        result: { value: status },
+        when: { [F.status]: stored },
+      }))
+    ),
+  ],
+  otherwise: { value: null },
+};
 
 /**
  * The TMF621 status of a ticket's values, or undefined when one of its

@@ -129,13 +129,14 @@ type ValueMode = "read" | "create" | "update";
 
 const textSchema = (
   maxLength: number | undefined,
-  mode: ValueMode
+  mode: ValueMode,
+  policy: "normalized" | "freeText" = "normalized"
 ): JsonObject => {
   if (maxLength === undefined) {
     return { type: "string" };
   }
 
-  return mode === "read"
+  return mode === "read" || policy === "freeText"
     ? { maxLength, type: "string" }
     : {
         description: `At most ${maxLength} code points after conversion (trimmed and normalized, Contracts 5.5).`,
@@ -287,7 +288,7 @@ const presentSchema = (
   switch (type.kind) {
     case "text":
     case "longText": {
-      return textSchema(type.maxLength, mode);
+      return textSchema(type.maxLength, mode, type.textPolicy);
     }
 
     case "integer": {

@@ -52,6 +52,7 @@ export interface ConstraintFact {
  * qualifies relation names in `pg_get_indexdef`).
  */
 export interface IndexFact {
+  readonly collations: readonly (string | null)[];
   readonly name: string;
   readonly valid: boolean;
   readonly unique: boolean;
@@ -129,6 +130,9 @@ const decodeConstraints = decodeRows(
 
 const decodeIndexes = decodeRows(
   Schema.Struct({
+    collations: Schema.fromJsonString(
+      Schema.Array(Schema.NullOr(Schema.String))
+    ),
     included: Names,
     keys: Names,
     method: Schema.String,
@@ -220,6 +224,10 @@ const CONSTRAINTS_QUERY = `SELECT n.nspname AS schema, c.relname AS table, con.c
 
 const INDEXES_QUERY = `SELECT n.nspname AS schema, t.relname AS table, i.relname AS name,
     x.indisvalid AS valid, x.indisunique AS unique, am.amname AS method,
+    coalesce((SELECT json_agg(CASE WHEN col.oid IS NULL THEN NULL ELSE ns.nspname || '.' || col.collname END ORDER BY k.ord)
+      FROM unnest(x.indcollation) WITH ORDINALITY AS k(oid, ord)
+      LEFT JOIN pg_collation col ON col.oid = k.oid
+      LEFT JOIN pg_namespace ns ON ns.oid = col.collnamespace), '[]')::text AS collations,
     coalesce((SELECT json_agg(pg_get_indexdef(x.indexrelid, k, true) ORDER BY k)
       FROM generate_series(1, x.indnkeyatts) AS k), '[]')::text AS keys,
     coalesce((SELECT json_agg(pg_get_indexdef(x.indexrelid, k, true) ORDER BY k)
@@ -297,6 +305,7 @@ export const readCatalogFacts = Effect.fn("Doctor.readCatalogFacts")(
             validated: entry.validated,
           })),
           indexes: (indexes.get(key) ?? []).map((entry) => ({
+            collations: entry.collations,
             included: entry.included,
             keys: entry.keys,
             method: entry.method,

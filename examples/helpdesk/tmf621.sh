@@ -2,7 +2,7 @@
 # STD helpdesk over TMF621: the Step 3 runnable result (docs/plan.md).
 #
 # Against a running `std serve` with the helpdesk set v3 installed
-# (`std upgrade --set examples/helpdesk/v3`), through the TM Forum Trouble
+# (`std upgrade --set examples/helpdesk/v4`), through the TM Forum Trouble
 # Ticket API v5 (TMF621, `/tmf-api/troubleTicket/v5`) only, it:
 #   1. signs in,
 #   2. opens an incident (severity Major) and reads it back,

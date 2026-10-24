@@ -4,7 +4,7 @@
  * example").
  *
  * On a disposable empty database from `@std/testing`'s harness it runs
- * `std upgrade --set examples/helpdesk/v3` and `std bootstrap-admin` (a
+ * `std upgrade --set examples/helpdesk/v4` and `std bootstrap-admin` (a
  * random login and password), starts `std serve` on a port the system
  * picks, a production worker and the local listener, and runs the script twice
  * (the rerun must succeed too). Each run verifies callback receipts and a replay

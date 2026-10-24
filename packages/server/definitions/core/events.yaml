@@ -11,7 +11,7 @@ tables:
     fields:
       - id: 3603bdb5-a7bc-476c-aad3-210225ee0a7a
         name: name
-        type: text
+        type: { kind: text, textPolicy: freeText }
         required: true
       - id: 4beb0035-4dc8-4e88-86c6-85b979453f7f
         name: header_query

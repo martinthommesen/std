@@ -81,6 +81,7 @@ import {
   filterTmf621Status,
   softStatusWrites,
   STATUS_SOURCES,
+  TMF621_STATUS_SORT,
   tmf621StatusOf,
   writeTmf621Status,
 } from "./tmf621-status.ts";
@@ -287,7 +288,7 @@ const statusAttribute = derivedAttribute({
   name: "status",
   render: (values) => tmf621StatusOf(values),
   softWrites: softStatusWrites,
-  sort: F.status,
+  sort: TMF621_STATUS_SORT,
   sources: STATUS_SOURCES,
   write: writeTmf621Status,
 });

@@ -323,7 +323,7 @@ export const NEVER_DELETED: ReadonlySet<DefinitionKind> =
 /**
  * Properties `update` may change, per kind. Field `required` may only
  * become true (a tightening with a data preflight); `default` is a constant.
- * Field `type` may change only in a reference's `allowedRecords` (decision
+ * Field `type` may change only in allowedRecords or textPolicy/nonBlank (decision
  * 0020; any other type change is refused when the change set is applied).
  * Role, permission and saved-filter names may change: nothing refers to
  * them by name in stored config, so a rename needs no DDL (a new set version renames them, Contracts 8.4).

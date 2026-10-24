@@ -47,9 +47,9 @@ export interface PartialSource {
 // Every text read is checked against the fold table's Unicode version;
 // only proposed text (typed by the user) gets the write conversion.
 const checkText = (path: TypedPath, value: Read, proposed: boolean): Read => {
-  const { kind } = path.field.type;
+  const { type } = path.field;
 
-  if (!isString(value) || (kind !== "text" && kind !== "longText")) {
+  if (!isString(value) || (type.kind !== "text" && type.kind !== "longText")) {
     return value;
   }
 
@@ -62,7 +62,9 @@ const checkText = (path: TypedPath, value: Read, proposed: boolean): Read => {
   }
 
   const converted =
-    kind === "text" ? convertSingleLineText(value) : convertLongText(value);
+    type.kind === "text"
+      ? convertSingleLineText(value, type.textPolicy)
+      : convertLongText(value, type.textPolicy);
 
   return converted.ok ? converted.value : UNAVAILABLE;
 };

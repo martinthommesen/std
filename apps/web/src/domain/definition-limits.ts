@@ -1,4 +1,4 @@
-import { sameTypeApartFromAllowedRecords } from "@std/definitions/allowed-records";
+import { sameFixedType } from "@std/definitions/allowed-records";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
 import { Option } from "effect";
@@ -15,10 +15,8 @@ import type { MetaField } from "./metadata.ts";
  * holds, and the generic form must not offer a change the engine always
  * refuses:
  *
- * - `type`: only a reference's allowed-records condition may change
- *   (`sameTypeApartFromAllowedRecords`), so the type of a field that is
- *   not a reference is read-only, and a reference's type may be edited
- *   only in `allowedRecords` (the client says so before sending);
+ * - `type`: only a reference's allowedRecords and text/longText textPolicy/nonBlank
+ *   may change (`sameFixedType`); other types are read-only;
  * - `required` may only become true, so a required field's `required` is
  *   read-only;
  * - auto-numbering cannot be switched on or off, so `number_prefix` is
@@ -32,17 +30,20 @@ import type { RecordJson } from "./record.ts";
 /** The table of field definitions. */
 export const FIELD_TABLE = "core.field";
 
-/** The message a reference's type edit beyond its condition gets. */
+/** The message for editing a field's fixed type settings. */
 export const TYPE_CHANGE_TEXT =
-  "Only a reference's allowedRecords condition can change; the kind, the target and the other settings are fixed. Add a new field and retire this one instead.";
+  "Only a reference's allowedRecords and a text field's textPolicy/nonBlank settings can change; the storage type and other settings are fixed. Add a new field and retire this one instead.";
 
 const READ_ONLY = { create: "yes", update: "no" } as const;
 
 const storedOf = (record: RecordJson, name: string): JsonValue =>
   record.values[name] ?? null;
 
-const isReferenceType = (type: JsonValue): boolean =>
-  isJsonObject(type) && type.kind === "reference";
+const hasMutableTypeSettings = (type: JsonValue): boolean =>
+  isJsonObject(type) &&
+  (type.kind === "reference" ||
+    type.kind === "text" ||
+    type.kind === "longText");
 
 /**
  * Whether the engine refuses every update of a field of this record.
@@ -53,7 +54,7 @@ const isReferenceType = (type: JsonValue): boolean =>
  */
 const isFixed = (field: MetaField, record: RecordJson): boolean => {
   if (field.name === "type") {
-    return !isReferenceType(storedOf(record, "type"));
+    return !hasMutableTypeSettings(storedOf(record, "type"));
   }
 
   if (field.name === "required") {
@@ -97,7 +98,7 @@ export const withRecordLimits = (
 
 /**
  * The problems the engine would report for a definition record's body,
- * found before sending: a reference's type changed beyond its condition.
+ * found before sending: a field's fixed type settings changed.
  *
  * @param table - The form's table.
  * @param fields - Its fields.
@@ -123,10 +124,7 @@ export const definitionProblems = (
     return {};
   }
 
-  return sameTypeApartFromAllowedRecords(
-    storedOf(maybeRecord.value, "type"),
-    newType
-  )
+  return sameFixedType(storedOf(maybeRecord.value, "type"), newType)
     ? {}
     : { [typeField.id]: [TYPE_CHANGE_TEXT] };
 };

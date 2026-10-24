@@ -73,7 +73,12 @@ import {
   planLifecycle,
 } from "./plan-lifecycle.ts";
 import type { RowCheck } from "./plan-lifecycle.ts";
-import { violationPredicates, quoteIdent, tableName } from "./sql-text.ts";
+import {
+  violationPredicates,
+  requiredPredicate,
+  quoteIdent,
+  tableName,
+} from "./sql-text.ts";
 
 /**
  * Follow-up step kinds (Contracts 1.5); `backfill` numbers the existing
@@ -523,7 +528,10 @@ const planFieldUpdates = (
         if (hasRows) {
           planning.violations.push({
             definitionId: after.id,
-            predicate: `${preflightColumn(planning, after)} IS NULL`,
+            predicate: requiredPredicate(
+              preflightColumn(planning, after),
+              after.type
+            ),
             table: preflightTable(planning, after.classId),
           });
           validateStep(
@@ -735,7 +743,7 @@ const prospectivePredicate = (
   const violates =
     value === null
       ? effective.required
-      : defaultProblem(effective.type, value) !== undefined;
+      : defaultProblem(effective, value) !== undefined;
 
   return violates
     ? subtreeExpression(planning.after.subtreeIds(override.classId))

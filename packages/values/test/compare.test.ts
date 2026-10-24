@@ -239,35 +239,41 @@ describe("field types", () => {
 describe("condition literals", () => {
   it("convert under the type's rules, not the field's settings", () => {
     assert.deepStrictEqual(
-      getOrThrow(convertLiteral("decimal", "1.005")),
+      getOrThrow(convertLiteral({ kind: "decimal" }, "1.005")),
       getOrThrow(parseDecimal("1.005"))
     );
     assert.strictEqual(
-      reason(convertLiteral("integer", 2_147_483_648)),
+      reason(convertLiteral({ kind: "integer" }, 2_147_483_648)),
       "outOfRange"
     );
-    assert.strictEqual(reason(convertLiteral("decimal", 1.5)), "wrongJsonType");
     assert.strictEqual(
-      getOrThrow(convertLiteral("text", "x".repeat(4000))),
+      reason(convertLiteral({ kind: "decimal" }, 1.5)),
+      "wrongJsonType"
+    );
+    assert.strictEqual(
+      getOrThrow(convertLiteral({ kind: "text" }, "x".repeat(4000))),
       "x".repeat(4000)
     );
     assert.strictEqual(
-      reason(convertLiteral("text", "x".repeat(4001))),
+      reason(convertLiteral({ kind: "text" }, "x".repeat(4001))),
       "tooLong"
     );
     assert.strictEqual(
-      getOrThrow(convertLiteral("text", " Straße ")),
+      getOrThrow(convertLiteral({ kind: "text" }, " Straße ")),
       "Straße"
     );
     assert.strictEqual(
-      reason(convertLiteral("password", "x")),
+      reason(convertLiteral({ kind: "password" }, "x")),
       "notComparable"
     );
-    assert.strictEqual(reason(convertLiteral("json", {})), "notComparable");
+    assert.strictEqual(
+      reason(convertLiteral({ kind: "json" }, {})),
+      "notComparable"
+    );
   });
 
   it("refuse text that converts to null, with a hint to use empty", () => {
-    const refused = convertLiteral("text", "   ");
+    const refused = convertLiteral({ kind: "text" }, "   ");
 
     assert.strictEqual(reason(refused), "emptyLiteral");
     assert.include(refused.ok ? "" : (refused.error.hint ?? ""), "empty");
@@ -277,11 +283,11 @@ describe("condition literals", () => {
     const choices = { active: new Set(["open"]), retired: new Set(["legacy"]) };
 
     assert.strictEqual(
-      getOrThrow(convertLiteral("choice", "legacy", { choices })),
+      getOrThrow(convertLiteral({ kind: "choice" }, "legacy", { choices })),
       "legacy"
     );
     assert.strictEqual(
-      reason(convertLiteral("choice", "gone", { choices })),
+      reason(convertLiteral({ kind: "choice" }, "gone", { choices })),
       "unknownChoice"
     );
   });
@@ -305,19 +311,21 @@ describe("condition literals", () => {
 
   it("convert needles with steps 1 and 2 only", () => {
     assert.strictEqual(
-      getOrThrow(convertNeedleLiteral("contains", "text", " e\u0301")),
+      getOrThrow(
+        convertNeedleLiteral("contains", { kind: "text" }, " e\u0301")
+      ),
       " é"
     );
     assert.strictEqual(
-      reason(convertNeedleLiteral("contains", "text", "")),
+      reason(convertNeedleLiteral("contains", { kind: "text" }, "")),
       "emptyNeedle"
     );
     assert.strictEqual(
-      getOrThrow(convertNeedleLiteral("startsWith", "longText", "")),
+      getOrThrow(convertNeedleLiteral("startsWith", { kind: "longText" }, "")),
       ""
     );
     assert.strictEqual(
-      reason(convertNeedleLiteral("endsWith", "text", "a\0")),
+      reason(convertNeedleLiteral("endsWith", { kind: "text" }, "a\0")),
       "nulCharacter"
     );
   });

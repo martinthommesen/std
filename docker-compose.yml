@@ -48,7 +48,7 @@ services:
   # Postgres, as before.
   #
   # `upgrade` applies platform migrations and loads the core definition set
-  # and the helpdesk example (`std upgrade --set examples/helpdesk/v3`),
+  # and the helpdesk example (`std upgrade --set examples/helpdesk/v4`),
   # then creates the first administrator unless that login exists
   # (`std bootstrap-admin`), then the helpdesk's demo users `admin`, `agent`
   # and `agent2` and, on an empty helpdesk, its demo incidents
@@ -65,7 +65,7 @@ services:
       [
         "sh",
         "-c",
-        'if [ "$$STD_HELPDESK" = 0 ]; then pnpm --silent std upgrade && pnpm --silent std bootstrap-admin; else pnpm --silent std upgrade --set examples/helpdesk/v3 && pnpm --silent std bootstrap-admin && pnpm --silent helpdesk:seed; fi',
+        'if [ "$$STD_HELPDESK" = 0 ]; then pnpm --silent std upgrade && pnpm --silent std bootstrap-admin; else pnpm --silent std upgrade --set examples/helpdesk/v4 && pnpm --silent std bootstrap-admin && pnpm --silent helpdesk:seed; fi',
       ]
     environment:
       STD_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-postgres://std:std@quickstart-postgres:5432/std}

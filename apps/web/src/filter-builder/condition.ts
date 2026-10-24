@@ -211,7 +211,7 @@ export const literalFromText = (
   const { kind } = field.type;
 
   if (isTextKind(kind)) {
-    return Result.map(String)(fromDecoded(convertLiteral(kind, text)));
+    return Result.map(String)(fromDecoded(convertLiteral(field.type, text)));
   }
 
   const canonical = Match.value(kind).pipe(
@@ -242,7 +242,7 @@ export const literalFromText = (
   return pipe(
     canonical,
     Result.flatMap((json) =>
-      Result.map(() => json)(fromDecoded(convertLiteral(kind, json)))
+      Result.map(() => json)(fromDecoded(convertLiteral(field.type, json)))
     )
   );
 };
@@ -251,9 +251,13 @@ const lineLiterals = (
   field: MetaField,
   text: string
 ): Converted<readonly Value[]> => {
+  const freeText =
+    (field.type.kind === "text" || field.type.kind === "longText") &&
+    field.type.textPolicy === "freeText";
+
   const lines = text
     .split("\n")
-    .map((line) => line.trim())
+    .map((line) => (freeText ? line : line.trim()))
     .filter((line) => line !== "");
 
   if (lines.length === 0) {
@@ -347,7 +351,7 @@ const needle = (
   return fromDecoded(
     convertNeedleLiteral(
       operator === "notContains" ? "contains" : operator,
-      kind,
+      { ...field.type, kind },
       operand.text
     )
   );

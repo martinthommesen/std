@@ -1,6 +1,6 @@
 # 0008. Reads: access decisions, the read compiler, sessions and the HTTP API
 
-Status: accepted, 2026-10-21 (workstream 0C, read side). Code: `packages/access`, `packages/api`, `packages/server/src/{auth,records,http}`, `packages/server/src/platform/migrations/0003-sessions.ts`, `packages/server/src/config/instance-settings.ts`, `packages/testing/src/{acme-fixture,owner-records,http-client}.ts`. Contracts 2.3, 3, 5.9, 5.10, 6.1 to 6.6.
+Status: accepted, 2026-10-21; textual ordering/cursor identity superseded by decision 0043 (2026-10-24) (workstream 0C, read side). Code: `packages/access`, `packages/api`, `packages/server/src/{auth,records,http}`, `packages/server/src/platform/migrations/0003-sessions.ts`, `packages/server/src/config/instance-settings.ts`, `packages/testing/src/{acme-fixture,owner-records,http-client}.ts`. Contracts 2.3, 3, 5.9, 5.10, 6.1 to 6.6.
 
 ## Modules
 
@@ -100,7 +100,7 @@ SELECT "r"."id"::text AS "id", "r"."class_id"::text AS "class_id", "r"."version"
 - `class` of a target class the caller has no allow on is a typed `CAST(NULL AS text)`.
 - Counts: `SELECT count(*)::text FROM <relation(E)> AS "r" <filter joins> WHERE <visibility> AND <filter>` (no cursor), only with `count=true`.
 - Get by ID: one statement over `relation(E)` with `"r"."id" = $id` and E's visibility, the same projection as a list (E's lineage fields only, Contracts 2.3). An ID that is not a UUID, does not exist, is outside subtree(E) or is not visible gives the same `NotFound` body.
-- Sort keys: masked expressions; text and long text by `casefold(e COLLATE pg_unicode_fast) COLLATE pg_unicode_fast` (case-sensitive text and choice: `e COLLATE pg_unicode_fast`), so text sorts by code point of the comparison key, independent of the database's default collation. Password, secret, json and condition fields cannot be sorted (`InvalidRequest`). [judgment]
+- Sort keys: masked expressions; text and long text by `casefold(e COLLATE pg_unicode_fast) COLLATE pg_unicode_fast` (case-sensitive text and choice: `e COLLATE pg_unicode_fast`), the historical code-point order is superseded by deterministic `COLLATE core.list_order` (decision 0043). Password, secret, json and condition fields cannot be sorted (`InvalidRequest`). [judgment]
 
 ### Branch form (storage benchmark)
 
@@ -125,7 +125,7 @@ The branch-form page query runs inside `withBranchTuning`: `SET LOCAL max_parall
 
 ### Cursor format
 
-`base64url(JSON {"i": <last id>, "k": [<key text or null>...], "s": ["<field id>" | "-<field id>"...]})`. Key texts are the `::text` of the masked key expressions, so a cursor carries nothing the caller could not read. A cursor whose signature differs from the request's sort, or whose values do not parse for their field types, is `InvalidCursor` before any query. The predicate is the expanded null-aware form over the same key expressions as `ORDER BY`:
+`base64url(JSON {"i": <last id>, "k": [<key text or null>...], "s": ["<field id>" | "-<field id>"...]})`. Key texts are the `::text` of the masked key expressions, so a cursor carries nothing the caller could not read. Textual signatures now include the policy identity and mapped projection (decision 0043); old textual tokens are invalid and callers must restart pagination. A cursor whose signature differs from the request's sort, or whose values do not parse for their field types, is `InvalidCursor` before any query. The predicate is the expanded null-aware form over the same key expressions as `ORDER BY`:
 
 | Key | after (v stored) | after (v empty) | equal |
 | --- | --- | --- | --- |

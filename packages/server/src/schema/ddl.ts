@@ -9,6 +9,7 @@
  * class-change trigger; every child table has the level FK, the only
  * `ON DELETE CASCADE` in an STD schema.
  */
+import { rawSql, renderSql } from "@std/conditions/sql-fragment";
 import type { FieldDefinition } from "@std/definitions/definition";
 import { generatedName } from "@std/definitions/ids";
 import type { DefinitionId } from "@std/definitions/ids";
@@ -18,6 +19,7 @@ import {
   postgresColumn,
 } from "@std/values/field-type";
 
+import { listOrderKey } from "../config/list-order-key.ts";
 import type { DdlStatement, LockMode, TableLock } from "./ddl-forms.ts";
 import { defaultLiteral, quoteIdent } from "./sql-text.ts";
 
@@ -516,7 +518,7 @@ export const keyOf = (field: FieldDefinition, value: string): string =>
  * @returns The key expression.
  */
 export const indexKey = (field: FieldDefinition): string =>
-  keyOf(field, quoteIdent(field.name));
+  renderSql(listOrderKey(field.type, rawSql(quoteIdent(field.name)))).text;
 
 /**
  * The value existing rows get in a column added for a field: its constant

@@ -374,7 +374,11 @@ export const fieldErrorsOf = (
     errors.push({ _tag: "ReadOnlyField", field: rules.name });
   }
 
-  const empty = candidate === null || candidate === undefined;
+  const textField =
+    rules.type.kind === "text" || rules.type.kind === "longText";
+
+  const blank = textField && isString(candidate) && candidate.trim() === "";
+  const empty = candidate === null || candidate === undefined || blank;
 
   if (
     empty &&

@@ -165,7 +165,7 @@ ALTER TABLE "core"."user" ADD CONSTRAINT std_cb_da385db7b2b74a1da1a942e8e0bb7992
 
 ALTER TABLE "core"."user" ADD CONSTRAINT std_ub_da385db7b2b74a1da1a942e8e0bb7992 FOREIGN KEY ("updated_by") REFERENCES "core"."user" (id);
 
-CREATE UNIQUE INDEX std_ix_4941e6708c9b4a1aa75893854cef07bb ON "core"."user" (casefold("login" COLLATE pg_unicode_fast));
+CREATE UNIQUE INDEX std_ix_4941e6708c9b4a1aa75893854cef07bb ON "core"."user" ((casefold("login" COLLATE pg_unicode_fast) COLLATE core.list_order));
 
 CREATE UNIQUE INDEX std_ix_716293908e5a49909bf146e9c8abd338 ON "core"."user_role" ("user", "role");
 
@@ -251,6 +251,6 @@ ALTER TABLE "acme"."laptop" VALIDATE CONSTRAINT std_ck_0000000000004000800000000
 
 ALTER TABLE "acme"."monitor" VALIDATE CONSTRAINT std_fk_00000000000040008000000000000003;
 
-CREATE UNIQUE INDEX CONCURRENTLY std_ix_00000000000040008000000000000004 ON "acme"."laptop" (casefold("serial" COLLATE pg_unicode_fast));
+CREATE UNIQUE INDEX CONCURRENTLY std_ix_00000000000040008000000000000004 ON "acme"."laptop" ((casefold("serial" COLLATE pg_unicode_fast) COLLATE core.list_order));
 
-CREATE INDEX CONCURRENTLY std_ix_00000000000040008000000000000005 ON "acme"."asset" (casefold("status" COLLATE pg_unicode_fast));
+CREATE INDEX CONCURRENTLY std_ix_00000000000040008000000000000005 ON "acme"."asset" ((casefold("status" COLLATE pg_unicode_fast) COLLATE core.list_order));

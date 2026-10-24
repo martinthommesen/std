@@ -10,10 +10,7 @@ import type { JsonValue } from "@std/values/json-value";
 import { isFailure } from "effect/Result";
 import type { Result } from "effect/Result";
 
-import {
-  allowedRecordsOf,
-  sameTypeApartFromAllowedRecords,
-} from "../src/allowed-records.ts";
+import { allowedRecordsOf, sameFixedType } from "../src/allowed-records.ts";
 import { applyOperations } from "../src/apply.ts";
 import type {
   ApplyContext,
@@ -184,29 +181,48 @@ describe("allowed-records", () => {
       })
     );
     assert.isTrue(
-      sameTypeApartFromAllowedRecords(w.reference.type, {
+      sameFixedType(w.reference.type, {
         kind: "reference",
         targetClassId: w.asset.id,
       })
     );
     assert.isFalse(
-      sameTypeApartFromAllowedRecords(w.reference.type, {
+      sameFixedType(w.reference.type, {
         kind: "reference",
         targetClassId: w.ticket.id,
       })
     );
   });
 
+  it("permits prospective text policies while retaining storage and comparison settings", () => {
+    const before = { caseSensitive: true, kind: "text", maxLength: 160 };
+    assert.isTrue(
+      sameFixedType(before, {
+        ...before,
+        nonBlank: true,
+        textPolicy: "freeText",
+      })
+    );
+
+    for (const fixed of [
+      { ...before, maxLength: 161 },
+      { ...before, caseSensitive: false },
+      { ...before, kind: "longText" },
+    ]) {
+      assert.isFalse(sameFixedType(before, fixed));
+    }
+  });
+
   it("compares aggregate reference types by value regardless of JSON property order", () => {
     const w = world();
     assert.isTrue(
-      sameTypeApartFromAllowedRecords(
+      sameFixedType(
         { aggregate: true, kind: "reference", targetClassId: w.ticket.id },
         { aggregate: true, kind: "reference", targetClassId: w.ticket.id }
       )
     );
     assert.isFalse(
-      sameTypeApartFromAllowedRecords(
+      sameFixedType(
         { aggregate: true, kind: "reference", targetClassId: w.ticket.id },
         { aggregate: false, kind: "reference", targetClassId: w.ticket.id }
       )

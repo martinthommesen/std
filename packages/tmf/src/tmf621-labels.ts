@@ -15,7 +15,7 @@
  * rendered text exactly (decision 0025, D4): a canonical label (`Minor`)
  * selects the records whose numeric key renders it, with no free-text
  * label, and any other value (`minor` included) selects the stored label
- * exactly. A sort orders by the numeric key.
+ * exactly. A sort orders by the rendered text under the deployment list order.
  */
 import type { Expr } from "@std/conditions/ast";
 import { isJsonString } from "@std/values/json-value";
@@ -92,7 +92,7 @@ export const labelledValueOf = (
   const label = textOf(values, choice.label);
   const key = textOf(values, choice.key);
 
-  if (label !== null && label.trim() !== "") {
+  if (label !== null && (!choice.requiredOnCreate || label.trim() !== "")) {
     return label;
   }
 
@@ -104,7 +104,15 @@ const write =
   (
     value: JsonValue
   ): Result.Result<ReadonlyMap<SourceKey, JsonValue>, AttributeIssue> => {
-    if (value === null || !isJsonString(value) || value.trim() === "") {
+    if (value === null && !choice.requiredOnCreate) {
+      return Result.succeed(new Map([[choice.label, null]]));
+    }
+
+    if (
+      value === null ||
+      !isJsonString(value) ||
+      (choice.requiredOnCreate && value.trim() === "")
+    ) {
       return Result.fail({
         kind: "invalidValue",
         message: `${choice.name} is a non-blank string.`,
@@ -169,7 +177,20 @@ export const labelledChoiceAttribute = (
     name: choice.name,
     render: (values) => labelledValueOf(choice, values),
     requiredOnCreate: choice.requiredOnCreate,
-    sort: choice.key,
+    sort: {
+      coalesce: [
+        choice.requiredOnCreate
+          ? { nonBlankSource: choice.label }
+          : { source: choice.label },
+        {
+          cases: choice.labels.map((label, index) => ({
+            result: { value: label },
+            when: { [choice.key]: String(index + 1) },
+          })),
+          otherwise: { source: choice.key },
+        },
+      ],
+    },
     sources: [choice.key, choice.label],
     write: write(choice),
   });

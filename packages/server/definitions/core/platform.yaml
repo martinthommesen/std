@@ -28,11 +28,11 @@ tables:
         required: true
       - id: fbdc3dc3-039b-449d-9ff7-ebb32cd0c296
         name: label
-        type: text
+        type: { kind: text, textPolicy: freeText }
         required: true
       - id: 55daf1ef-b572-465d-b6d0-1baf95c58dec
         name: help_text
-        type: longText
+        type: { kind: longText, textPolicy: freeText }
       - id: 906b7593-22dc-4f2e-9424-192eeba7092a
         name: storage
         type: text
@@ -66,7 +66,7 @@ tables:
         required: true
       - id: 1cabead2-2155-4133-b57d-157b991c4b24
         name: enforcement_note
-        type: longText
+        type: { kind: longText, textPolicy: freeText }
       - id: 182f3a84-d6c5-4c1d-81bc-a8fe9c2d126a
         name: namespace_id
         type: { kind: reference, target: core.namespace }
@@ -77,11 +77,11 @@ tables:
         required: true
       - id: dbf4b2c8-f014-4250-bd09-e271a4a91c90
         name: label
-        type: text
+        type: { kind: text, textPolicy: freeText }
         required: true
       - id: 98f79b89-abec-4960-9937-37334fe13440
         name: help_text
-        type: longText
+        type: { kind: longText, textPolicy: freeText }
       - id: ac088945-b7e1-46a5-a88b-2ff7b2651236
         name: parent_id
         type: { kind: reference, target: core.class }
@@ -121,7 +121,7 @@ tables:
         required: true
       - id: 45e9ec6c-601a-4300-a18c-626b341b389e
         name: enforcement_note
-        type: longText
+        type: { kind: longText, textPolicy: freeText }
       - id: 9b5838af-ffa5-49b0-9161-3875b8376e46
         name: table_id
         type: { kind: reference, target: core.class }
@@ -132,11 +132,11 @@ tables:
         required: true
       - id: f3557dad-eff9-45c5-9ab7-903d26f65390
         name: label
-        type: text
+        type: { kind: text, textPolicy: freeText }
         required: true
       - id: c9da67ab-31b6-4418-96c7-84c86ce43769
         name: help_text
-        type: longText
+        type: { kind: longText, textPolicy: freeText }
       - id: 3c633100-5555-412c-972e-c495c98b13e4
         name: type
         type: json
@@ -178,7 +178,7 @@ tables:
         required: true
       - id: a8448e4a-177c-4b29-9378-638e25ec5532
         name: enforcement_note
-        type: longText
+        type: { kind: longText, textPolicy: freeText }
       - id: 285e2256-974a-4eb0-ae17-3d312c9c654d
         name: table_id
         type: { kind: reference, target: core.class }
@@ -189,10 +189,10 @@ tables:
         required: true
       - id: 3fb343c3-ea8c-4d87-ba21-e17a8aa41bc9
         name: label
-        type: text
+        type: { kind: text, textPolicy: freeText }
       - id: 8d081dfb-4ba1-41eb-aa0b-f0ebc29ab409
         name: help_text
-        type: longText
+        type: { kind: longText, textPolicy: freeText }
       - id: f45b2a18-6f73-4183-9e7a-faf9270b07fb
         name: required
         type: json
@@ -242,7 +242,7 @@ tables:
         required: true
       - id: 9b4f997e-70e6-45cf-89be-d46b17114f74
         name: enforcement_note
-        type: longText
+        type: { kind: longText, textPolicy: freeText }
       - id: 71fd403e-b159-4991-a75e-4e0f039630f8
         name: table_id
         type: { kind: reference, target: core.class }
@@ -283,11 +283,11 @@ tables:
         required: true
       - id: 56e03835-f7fe-4849-99bf-d277b002b121
         name: label
-        type: text
+        type: { kind: text, textPolicy: freeText }
         required: true
       - id: 18bb769a-deaa-4fff-a4a7-52c3a04ab1ab
         name: help_text
-        type: longText
+        type: { kind: longText, textPolicy: freeText }
   - id: 0d6333e6-d241-4da7-a456-5cafd70db0a4
     name: core.permission
     label: Permission
@@ -314,11 +314,11 @@ tables:
         required: true
       - id: fa8a95a1-fbea-4258-8eb1-1f26aff96f69
         name: label
-        type: text
+        type: { kind: text, textPolicy: freeText }
         required: true
       - id: e6778995-81c1-469b-ae72-37899aeabd28
         name: help_text
-        type: longText
+        type: { kind: longText, textPolicy: freeText }
   - id: b16789cc-353b-4f92-9f9a-3683a7f8ec0e
     name: core.role_permission
     label: Role permission
@@ -367,7 +367,7 @@ tables:
         type: boolean
       - id: 915bc33c-d77f-4869-b774-7f5ed9c3c0f2
         name: description
-        type: longText
+        type: { kind: longText, textPolicy: freeText }
       - id: 58e42d19-249c-4f88-b061-ae7731062be9
         name: effect
         type: text
@@ -751,7 +751,7 @@ tables:
         required: true
       - id: 6169bc63-27ad-45e9-8b7b-92315e4c6fe3
         name: label
-        type: text
+        type: { kind: text, textPolicy: freeText }
         required: true
       - id: 2bf3e7d9-1911-4585-a380-0fd458f5f679
         name: sort_order
@@ -821,7 +821,7 @@ tables:
         required: true
       - id: e7d86468-ebe9-46ec-a26f-b9bc305f5267
         name: label
-        type: text
+        type: { kind: text, textPolicy: freeText }
         required: true
       - id: e94d0b99-09ac-4681-a23f-c021899e4b29
         name: condition
@@ -857,7 +857,7 @@ tables:
         required: true
       - id: d0e02d85-06e6-480a-a488-64d40b2e2499
         name: description
-        type: text
+        type: { kind: text, textPolicy: freeText }
       - id: cdd1595d-845c-47ae-8fef-f89c1186a702
         name: phase
         type: text
@@ -948,7 +948,7 @@ tables:
         type: json
       - id: 754b1c75-d716-4c65-a172-d36f1bed733c
         name: message
-        type: text
+        type: { kind: text, textPolicy: freeText }
   - id: 6ef83f5d-41c6-4acb-943c-4bc82503aa92
     name: core.dead_delivery_action
     label: Dead delivery action

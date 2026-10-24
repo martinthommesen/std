@@ -85,6 +85,8 @@ const TextTypeSchema = Struct({
   maxLength: optionalKey(
     Int.check(isBetween({ maximum: TEXT_MAX_LENGTH_LIMIT, minimum: 1 }))
   ),
+  nonBlank: optionalKey(SchemaBoolean),
+  textPolicy: optionalKey(Literals(["normalized", "freeText"])),
 });
 
 const LongTextTypeSchema = Struct({
@@ -93,6 +95,8 @@ const LongTextTypeSchema = Struct({
   maxLength: optionalKey(
     Int.check(isBetween({ maximum: LONG_TEXT_MAX_LENGTH, minimum: 1 }))
   ),
+  nonBlank: optionalKey(SchemaBoolean),
+  textPolicy: optionalKey(Literals(["normalized", "freeText"])),
 });
 
 const IntegerBound = Int.check(

@@ -38,6 +38,7 @@ import { migration0030 } from "./migrations/0030-form-rules.ts";
 import { migration0031 } from "./migrations/0031-http-edge.ts";
 import { migration0032 } from "./migrations/0032-session-expiry.ts";
 import { migration0033 } from "./migrations/0033-session-issuance.ts";
+import { migration0034 } from "./migrations/0034-list-order.ts";
 
 /** Every platform migration this version of STD knows. */
 export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
@@ -75,4 +76,5 @@ export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
     migration0031,
     migration0032,
     migration0033,
+    migration0034,
   ]);

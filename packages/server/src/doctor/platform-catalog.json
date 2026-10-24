@@ -470,6 +470,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["table_id"],
         "method": "btree",
@@ -479,6 +480,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -488,6 +490,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -987,6 +990,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default", null],
         "included": [],
         "keys": [
           "record_class_id",
@@ -1000,6 +1004,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["core.record_event_id(id, kind)"],
         "method": "btree",
@@ -1009,6 +1014,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["operation_id"],
         "method": "btree",
@@ -1018,6 +1024,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["record_id", "record_version"],
         "method": "btree",
@@ -1027,6 +1034,7 @@
         "valid": true
       },
       {
+        "collations": [null, null, null],
         "included": [],
         "keys": ["record_class_id", "occurred_at", "id"],
         "method": "btree",
@@ -1036,6 +1044,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -1045,6 +1054,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -1154,6 +1164,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["change_id"],
         "method": "btree",
@@ -1567,6 +1578,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default"],
         "included": [],
         "keys": ["field_id", "key"],
         "method": "btree",
@@ -1576,6 +1588,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -1585,6 +1598,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -2101,6 +2115,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default"],
         "included": [],
         "keys": ["namespace_id", "name"],
         "method": "btree",
@@ -2110,6 +2125,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["parent_id"],
         "method": "btree",
@@ -2119,6 +2135,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -2128,6 +2145,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -2224,6 +2242,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default", null],
         "included": [],
         "keys": ["topic_id", "event_id", "record_id"],
         "method": "btree",
@@ -2233,6 +2252,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["record_id"],
         "method": "btree",
@@ -2576,6 +2596,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["set_id"],
         "method": "btree",
@@ -2585,6 +2606,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -2594,6 +2616,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -3065,6 +3088,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default"],
         "included": [],
         "keys": ["record_id", "property"],
         "method": "btree",
@@ -3074,6 +3098,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["record_id"],
         "method": "btree",
@@ -3083,6 +3108,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -3092,6 +3118,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -3188,6 +3215,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default", null],
         "included": [],
         "keys": ["from_id", "kind", "to_id"],
         "method": "btree",
@@ -3197,6 +3225,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["to_id"],
         "method": "btree",
@@ -3540,6 +3569,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default"],
         "included": [],
         "keys": ["record_id", "property"],
         "method": "btree",
@@ -3549,6 +3579,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -3558,6 +3589,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -3890,6 +3922,7 @@
     ],
     "indexes": [
       {
+        "collations": ["pg_catalog.default"],
         "included": [],
         "keys": ["name"],
         "method": "btree",
@@ -3899,6 +3932,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -3908,6 +3942,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -4030,6 +4065,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["singleton"],
         "method": "btree",
@@ -4367,6 +4403,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -4376,6 +4413,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -4504,6 +4542,7 @@
     ],
     "indexes": [
       {
+        "collations": ["pg_catalog.default", null],
         "included": [],
         "keys": ["(effective ->> 'fieldId'::text)", "revision"],
         "method": "btree",
@@ -4513,6 +4552,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["definition_id", "revision"],
         "method": "btree",
@@ -4843,6 +4883,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["finished_at"],
         "method": "btree",
@@ -4852,6 +4893,7 @@
         "valid": true
       },
       {
+        "collations": [null, null, null],
         "included": [],
         "keys": ["subscription_id", "record_id", "record_version"],
         "method": "btree",
@@ -4861,6 +4903,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -4870,6 +4913,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["subscription_id", "change_id"],
         "method": "btree",
@@ -5015,6 +5059,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["expires_at"],
         "method": "btree",
@@ -5024,6 +5069,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -5512,6 +5558,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default"],
         "included": [],
         "keys": ["table_id", "name"],
         "method": "btree",
@@ -5521,6 +5568,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -5530,6 +5578,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -6005,6 +6054,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["table_id", "field_id"],
         "method": "btree",
@@ -6014,6 +6064,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -6023,6 +6074,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -6526,6 +6578,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default"],
         "included": [],
         "keys": ["table_id", "name"],
         "method": "btree",
@@ -6535,6 +6588,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -6544,6 +6598,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -6971,6 +7026,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["table_id"],
         "method": "btree",
@@ -6980,6 +7036,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -6989,6 +7046,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -7385,6 +7443,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default"],
         "included": [],
         "keys": ["table_id", "layout_type"],
         "method": "btree",
@@ -7394,6 +7453,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -7403,6 +7463,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -7421,6 +7482,146 @@
         "when": "old.class_id IS DISTINCT FROM new.class_id"
       }
     ]
+  },
+  "core.list_order_policy": {
+    "columns": [
+      {
+        "default": null,
+        "name": "singleton",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "epoch",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "locale",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "indexes_ready",
+        "notNull": true,
+        "type": "boolean"
+      }
+    ],
+    "constraints": [
+      {
+        "check": null,
+        "columns": ["epoch"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "list_order_policy_epoch_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["indexes_ready"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "list_order_policy_indexes_ready_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["locale"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "list_order_policy_locale_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["singleton"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "list_order_policy_pkey",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK (singleton)",
+        "columns": ["singleton"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "list_order_policy_singleton_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["singleton"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "list_order_policy_singleton_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "list_order_policy_version_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "collations": [null],
+        "included": [],
+        "keys": ["singleton"],
+        "method": "btree",
+        "name": "list_order_policy_pkey",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": []
   },
   "core.namespace": {
     "columns": [
@@ -7811,6 +8012,7 @@
     ],
     "indexes": [
       {
+        "collations": ["pg_catalog.default"],
         "included": [],
         "keys": ["name"],
         "method": "btree",
@@ -7820,6 +8022,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -7829,6 +8032,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -7938,6 +8142,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default"],
         "included": [],
         "keys": ["field_id", "prefix"],
         "method": "btree",
@@ -8287,6 +8492,7 @@
     ],
     "indexes": [
       {
+        "collations": ["pg_catalog.default"],
         "included": [],
         "keys": ["name"],
         "method": "btree",
@@ -8296,6 +8502,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -8305,6 +8512,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -8503,6 +8711,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -9042,6 +9251,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default"],
         "included": [],
         "keys": ["table_id", "name"],
         "method": "btree",
@@ -9051,6 +9261,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -9060,6 +9271,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -9163,6 +9375,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["change_id"],
         "method": "btree",
@@ -9172,6 +9385,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["event_id"],
         "method": "btree",
@@ -9521,6 +9735,7 @@
     ],
     "indexes": [
       {
+        "collations": ["pg_catalog.default"],
         "included": [],
         "keys": ["name"],
         "method": "btree",
@@ -9530,6 +9745,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -9539,6 +9755,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -9916,6 +10133,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["role_id", "permission_id"],
         "method": "btree",
@@ -9925,6 +10143,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -9934,6 +10153,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -10336,6 +10556,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, "pg_catalog.default"],
         "included": [],
         "keys": ["table_id", "name"],
         "method": "btree",
@@ -10345,6 +10566,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -10354,6 +10576,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -10690,6 +10913,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["first_revision"],
         "method": "btree",
@@ -10699,6 +10923,7 @@
         "valid": true
       },
       {
+        "collations": ["pg_catalog.default"],
         "included": [],
         "keys": ["state"],
         "method": "btree",
@@ -10708,6 +10933,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -10717,6 +10943,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -11156,6 +11383,7 @@
     ],
     "indexes": [
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["change_id", "ordinal"],
         "method": "btree",
@@ -11165,6 +11393,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -11174,6 +11403,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -11315,6 +11545,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["user_id"],
         "method": "btree",
@@ -11324,6 +11555,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["expires_at", "token_hash"],
         "method": "btree",
@@ -11333,6 +11565,7 @@
         "valid": true
       },
       {
+        "collations": [null, null, null],
         "included": [],
         "keys": ["user_id", "created_at", "token_hash"],
         "method": "btree",
@@ -11342,6 +11575,7 @@
         "valid": true
       },
       {
+        "collations": [null],
         "included": [],
         "keys": ["token_hash"],
         "method": "btree",
@@ -11494,6 +11728,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["expires_at"],
         "method": "btree",
@@ -11503,6 +11738,7 @@
         "valid": true
       },
       {
+        "collations": ["pg_catalog.default", "pg_catalog.default"],
         "included": [],
         "keys": ["kind", "key"],
         "method": "btree",
@@ -11992,6 +12228,7 @@
     ],
     "indexes": [
       {
+        "collations": [null],
         "included": [],
         "keys": ["id"],
         "method": "btree",
@@ -12001,6 +12238,7 @@
         "valid": true
       },
       {
+        "collations": [null, null],
         "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
@@ -12010,6 +12248,7 @@
         "valid": true
       },
       {
+        "collations": ["pg_catalog.default"],
         "included": [],
         "keys": ["name"],
         "method": "btree",

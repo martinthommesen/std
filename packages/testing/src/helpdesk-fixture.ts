@@ -57,13 +57,14 @@ export const HELPDESK_SET_DIRECTORIES = {
   v1: setDirectory("v1"),
   v2: setDirectory("v2"),
   v3: setDirectory("v3"),
+  v4: setDirectory("v4"),
 } as const;
 
 /** A version of the helpdesk set. */
 export type HelpdeskVersion = keyof typeof HELPDESK_SET_DIRECTORIES;
 
 /** The current version, which `docker compose up` loads. */
-export const HELPDESK_CURRENT_VERSION: HelpdeskVersion = "v3";
+export const HELPDESK_CURRENT_VERSION: HelpdeskVersion = "v4";
 
 /** Stable IDs of the helpdesk set (`examples/helpdesk`). */
 export const HELPDESK = {

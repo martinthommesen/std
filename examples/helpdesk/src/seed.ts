@@ -1,7 +1,7 @@
 /**
  * `pnpm helpdesk:seed`: the helpdesk's demo users and records, for
  * `docker compose up` (plan Step 2, "Runnable result"). Run it after
- * `std upgrade --set examples/helpdesk/v3`, against `STD_DATABASE_URL`.
+ * `std upgrade --set examples/helpdesk/v4`, against `STD_DATABASE_URL`.
  *
  * It creates the users `admin` (built-in `admin` role), `agent` and
  * `agent2` (helpdesk `agent` role) unless their logins exist, and, when the

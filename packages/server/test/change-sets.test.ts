@@ -140,6 +140,72 @@ describe("change-sets", () => {
       );
 
       dbTest.effect(
+        "making preserved prose required refuses blank strings without modifying rows",
+        () =>
+          Effect.gen(function* requiredProse() {
+            yield* loadCoreAndAcme;
+            const table = createClass("prose");
+
+            const field = addField(table.id, "content", {
+              kind: "longText",
+              textPolicy: "freeText",
+            });
+
+            yield* change([table.op, field.op]);
+
+            const ids = yield* insertRecords(['"site"."prose"'], table.id, 3, {
+              content:
+                "CASE WHEN g = 1 THEN '' WHEN g = 2 THEN E' \\t\\r\\n' ELSE 'body' END",
+            });
+
+            const stored = values(
+              "SELECT content AS value FROM site.prose ORDER BY id"
+            );
+
+            const before = yield* stored;
+            const revision = yield* currentRevision;
+
+            const required = {
+              changes: { required: true },
+              id: field.id,
+              op: "update" as const,
+              version: 1,
+            };
+
+            const refused = yield* Effect.flip(change([required]));
+            assert.strictEqual(refused._tag, "ExistingDataViolates");
+
+            if (refused._tag === "ExistingDataViolates") {
+              assert.strictEqual(refused.count, 2);
+              assert.deepStrictEqual(
+                refused.sampleIds,
+                ids.slice(0, 2).toSorted()
+              );
+            }
+
+            assert.deepStrictEqual(yield* stored, before);
+            assert.strictEqual(yield* currentRevision, revision);
+
+            const badDefault = yield* Effect.flip(
+              change([
+                addField(
+                  table.id,
+                  "bad_default",
+                  { kind: "longText", textPolicy: "freeText" },
+                  { default: " \t", required: true }
+                ).op,
+              ])
+            );
+
+            assert.strictEqual(badDefault._tag, "DefinitionInvalid");
+            yield* values(
+              "UPDATE site.prose SET content = 'filled' WHERE content <> 'body' RETURNING id::text AS value"
+            );
+            assert.strictEqual((yield* change([required])).state, "completed");
+          })
+      );
+
+      dbTest.effect(
         "adding fields with constant defaults to 1,000,000 rows rewrites and scans nothing",
         () =>
           Effect.scoped(

@@ -54,7 +54,10 @@ const ERRORS = {
   FieldsConflict: [409, "fields includes and excludes the same attribute"],
   HookDepthExceeded: [422, "Hooks and record rules nest too deeply"],
   InvalidCredentials: [401, "The login or password is wrong"],
-  InvalidCursor: [400, "The cursor was not issued for this sort"],
+  InvalidCursor: [
+    400,
+    "The cursor was not issued for this sort or ordering policy; restart pagination without after and before",
+  ],
   InvalidFilter: [400, "The filter does not parse or check"],
   InvalidReference: [422, "A referenced record does not exist"],
   InvalidRequest: [400, "A request parameter is malformed"],
