@@ -1597,10 +1597,8 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.3 p.91
     level: mandatory
     requirement: The server must answer a `before` or `after` value it does not recognise as a cursor with 400 Bad Request.
-    status: tested
-    tests:
-      - packages/server/test/tmf-paging.test.ts#filtered cursor ends omit empty adjacent pages and malformed cursors fail with 400
-    note: "Both malformed after and before requests return 400 InvalidCursor through the generic HTTP interface."
+    status: pending
+    note: "Scoped evidence (packages/server/test/tmf-paging.test.ts#filtered cursor ends omit empty adjacent pages and malformed cursors fail with 400): the cited generic HTTP test submits malformed after and before and asserts 400 InvalidCursor. Pending across independent cursor paths: api-history-paging covers malformed after and retained range, but not malformed before; dead-letter-api offset=0&after=bad proves the offset/cursor conflict, not decoding. event-paging covers malformed/unknown resource-event continuations and mismatched filters, and event-lookups covers unknown client after; these do not complete history, deadDelivery or mapped-interface proof. TMF688 topics/hubs are offset-only."
   - id: TMF630@5.0.0/P1/4.5.3/cursor-navigation-link-header
     source: TMF630 v5.0.0 P1 §4.5.3 p.92
     level: mandatory
@@ -1619,10 +1617,8 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.4 p.92
     level: mandatory
     requirement: When no item follows the `after` cursor, the server must return an empty array.
-    status: tested
-    tests:
-      - packages/server/test/tmf-paging.test.ts#filtered cursor ends omit empty adjacent pages and malformed cursors fail with 400
-    note: "An after-last request returns an empty 200 array and only the self link."
+    status: pending
+    note: "Scoped evidence (packages/server/test/tmf-paging.test.ts#filtered cursor ends omit empty adjacent pages and malformed cursors fail with 400): the cited generic record HTTP test explicitly requests after-last and asserts an empty 200 array with self only. Pending: no equivalent explicit terminal-after assertion through TMF621, history, deadDelivery or resource/client event lists is supplied by this proof. Full traversal or omitting next on a final page does not prove a request after the terminal position."
   - id: TMF630@5.0.0/P1/4.5.4/before-ends-before-cursor
     source: TMF630 v5.0.0 P1 §4.5.4 p.92
     level: mandatory
@@ -1635,10 +1631,8 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.4 p.92
     level: mandatory
     requirement: When no item precedes the `before` cursor, the server must return an empty array.
-    status: tested
-    tests:
-      - packages/server/test/tmf-paging.test.ts#filtered cursor ends omit empty adjacent pages and malformed cursors fail with 400
-    note: "A before-first request returns an empty 200 array and only the self link."
+    status: pending
+    note: "Scoped evidence (packages/server/test/tmf-paging.test.ts#filtered cursor ends omit empty adjacent pages and malformed cursors fail with 400): the cited generic record HTTP test explicitly requests before-first and asserts an empty 200 array with self only. Pending: equivalent explicit before-first assertions through TMF621, history and deadDelivery remain unproved. TMF688 resource/client events are after-only under decision 0032 J10, and topics/hubs are offset-only; this note does not introduce before support or a new exclusion."
   - id: TMF630@5.0.0/P1/4.5.4/no-cursor-starts-at-first-item
     source: TMF630 v5.0.0 P1 §4.5.4 p.94
     level: mandatory
@@ -1651,19 +1645,14 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.5 p.94
     level: optional
     requirement: A client may send `after` and `before` together to ask for the range strictly between the two cursors; the server then returns that range (empty if `after` is not before `before`).
-    status: tested
-    tests:
-      - packages/server/test/tmf-paging.test.ts#record range links preserve both exclusive bounds across three pages in both directions
-      - packages/server/test/tmf-paging.test.ts#TMF621 range links preserve both bounds across three pages and filtered ends
-    note: "Both exclusive bounds survive three forward and backward record pages, including direction changes; equal and reversed ranges return empty 200 arrays. Shared generic and TMF621 HTTP proof; totals retain filter-only semantics."
+    status: pending
+    note: "Scoped evidence (packages/server/test/tmf-paging.test.ts#record range links preserve both exclusive bounds across three pages in both directions; packages/server/test/tmf-paging.test.ts#TMF621 range links preserve both bounds across three pages and filtered ends): the cited generic record and TMF621 HTTP tests retain both exclusive bounds across three forward/backward pages and direction changes, assert equal/reversed ranges empty, and retain filter-only totals. api-history-paging independently exercises bounded navigation and narrower ranges. Pending: decision 0037 also offers deadDelivery ranges, whose separate finishPage continuation loses the original upper bound; following next includes that exclusive endpoint (B2-R2 review reproduction). Repair and maintained deadDelivery range proof are a follow-up outside this focused fix. TMF688 events and offset-only topics/hubs do not offer combined cursors; no new exclusion is inferred."
   - id: TMF630@5.0.0/P1/4.5.6/filter-cursor-no-match-empty-array
     source: TMF630 v5.0.0 P1 §4.5.6 p.95
     level: mandatory
     requirement: When filter criteria combined with a cursor select nothing, the server must return an empty array.
-    status: tested
-    tests:
-      - packages/server/test/tmf-paging.test.ts#filtered cursor ends omit empty adjacent pages and malformed cursors fail with 400
-    note: "A cursor plus a filter with no matching authorized records returns an empty 200 array and only the self link."
+    status: pending
+    note: "Scoped evidence (packages/server/test/tmf-paging.test.ts#filtered cursor ends omit empty adjacent pages and malformed cursors fail with 400): the cited generic record HTTP test combines after with a filter selecting no authorized records and asserts an empty 200 array with self only. Pending: TMF621 currently proves one filtered match, history kind=delete has no cursor, and deadDelivery offset=9 is offset paging; none proves cursor plus no matches. Existing event-paging empty scan proof starts without a cursor and continues to a match; decision 0032 J10 permits scan-limited empty pages with next, so resource/client event cursor-plus-no-match behavior needs its own exact proof."
   - id: TMF630@5.0.0/P1/4.6/sub-resource-items-have-id
     source: TMF630 v5.0.0 P1 §4.6 p.95
     level: mandatory
