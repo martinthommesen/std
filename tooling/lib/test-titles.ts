@@ -171,10 +171,17 @@ interface FileFacts {
   /** Every bound name except those of imports from the test modules. */
   readonly declared: string[];
   readonly locals: Map<string, string>;
+  /** Non-test bindings from test modules, reported after other declarations. */
+  readonly otherTestImports: string[];
 }
 
 const collectFacts = (program: Program): FileFacts => {
-  const facts: FileFacts = { calls: [], declared: [], locals: new Map() };
+  const facts: FileFacts = {
+    calls: [],
+    declared: [],
+    locals: new Map(),
+    otherTestImports: [],
+  };
 
   const declareId = (node: { readonly id?: PatternNode | null }): void => {
     facts.declared.push(...patternNames(node.id));
@@ -193,21 +200,23 @@ const collectFacts = (program: Program): FileFacts => {
   };
 
   const onImport = (node: ImportDeclaration): void => {
+    const isTestModule = testModules.has(node.source.value);
+
     for (const specifier of node.specifiers) {
+      const localName = specifier.local.name;
+
       const imported =
         specifier.type === "ImportSpecifier" &&
         specifier.imported.type === "Identifier"
           ? specifier.imported.name
           : undefined;
 
-      if (
-        testModules.has(node.source.value) &&
-        imported !== undefined &&
-        testExports.has(imported)
-      ) {
-        facts.locals.set(specifier.local.name, imported);
+      if (isTestModule && imported !== undefined && testExports.has(imported)) {
+        facts.locals.set(localName, imported);
+      } else if (isTestModule) {
+        facts.otherTestImports.push(localName);
       } else {
-        facts.declared.push(specifier.local.name);
+        facts.declared.push(localName);
       }
     }
   };
@@ -279,7 +288,7 @@ export const readTestTitles = (
   const facts = collectFacts(parsed.program);
   const { locals } = facts;
   const errors = parsed.errors.map((error) => error.message);
-  const bound = facts.declared;
+  const bound = [...facts.declared, ...facts.otherTestImports];
 
   for (const name of new Set(bound)) {
     if (locals.has(name)) {
