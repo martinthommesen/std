@@ -5,7 +5,7 @@ import {
   EVENT_PAYLOAD_FIELD_ID,
 } from "@std/definitions/event-ids";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
-import { DateTime, Effect, Schema } from "effect";
+import { Cause, DateTime, Effect, Exit, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 
@@ -97,8 +97,10 @@ describe("client-event-last-modified", () => {
         );
 
         for (const [source, expected] of [
+          ["1900-01-01T00:00:00.000Z", "Mon, 01 Jan 1900 00:00:00 GMT"],
           ["2024-01-01T00:00:00.100Z", "Mon, 01 Jan 2024 00:00:00 GMT"],
           ["2024-01-01T00:00:00.999Z", "Mon, 01 Jan 2024 00:00:00 GMT"],
+          ["2026-10-24T12:00:00.123Z", "Sat, 24 Oct 2026 12:00:00 GMT"],
           ["9999-12-31T23:59:59.999Z", "Sat, 24 Oct 2026 12:00:00 GMT"],
         ] as const) {
           const response = yield* jsonAnswerWithMetadata({ source }, 200, {
@@ -116,6 +118,99 @@ describe("client-event-last-modified", () => {
           );
         }
       })
+  );
+
+  it.effect("rejects pre-1900 modification evidence with HTTP context", () =>
+    Effect.gen(function* unrepresentableDate() {
+      yield* TestClock.setTime(
+        DateTime.makeUnsafe("2026-10-24T12:00:00Z").epochMilliseconds
+      );
+
+      for (const source of [
+        "0001-01-01T00:00:00.000Z",
+        "1899-12-31T23:59:59.999Z",
+      ]) {
+        const exit = yield* jsonAnswerWithMetadata({}, 200, {
+          modifiedAt: DateTime.makeUnsafe(source),
+        }).pipe(Effect.exit);
+
+        assert.isTrue(Exit.isFailure(exit));
+
+        if (Exit.isFailure(exit)) {
+          const message = Cause.pretty(exit.cause);
+          assert.include(message, "Last-Modified");
+          assert.include(message, "HTTP-date");
+          assert.include(message, "1900..9999");
+          assert.include(message, source);
+        }
+      }
+    })
+  );
+
+  it.effect("rejects an origination clock outside HTTP-date years", () =>
+    Effect.gen(function* unrepresentableClock() {
+      for (const source of [
+        "1899-12-31T23:59:59.999Z",
+        "+010000-01-01T00:00:00.000Z",
+      ]) {
+        yield* TestClock.setTime(DateTime.makeUnsafe(source).epochMilliseconds);
+
+        const exit = yield* jsonAnswerWithMetadata({}, 200, {
+          modifiedAt: DateTime.makeUnsafe("2024-01-01T00:00:00Z"),
+        }).pipe(Effect.exit);
+
+        assert.isTrue(Exit.isFailure(exit));
+
+        if (Exit.isFailure(exit)) {
+          assert.include(
+            Cause.pretty(exit.cause),
+            `Cannot serialize Date as HTTP-date: year must be 1900..9999; received ${source}`
+          );
+        }
+      }
+    })
+  );
+
+  it.live(
+    "keeps pre-1900 storage readable but refuses its HTTP date over TCP",
+    () =>
+      Effect.gen(function* historicalAuditDate() {
+        const { http, path, recordId, token } = yield* storedEvent;
+        const origin = yield* edgeServer;
+        const sql = yield* SqlClient.SqlClient;
+
+        for (const source of [
+          "0001-01-01T00:00:00.000Z",
+          "1899-12-31T23:59:59.999Z",
+          "1900-01-01T00:00:00.000Z",
+        ]) {
+          yield* sql`UPDATE core.event_resource SET updated_at = ${source}::timestamptz WHERE id = ${recordId}::uuid`;
+
+          const stored = yield* http.get(`/api/v1/coreEvent/${recordId}`, {
+            token,
+          });
+
+          assert.strictEqual(stored.status, 200, stored.text);
+          assert.strictEqual(asObject(stored.json).lastUpdate, source);
+
+          const response = yield* edgeRequest(origin, path, {
+            headers: { authorization: `Bearer ${token}` },
+            method: "GET",
+          });
+
+          if (source.startsWith("1900")) {
+            assert.strictEqual(response.status, 200, response.text);
+            assert.strictEqual(
+              response.headers["last-modified"],
+              "Mon, 01 Jan 1900 00:00:00 GMT"
+            );
+          } else {
+            assert.strictEqual(response.status, 500, response.text);
+            assert.strictEqual(response.text, "");
+            assert.isUndefined(response.headers["last-modified"]);
+          }
+        }
+      }).pipe(Effect.provide(hubTestLayer))
   );
 
   it.live(
