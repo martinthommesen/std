@@ -19,15 +19,7 @@
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect } from "effect";
-import type { SqlClient } from "effect/sql";
-import {
-  asyncProperty,
-  assert as check,
-  constantFrom,
-  record,
-  string,
-  tuple,
-} from "fast-check";
+import { constantFrom, record, string, tuple } from "fast-check";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
@@ -37,6 +29,7 @@ import type {
 } from "../../testing/src/http-client.ts";
 import { count, versionOf } from "./aggregates-support.ts";
 import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
+import { hiddenValuesProperty as checkHiddenValues } from "./noninterference-support.ts";
 import { values } from "./schema-support.ts";
 import {
   createFixtureTicket,
@@ -150,18 +143,6 @@ const writeHidden = (
     { concurrency: "unbounded", discard: true }
   );
 
-const holdsForEverySample = async (
-  observe: (sample: HiddenSample) => Promise<readonly string[]>,
-  baseline: readonly string[]
-) => {
-  await check(
-    asyncProperty(hiddenSamples, async (sample) => {
-      assert.deepStrictEqual(await observe(sample), baseline);
-    }),
-    { numRuns: RUNS, seed: SEED }
-  );
-};
-
 const hiddenValuesProperty = (ids: Seeded, caller: TestRequestOptions) =>
   Effect.gen(function* hiddenValuesPropertyWork() {
     const http = yield* TestHttpClient;
@@ -171,23 +152,12 @@ const hiddenValuesProperty = (ids: Seeded, caller: TestRequestOptions) =>
       { concurrency: "unbounded" }
     );
 
-    const baseline = yield* answers;
-
-    const apply = (sample: HiddenSample) =>
-      writeHidden(ids, sample).pipe(Effect.andThen(answers));
-
-    const services = yield* Effect.context<
-      SqlClient.SqlClient | TestHttpClient
-    >();
-
-    const run = Effect.runPromiseWith(services);
-
-    yield* Effect.promise(async () => {
-      await holdsForEverySample(
-        async (sample) => await run(apply(sample)),
-        baseline
-      );
-    });
+    yield* checkHiddenValues(
+      hiddenSamples,
+      (sample) => writeHidden(ids, sample),
+      answers,
+      { numRuns: RUNS, seed: SEED }
+    );
   });
 
 const sameAnswer = (left: TestResponse, right: TestResponse) => {

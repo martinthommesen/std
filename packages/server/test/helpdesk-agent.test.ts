@@ -16,7 +16,6 @@
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { TableMetadata } from "@std/api/table-metadata";
-import { isJsonString } from "@std/values/json-value";
 import type { JsonObject } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
 
@@ -27,7 +26,7 @@ import {
 } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
-import { numberOf } from "./api-support.ts";
+import { textOf, numberOf } from "./api-support.ts";
 import {
   fetchMetadata,
   allPages,
@@ -69,18 +68,12 @@ const layoutFields = (table: MetaTable, type: "form" | "list") =>
     element.kind === "field" ? [element.field] : []
   );
 
-const idOf = (resource: JsonObject): string => {
-  const { id } = resource;
-
-  return id !== undefined && isJsonString(id) ? id : "";
-};
-
 const idsOf = (resources: readonly JsonObject[]) =>
-  resources.map((resource) => idOf(resource)).toSorted();
+  resources.map((resource) => textOf(resource.id)).toSorted();
 
 const fakeRecord = (id: string): JsonObject => ({ id });
 
-const signInBoth = Effect.gen(function* signInBoth() {
+const signInBothUncached = Effect.gen(function* signInBoth() {
   const http = yield* TestHttpClient;
   const fixture = yield* HelpdeskFixture;
 
@@ -89,6 +82,20 @@ const signInBoth = Effect.gen(function* signInBoth() {
     agent: yield* http.signIn(fixture.agent.login, fixture.agent.password),
     fixture,
   };
+});
+
+const fixtureSessions = new WeakMap<object, typeof signInBothUncached>();
+
+const signInBoth = Effect.gen(function* signInBoth() {
+  const http = yield* TestHttpClient;
+  let sessions = fixtureSessions.get(http);
+
+  if (sessions === undefined) {
+    sessions = yield* Effect.cached(signInBothUncached);
+    fixtureSessions.set(http, sessions);
+  }
+
+  return yield* sessions;
 });
 
 /**
@@ -177,7 +184,7 @@ describe("helpdesk-agent", () => {
           for (const resource of seen.resources) {
             assert.notProperty(resource, "internalCost");
 
-            if (own.has(idOf(resource))) {
+            if (own.has(textOf(resource.id))) {
               assert.property(resource, "customerEmail");
             } else {
               assert.notProperty(resource, "customerEmail");
@@ -377,7 +384,7 @@ describe("helpdesk-agent", () => {
 
             assert.strictEqual(created.status, 201, created.text);
 
-            const id = idOf(yield* resourceOf(created));
+            const id = textOf((yield* resourceOf(created)).id);
 
             const open = yield* allPages({ token: admin }, INCIDENT, {
               condition: `id = "${id}"`,

@@ -51,6 +51,7 @@ import type { PlatformMigration } from "@std/server/platform/migration";
 import { PLATFORM_MIGRATIONS } from "@std/server/platform/migrations";
 import { runPlatformMigrations } from "@std/server/platform/runner";
 import type { UpgradeError } from "@std/server/platform/runner";
+import { quoteIdent } from "@std/server/schema/sql-text";
 import type { DatabaseConfigError } from "@std/server/sql/database-config";
 import {
   DatabaseConfig,
@@ -159,9 +160,6 @@ export interface TestDatabaseOptions {
   readonly encoding?: "SQL_ASCII" | "LATIN1";
 }
 
-const quote = (identifier: string): string =>
-  `"${identifier.replaceAll('"', '""')}"`;
-
 /**
  * The database every admin connection of the harness uses. Advisory locks
  * are scoped to the database they are taken in, so all runs on a server
@@ -265,7 +263,7 @@ const dropDatabase = (
   admin: PgConnection.PgConnection,
   name: string
 ): Effect.Effect<readonly unknown[], SqlError> =>
-  query(admin, `DROP DATABASE IF EXISTS ${quote(name)} WITH (FORCE)`);
+  query(admin, `DROP DATABASE IF EXISTS ${quoteIdent(name)} WITH (FORCE)`);
 
 /**
  * When a database's comment says the harness created it.
@@ -415,7 +413,7 @@ const dropTemplateLocked = (
     if (state.datistemplate && !state.invalid) {
       yield* query(
         admin,
-        `ALTER DATABASE ${quote(template)} WITH IS_TEMPLATE false`
+        `ALTER DATABASE ${quoteIdent(template)} WITH IS_TEMPLATE false`
       );
     }
 
@@ -664,15 +662,18 @@ const buildTemplate = (
     yield* dropDatabase(admin, name);
     // From template0, which nobody connects to: CREATE DATABASE fails while
     // any session is connected to its template, as one may be to template1.
-    yield* query(admin, `CREATE DATABASE ${quote(name)} TEMPLATE template0`);
+    yield* query(
+      admin,
+      `CREATE DATABASE ${quoteIdent(name)} TEMPLATE template0`
+    );
     yield* migrateDatabase(withDatabase(adminUrl, name), migrations, transport);
     yield* query(
       admin,
-      `COMMENT ON DATABASE ${quote(name)} IS '${TEMPLATE_COMMENT_PREFIX}${new Date().toISOString()}'`
+      `COMMENT ON DATABASE ${quoteIdent(name)} IS '${TEMPLATE_COMMENT_PREFIX}${new Date().toISOString()}'`
     );
     yield* query(
       admin,
-      `ALTER DATABASE ${quote(name)} WITH IS_TEMPLATE true ALLOW_CONNECTIONS false`
+      `ALTER DATABASE ${quoteIdent(name)} WITH IS_TEMPLATE true ALLOW_CONNECTIONS false`
     );
   });
 
@@ -733,7 +734,7 @@ const cloneTemplate = (
         ready
           ? query(
               admin,
-              `CREATE DATABASE ${quote(database)} TEMPLATE ${quote(template)}`
+              `CREATE DATABASE ${quoteIdent(database)} TEMPLATE ${quoteIdent(template)}`
             ).pipe(Effect.as(true))
           : Effect.succeed(false)
       )
@@ -816,7 +817,7 @@ const createTestDatabase = (
         yield* hygienic(
           query(
             admin,
-            `CREATE DATABASE ${quote(name)} TEMPLATE template0${encoding}`
+            `CREATE DATABASE ${quoteIdent(name)} TEMPLATE template0${encoding}`
           )
         );
       } else {
@@ -832,7 +833,7 @@ const createTestDatabase = (
       yield* hygienic(
         query(
           admin,
-          `COMMENT ON DATABASE ${quote(name)} IS '${TEST_DATABASE_COMMENT_PREFIX}${new Date().toISOString()}'`
+          `COMMENT ON DATABASE ${quoteIdent(name)} IS '${TEST_DATABASE_COMMENT_PREFIX}${new Date().toISOString()}'`
         )
       );
 

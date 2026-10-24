@@ -26,6 +26,7 @@ import {
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Exit, Fiber, Redacted, Schema } from "effect";
 
+import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { ensureUser } from "../src/auth/bootstrap-admin.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -37,7 +38,7 @@ import { PLATFORM_MIGRATIONS } from "../src/platform/migrations.ts";
 import { migration0012 } from "../src/platform/migrations/0012-user-individuals.ts";
 import { individualOf } from "../src/records/party-rules.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
-import { objectOf, recordIn, signInAll, textOf } from "./authz-support.ts";
+import { objectOf, recordIn, textOf } from "./authz-support.ts";
 import { codeOf, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
   addOverride,
@@ -177,7 +178,13 @@ describe("party-foundation", () => {
         () =>
           Effect.gen(function* everyNewUser() {
             const http = yield* TestHttpClient;
-            const { tokens } = yield* signInAll;
+
+            const tokens = {
+              admin: yield* (yield* TestHttpClient).signIn(
+                "ada",
+                "ada-password"
+              ),
+            };
 
             // The fixture's users and the system user already have theirs.
             const before = yield* assertOneEach(true);
@@ -275,7 +282,15 @@ describe("party-foundation", () => {
         () =>
           Effect.gen(function* readOnlyReference() {
             const http = yield* TestHttpClient;
-            const { fixture, tokens } = yield* signInAll;
+            const fixture = yield* AcmeFixture;
+
+            const tokens = {
+              admin: yield* (yield* TestHttpClient).signIn(
+                "ada",
+                "ada-password"
+              ),
+            };
+
             const aliceIndividual = yield* individualOfUser(fixture.alice.id);
             const bobIndividual = yield* individualOfUser(fixture.bob.id);
 
@@ -370,7 +385,13 @@ describe("party-foundation", () => {
         () =>
           Effect.gen(function* derivedName() {
             const http = yield* TestHttpClient;
-            const { tokens } = yield* signInAll;
+
+            const tokens = {
+              admin: yield* (yield* TestHttpClient).signIn(
+                "ada",
+                "ada-password"
+              ),
+            };
 
             const created = yield* http.request(
               "POST",

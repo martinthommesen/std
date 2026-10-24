@@ -26,22 +26,13 @@ import {
 } from "@std/tmf/helpdesk-ids";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
-import type { SqlClient } from "effect/sql";
-import {
-  asyncProperty,
-  assert as check,
-  constantFrom,
-  record,
-  string,
-} from "fast-check";
+import { constantFrom, record, string } from "fast-check";
 
-import type {
-  TestHttpClient,
-  TestResponse,
-} from "../../testing/src/http-client.ts";
+import type { TestResponse } from "../../testing/src/http-client.ts";
 import { count, versionOf } from "./aggregates-support.ts";
 import { asArray, asObject, textOf } from "./api-support.ts";
 import { itilLayer } from "./itil-support.ts";
+import { hiddenValuesProperty as checkHiddenValues } from "./noninterference-support.ts";
 import { change, values } from "./schema-support.ts";
 import {
   bodyOf,
@@ -192,26 +183,6 @@ const writeHidden = ({ open, secret }: Seeded, sample: HiddenSample) =>
     { concurrency: "unbounded", discard: true }
   );
 
-/**
- * Checks the seeded samples: each, once written, leaves the observed
- * answers equal to the baseline.
- *
- * @param observe - Writes a sample and returns the answers.
- * @param baseline - The answers before any sample.
- * @returns When every sample held.
- */
-const holdsForEverySample = async (
-  observe: (sample: HiddenSample) => Promise<readonly string[]>,
-  baseline: readonly string[]
-) => {
-  await check(
-    asyncProperty(hiddenSamples, async (sample) => {
-      assert.deepStrictEqual(await observe(sample), baseline);
-    }),
-    { numRuns: RUNS, seed: SEED }
-  );
-};
-
 const answerText = (response: TestResponse) =>
   `${response.status} ${response.text}`;
 
@@ -231,23 +202,12 @@ const hiddenValuesProperty = (seeded: Seeded) =>
       { concurrency: "unbounded" }
     );
 
-    const baseline = yield* answers;
-
-    const apply = (sample: HiddenSample) =>
-      writeHidden(seeded, sample).pipe(Effect.andThen(answers));
-
-    const services = yield* Effect.context<
-      SqlClient.SqlClient | TestHttpClient
-    >();
-
-    const run = Effect.runPromiseWith(services);
-
-    yield* Effect.promise(async () => {
-      await holdsForEverySample(
-        async (sample) => await run(apply(sample)),
-        baseline
-      );
-    });
+    yield* checkHiddenValues(
+      hiddenSamples,
+      (sample) => writeHidden(seeded, sample),
+      answers,
+      { numRuns: RUNS, seed: SEED }
+    );
   });
 
 const sameAnswer = (left: TestResponse, right: TestResponse) => {

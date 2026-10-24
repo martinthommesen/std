@@ -1,12 +1,12 @@
 /** Shared helpdesk v3 fixture and clients built from the live API definition. */
 import { assert } from "@effect/vitest";
 import { StdApi } from "@std/api/api";
+import { makeStdClient } from "@std/api/client";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import { stringifyJson } from "@std/values/json";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer, Redacted } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/http";
-import { HttpApiClient } from "effect/http-api";
+import { FetchHttpClient } from "effect/http";
 
 import {
   HelpdeskFixture,
@@ -14,10 +14,7 @@ import {
   HELPDESK,
 } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type {
-  TestHttpClientApi,
-  TestRequestOptions,
-} from "../../testing/src/http-client.ts";
+import type { TestHttpClientApi } from "../../testing/src/http-client.ts";
 import { Actor } from "../src/auth/actor.ts";
 import { ensureUser } from "../src/auth/bootstrap-admin.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -148,33 +145,13 @@ const makeClient = Effect.fn("Itil.makeClient")(function* makeClient(
   const http = yield* TestHttpClient;
   const token = yield* fixtureToken(login ?? "admin");
 
-  return yield* HttpApiClient.makeWith(StdApi, {
+  return yield* makeStdClient({
     baseUrl: "http://std.test",
-    httpClient: HttpClient.make((request, url) =>
-      Effect.gen(function* httpClient() {
-        const options: TestRequestOptions = { headers: request.headers, token };
-
-        const response = yield* http.request(
-          request.method,
-          `${url.pathname}${url.search}`,
-          request.body._tag === "Uint8Array"
-            ? {
-                ...options,
-                rawBody: new TextDecoder().decode(request.body.body),
-              }
-            : options
-        );
-
-        return HttpClientResponse.fromWeb(
-          request,
-          new Response(response.text || null, {
-            headers: response.headers,
-            status: response.status,
-          })
-        );
-      })
-    ),
-  });
+    token: Redacted.make(token),
+  }).pipe(
+    Effect.provide(FetchHttpClient.layer),
+    Effect.provideService(FetchHttpClient.Fetch, http.fetch)
+  );
 });
 
 // Generated clients share the fixture HTTP client's lifetime, as its sessions do.

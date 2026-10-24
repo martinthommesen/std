@@ -150,24 +150,16 @@ describe("api-review", () => {
             effect: "allow" | "deny",
             action: "read" | "update",
             condition?: Condition
-          ): Operation => {
-            const { op } = addAccessRule(ACME.laptop, [employee], {
-              description,
-              fields: [cfg.id],
-            });
-
-            return op.op === "createAccessRule"
-              ? {
-                  definition: {
-                    ...op.definition,
-                    actions: [action],
-                    condition: condition ?? op.definition.condition,
-                    effect,
-                  },
-                  op: "createAccessRule",
-                }
-              : op;
-          };
+          ): Operation =>
+            addAccessRule(
+              ACME.laptop,
+              [employee],
+              {
+                description,
+                fields: [cfg.id],
+              },
+              { actions: [action], condition: condition ?? null, effect }
+            ).op;
 
           yield* change([
             cfg.op,

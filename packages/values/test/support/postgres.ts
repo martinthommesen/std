@@ -17,7 +17,7 @@ import {
   databaseTlsConfig,
   loadDatabaseTls,
 } from "@std/postgres/transport";
-import { Config, Effect, Layer, Redacted, Result } from "effect";
+import { Config, Effect, Layer, Redacted, Result, Schema } from "effect";
 import type { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
@@ -32,11 +32,6 @@ const OID = {
   timestamptz: 1184,
 } as const;
 
-const NUMERIC_NEGATIVE = 0x40_00;
-const NUMERIC_NAN = 0xc0_00;
-const NUMERIC_POSITIVE_INFINITY = 0xd0_00;
-const NUMERIC_NEGATIVE_INFINITY = 0xf0_00;
-const NBASE_DIGITS = 4;
 const POSTGRES_EPOCH_DAYS = 10_957;
 const INT32_MAX = 2_147_483_647;
 const INT32_MIN = -2_147_483_648;
@@ -51,12 +46,6 @@ const FRACTION_DIGITS = 6;
 const view = (bytes: Uint8Array): DataView =>
   new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
-const NUMERIC_SPECIALS = new Map([
-  [NUMERIC_NAN, "NaN"],
-  [NUMERIC_POSITIVE_INFINITY, "Infinity"],
-  [NUMERIC_NEGATIVE_INFINITY, "-Infinity"],
-]);
-
 const trimTrailingZeros = (digits: string): string => {
   let end = digits.length;
 
@@ -67,48 +56,10 @@ const trimTrailingZeros = (digits: string): string => {
   return digits.slice(0, end);
 };
 
-// Keeps at least one digit: "" and "0000" give "0".
-const trimLeadingZeros = (digits: string): string => {
-  let start = 0;
-
-  while (start < digits.length - 1 && digits[start] === "0") {
-    start += 1;
-  }
-
-  return digits === "" ? "0" : digits.slice(start);
-};
-
-const numericText = (bytes: Uint8Array): string => {
-  const data = view(bytes);
-  const count = data.getInt16(0);
-  const weight = data.getInt16(2);
-  const sign = data.getUint16(4);
-  const scale = data.getInt16(6);
-  const special = NUMERIC_SPECIALS.get(sign);
-
-  if (special !== undefined) {
-    return special;
-  }
-
-  const group = (index: number): number =>
-    index >= 0 && index < count ? data.getInt16(8 + index * 2) : 0;
-
-  const groups = (first: number, last: number): string[] =>
-    Array.from({ length: Math.max(0, last - first + 1) }, (_, offset) =>
-      padDigits(group(first + offset), NBASE_DIGITS)
-    );
-
-  const integer = trimLeadingZeros(groups(0, weight).join(""));
-  const fractionGroups = Math.ceil(scale / NBASE_DIGITS);
-
-  const fraction = groups(weight + 1, weight + fractionGroups)
-    .join("")
-    .slice(0, scale);
-
-  const digits = scale > 0 ? `${integer}.${fraction}` : integer;
-
-  return sign === NUMERIC_NEGATIVE ? `-${digits}` : digits;
-};
+const numericText = (bytes: Uint8Array): string =>
+  Schema.decodeUnknownSync(Schema.String)(
+    Result.getOrThrow(PgTypes.decode(bytes, PgTypes.OID.numeric, 1))
+  );
 
 interface CalendarText {
   readonly date: string;

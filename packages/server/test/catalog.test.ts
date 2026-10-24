@@ -54,13 +54,7 @@ const awaitReload = (reloads: Queue.Queue<number>, revision: number) =>
     }
   }).pipe(Effect.timeout(TIMEOUT));
 
-const BACKUP_TABLES = [
-  "role",
-  "schema_change",
-  "definition_revision",
-  "config_dependency",
-  "config_state",
-] as const;
+const BACKUP_TABLES = ["role", "config_state"] as const;
 
 describe("catalog", () => {
   it("keys snapshots by revision and change set", () => {

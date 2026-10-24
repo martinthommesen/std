@@ -21,7 +21,7 @@ import { StatementLog } from "../src/sql/statement-log.ts";
 import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import { hubTestLayer, listener, register } from "./hub-support.ts";
 import { nextOf } from "./paging.ts";
-import { change } from "./schema-support.ts";
+import { change, addAccessRule } from "./schema-support.ts";
 
 const ASSET = `${API_PREFIX}/acmeAsset`;
 const EVENTS = `${TMF688_PREFIX}/topic/record:acmeAsset/event`;
@@ -280,24 +280,12 @@ describe("event history and paging regressions", () => {
 
       // Updates of an unreadable field must not hide the earlier create.
       yield* change([
-        {
-          definition: {
-            actions: ["read"],
-            active: true,
-            classId: ACME.asset,
-            condition: null,
-            description: null,
-            effect: "deny",
-            id: randomUUID(),
-            kind: "accessRule",
-            name: null,
-            owner: { layer: "local" },
-            protected: false,
-            roleIds: [BUILT_IN_ROLE_IDS.admin],
-            target: { fields: [name], kind: "fields" },
-          },
-          op: "createAccessRule",
-        },
+        addAccessRule(
+          ACME.asset,
+          [BUILT_IN_ROLE_IDS.admin],
+          { fields: [name] },
+          { effect: "deny" }
+        ).op,
       ]);
       const hidden = yield* http.get(`${EVENTS}?limit=1`, admin);
       assert.lengthOf(asArray(hidden.json), 0);
@@ -394,24 +382,12 @@ describe("event history and paging regressions", () => {
         snapshot.fieldByName(EVENT_CLASS_IDS.event, "payload")?.id ?? "";
 
       yield* change([
-        {
-          definition: {
-            actions: ["read"],
-            active: true,
-            classId: EVENT_CLASS_IDS.event,
-            condition: null,
-            description: null,
-            effect: "deny",
-            id: randomUUID(),
-            kind: "accessRule",
-            name: null,
-            owner: { layer: "local" },
-            protected: false,
-            roleIds: [BUILT_IN_ROLE_IDS.admin],
-            target: { fields: [payload], kind: "fields" },
-          },
-          op: "createAccessRule",
-        },
+        addAccessRule(
+          EVENT_CLASS_IDS.event,
+          [BUILT_IN_ROLE_IDS.admin],
+          { fields: [payload] },
+          { effect: "deny" }
+        ).op,
       ]);
       const masked = yield* http.get(`${path}?limit=2`, admin);
       assert.lengthOf(asArray(masked.json), 0);

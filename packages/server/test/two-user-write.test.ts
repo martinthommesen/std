@@ -176,7 +176,12 @@ describe("two-user-write", () => {
       "a DELETE through either endpoint leaves no rows and one entry at the next version",
       () =>
         Effect.gen(function* deletes() {
-          const { alice, fixture } = yield* signIn;
+          const fixture = yield* AcmeFixture;
+
+          const alice = yield* (yield* TestHttpClient).signIn(
+            "alice",
+            "alice-password"
+          );
 
           for (const table of [ASSET, LAPTOP]) {
             const created = yield* savedOf(
@@ -249,7 +254,13 @@ describe("two-user-write", () => {
 
     dbTest.effect("a write with a stale revision gets SchemaChanged", () =>
       Effect.gen(function* stale() {
-        const { alice, fixture } = yield* signIn;
+        const fixture = yield* AcmeFixture;
+
+        const alice = yield* (yield* TestHttpClient).signIn(
+          "alice",
+          "alice-password"
+        );
+
         const http = yield* TestHttpClient;
         const { K } = fixture.records;
 
@@ -269,7 +280,7 @@ describe("two-user-write", () => {
 
     dbTest.effect("history never holds a password", () =>
       Effect.gen(function* passwords() {
-        const { fixture } = yield* signIn;
+        const fixture = yield* AcmeFixture;
 
         const [fields] = yield* values(
           `SELECT fields::text AS value FROM core."change" WHERE record_id = $1::uuid`,
@@ -293,7 +304,13 @@ describe("two-user-write", () => {
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect("field-rule-states", () =>
       Effect.gen(function* fieldRuleStates() {
-        const { bob, fixture } = yield* signIn;
+        const fixture = yield* AcmeFixture;
+
+        const bob = yield* (yield* TestHttpClient).signIn(
+          "bob",
+          "bob-password"
+        );
+
         const { M } = fixture.records;
 
         yield* replaceRule7ForName;

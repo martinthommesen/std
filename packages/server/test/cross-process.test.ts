@@ -52,13 +52,6 @@ const Fetch = FetchHttpClient.layer.pipe(
 const LISTENER_TIMEOUT = Duration.seconds(30);
 const LISTENER_POLL = Schedule.spaced(Duration.millis(50));
 
-/** The listeners are not (yet) as expected. */
-// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
-class ListenersNotReady extends Schema.TaggedError<
-  ListenersNotReady,
-  { readonly brand: unique symbol }
->()("ListenersNotReady", { pids: Schema.Array(Schema.String) }) {}
-
 /** A response of a server, as the test reads it. */
 interface ServerResponse {
   readonly status: number;
@@ -184,11 +177,7 @@ const serverListeners = values(
  */
 const listenersWhen = (ready: (pids: readonly string[]) => boolean) =>
   serverListeners.pipe(
-    Effect.filterOrFail(ready, (pids) => new ListenersNotReady({ pids })),
-    Effect.retry({
-      schedule: LISTENER_POLL,
-      while: (failure) => failure._tag === "ListenersNotReady",
-    }),
+    Effect.repeat({ schedule: LISTENER_POLL, until: ready }),
     Effect.timeout(LISTENER_TIMEOUT)
   );
 

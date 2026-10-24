@@ -60,7 +60,7 @@ import {
   update as updateAggregate,
 } from "./aggregates-support.ts";
 import { codeOf, readsTestLayer } from "./reads-support.ts";
-import { asUser, USERS } from "./records-support.ts";
+import { asUser, USERS, rootVersion } from "./records-support.ts";
 import { postChangeSet } from "./schema-paths-support.ts";
 import {
   addField,
@@ -70,14 +70,7 @@ import {
   freshId,
   values,
 } from "./schema-support.ts";
-import {
-  LAPTOP,
-  MONITOR,
-  patch,
-  remove,
-  savedOf,
-  versionOf,
-} from "./writes-support.ts";
+import { LAPTOP, MONITOR, patch, remove, savedOf } from "./writes-support.ts";
 
 const LOCAL_REQUESTER: Requester = { roleIds: [], userId: USERS.alice };
 
@@ -306,7 +299,7 @@ const renameMonitor = Effect.fn("RuleActions.renameMonitor")(function* rename(
   id: string,
   name: string
 ) {
-  return yield* patch(token, MONITOR, id, (yield* versionOf(id)) ?? 0, {
+  return yield* patch(token, MONITOR, id, (yield* rootVersion(id)) ?? 0, {
     name,
   });
 });
@@ -889,11 +882,17 @@ describe("record-rule-actions", () => {
 
           // Bob's own write of his laptop's status, and the same write by
           // a rule his monitor's save triggers: the same refusal.
-          const own = yield* patch(bob, LAPTOP, L, (yield* versionOf(L)) ?? 0, {
-            status: "docked",
-          });
+          const own = yield* patch(
+            bob,
+            LAPTOP,
+            L,
+            (yield* rootVersion(L)) ?? 0,
+            {
+              status: "docked",
+            }
+          );
 
-          const monitorBefore = yield* versionOf(M);
+          const monitorBefore = yield* rootVersion(M);
           const byRule = yield* renameMonitor(bob, M, "sync-1");
 
           assert.deepStrictEqual(
@@ -904,7 +903,7 @@ describe("record-rule-actions", () => {
             [own.status, yield* codeOf(own)],
             [403, "NotAllowed"]
           );
-          assert.strictEqual(yield* versionOf(M), monitorBefore);
+          assert.strictEqual(yield* rootVersion(M), monitorBefore);
           assert.notStrictEqual(yield* statusOf(L), "docked");
 
           // Alice may change her laptop's status, so the rule may too.
@@ -1231,14 +1230,14 @@ describe("record-rule-actions", () => {
 
           assert.strictEqual(revoked.status, 204, revoked.text);
 
-          const before = yield* versionOf(M);
+          const before = yield* rootVersion(M);
           const failed = yield* renameMonitor(bob, M, "runas-2");
 
           assert.deepStrictEqual(
             [failed.status, yield* codeOf(failed)],
             [403, "NotAllowed"]
           );
-          assert.strictEqual(yield* versionOf(M), before);
+          assert.strictEqual(yield* rootVersion(M), before);
         })
     );
   });

@@ -131,7 +131,7 @@ interface World {
   /** Subscription names by ID. */
   readonly subscriptions: Record<string, string>;
   /** Successful saves by `user op endpoint`, across runs. */
-  readonly successes: Map<string, number>;
+  readonly successes: Set<string>;
 }
 
 const TABLES: Readonly<Record<Endpoint, string>> = {
@@ -263,7 +263,7 @@ const sendStep = Effect.fn("HttpInvariant.send")(function* sendStep(
   if (response !== undefined && isSuccess(response)) {
     const key = `${step.user} ${step.op} ${step.endpoint}`;
 
-    world.successes.set(key, (world.successes.get(key) ?? 0) + 1);
+    world.successes.add(key);
   }
 
   return response;
@@ -503,7 +503,7 @@ describe("version-invariant", () => {
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
     const world: World = {
       subscriptions: {},
-      successes: new Map(),
+      successes: new Set(),
       tokens: { alice: "", bob: "" },
       users: { alice: "", bob: "" },
     };

@@ -32,7 +32,6 @@ import type {
   DeliveryEffect,
 } from "../src/outbox/delivery-effects.ts";
 import { workerPass } from "../src/outbox/worker.ts";
-import { createRecord } from "../src/records/save-pipeline.ts";
 import { killAndAwait } from "./cli-support.ts";
 import { WORKER_CHILD_APPLICATION_NAME } from "./fixtures/worker-child-name.ts";
 import { deliveriesWhere, subscribe } from "./outbox-support.ts";
@@ -44,6 +43,8 @@ import {
   serveOnly,
   updateAsset,
   workerTestLayer,
+  effectWrites,
+  writeEffectAsset,
 } from "./worker-support.ts";
 
 const CHILD_SCRIPT = fileURLToPath(
@@ -116,21 +117,10 @@ const childGone = values(
   [WORKER_CHILD_APPLICATION_NAME]
 ).pipe(Effect.map(([count]) => count === "0"));
 
-// Assets created by the effect for a change.
-const effectWrites = (changeId: string) =>
-  values(`SELECT id::text AS value FROM "acme"."asset" WHERE name = $1`, [
-    `effect ${changeId}`,
-  ]);
-
 // The rerun's effects: the child's minus the stall.
 const recordRerun: DeliveryEffect = {
   kind: "record",
-  run: (delivery: Delivery) =>
-    createRecord({
-      body: { name: `effect ${delivery.changeId}`, status: "new" },
-      cause: delivery.cause,
-      endpointClassId: ACME.asset,
-    }).pipe(Effect.asVoid),
+  run: (delivery: Delivery) => writeEffectAsset(delivery).pipe(Effect.asVoid),
 };
 
 const externalRerun = (calls: Ref.Ref<readonly string[]>): DeliveryEffect => ({

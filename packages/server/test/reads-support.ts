@@ -19,6 +19,7 @@ import type {
   TestRequestOptions,
   TestResponse,
 } from "../../testing/src/http-client.ts";
+import { linksOf } from "./paging.ts";
 
 /**
  * The acme fixture plus the HTTP client over the same test database.
@@ -90,11 +91,7 @@ export interface ListBody {
 
 // The `after` cursor of a response's `rel="next"` link.
 const nextCursorOf = (response: TestResponse): string | undefined => {
-  const next = (response.headers.get("link") ?? "")
-    .split(", ")
-    .find((part) => part.endsWith('; rel="next"'));
-
-  const link = next?.slice(1, next.indexOf(">"));
+  const link = linksOf(response.headers.get("link")).get("next");
 
   return link === undefined
     ? undefined

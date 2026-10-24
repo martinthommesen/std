@@ -187,47 +187,59 @@ export const loadRows = (
     const client = yield* SqlClient.SqlClient;
 
     yield* client.unsafe("TRUNCATE person, asset, laptop, previous");
-    yield* insert({
-      fields: PERSON_LIST,
-      fixed: [
-        { cast: "uuid", name: "id" },
-        { cast: "boolean", name: "visible" },
+    yield* Effect.all(
+      [
+        insert({
+          fields: PERSON_LIST,
+          fixed: [
+            { cast: "uuid", name: "id" },
+            { cast: "boolean", name: "visible" },
+          ],
+          rows: people.map((person) => ({
+            fixed: [person.id, String(person.visible)],
+            values: person.values,
+          })),
+          table: "person",
+        }),
+        insert({
+          fields: ASSET_LIST,
+          fixed: [
+            { cast: "uuid", name: "id" },
+            { cast: "uuid", name: "class_id" },
+            { cast: "boolean", name: "readable" },
+          ],
+          rows: rows.map((row) => ({
+            fixed: [row.id, row.classId, String(row.readable)],
+            values: row.values,
+          })),
+          table: "asset",
+        }).pipe(
+          Effect.andThen(
+            insert({
+              fields: LAPTOP_LIST,
+              fixed: [{ cast: "uuid", name: "id" }],
+              rows: rows.flatMap((row) =>
+                row.classId === LAPTOP
+                  ? [{ fixed: [row.id], values: row.values }]
+                  : []
+              ),
+              table: "laptop",
+            })
+          )
+        ),
+        insert({
+          fields: [...ASSET_LIST, ...LAPTOP_LIST],
+          fixed: [{ cast: "uuid", name: "id" }],
+          rows: rows.flatMap((row) =>
+            row.previous === null
+              ? []
+              : [{ fixed: [row.id], values: row.previous }]
+          ),
+          table: "previous",
+        }),
       ],
-      rows: people.map((person) => ({
-        fixed: [person.id, String(person.visible)],
-        values: person.values,
-      })),
-      table: "person",
-    });
-    yield* insert({
-      fields: ASSET_LIST,
-      fixed: [
-        { cast: "uuid", name: "id" },
-        { cast: "uuid", name: "class_id" },
-        { cast: "boolean", name: "readable" },
-      ],
-      rows: rows.map((row) => ({
-        fixed: [row.id, row.classId, String(row.readable)],
-        values: row.values,
-      })),
-      table: "asset",
-    });
-    yield* insert({
-      fields: LAPTOP_LIST,
-      fixed: [{ cast: "uuid", name: "id" }],
-      rows: rows.flatMap((row) =>
-        row.classId === LAPTOP ? [{ fixed: [row.id], values: row.values }] : []
-      ),
-      table: "laptop",
-    });
-    yield* insert({
-      fields: [...ASSET_LIST, ...LAPTOP_LIST],
-      fixed: [{ cast: "uuid", name: "id" }],
-      rows: rows.flatMap((row) =>
-        row.previous === null ? [] : [{ fixed: [row.id], values: row.previous }]
-      ),
-      table: "previous",
-    });
+      { concurrency: "unbounded", discard: true }
+    );
   });
 
 /** A value as the driver returns it with the text registry. */

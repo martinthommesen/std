@@ -27,8 +27,9 @@ import { workerPass } from "../src/outbox/worker.ts";
 import { runDataMigrations } from "../src/platform/data-migrations.ts";
 import { updateRecord } from "../src/records/save-pipeline.ts";
 import { subscribe } from "./outbox-support.ts";
+import { asUser } from "./records-support.ts";
 import { change, freshId, values } from "./schema-support.ts";
-import { actingAs, serveOnly, workerTestLayer } from "./worker-support.ts";
+import { serveOnly, workerTestLayer } from "./worker-support.ts";
 
 /** The fields the system user's create entry records. */
 const EXPECTED_FIELDS = {
@@ -134,7 +135,7 @@ const renamePayload = Effect.gen(function* renamePayloadTest() {
     endpointClassId: USER_CLASS_ID,
     expectedVersion: Number(version),
     id: SYSTEM_USER_ID,
-  }).pipe(actingAs(fixture.admin.id));
+  }).pipe(asUser(fixture.admin.id));
 
   assert.strictEqual(yield* workerPass(), 1);
 

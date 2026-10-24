@@ -5,7 +5,6 @@
  * behind a missing or hidden path. Also class names of a target the caller
  * has no allow on.
  */
-import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { AccessRuleDraft } from "@std/definitions/definition";
@@ -34,7 +33,7 @@ import {
   recordPath,
   resourceOf,
 } from "./reads-support.ts";
-import { addField, change, values } from "./schema-support.ts";
+import { addField, change, values, addAccessRule } from "./schema-support.ts";
 
 const HASH_MARK = "$scrypt$";
 
@@ -43,24 +42,8 @@ const fieldRule = (
   effect: "allow" | "deny",
   fields: readonly string[],
   condition: AccessRuleDraft["condition"]
-): Operation => ({
-  definition: {
-    actions: ["read"],
-    active: true,
-    classId: USER_CLASS_ID,
-    condition,
-    description: null,
-    effect,
-    id: randomUUID(),
-    kind: "accessRule",
-    name: null,
-    owner: { layer: "local" },
-    protected: false,
-    roleIds: [roleId],
-    target: { fields, kind: "fields" },
-  },
-  op: "createAccessRule",
-});
+): Operation =>
+  addAccessRule(USER_CLASS_ID, [roleId], { fields }, { condition, effect }).op;
 
 describe("read-hygiene", () => {
   it("recognizes a stored hash", () => {

@@ -24,7 +24,6 @@ import {
   rename,
   statedRevision,
   textOf,
-  apiCallers,
 } from "./api-support.ts";
 import {
   addField,
@@ -53,7 +52,13 @@ describe("tmf-lifecycle", () => {
       () =>
         Effect.gen(function* retiredAndPurged() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const created = yield* http.request("POST", FIXTURE_TICKETS, {
             ...alice,
@@ -143,7 +148,13 @@ describe("tmf-lifecycle", () => {
       () =>
         Effect.gen(function* unknownRevision() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const [revision = "0", changeSet = ""] =
             (yield* statedRevision).split(".");
@@ -190,7 +201,13 @@ describe("tmf-lifecycle", () => {
       () =>
         Effect.gen(function* renamedAndReused() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* apiCallers;
+
+          const alice = {
+            token: yield* (yield* TestHttpClient).signIn(
+              "alice",
+              "alice-password"
+            ),
+          };
 
           const created = yield* http.request("POST", FIXTURE_TICKETS, {
             ...alice,

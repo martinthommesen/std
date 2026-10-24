@@ -42,6 +42,7 @@ import { asArray, asObject, apiCallers, idsOf, textOf } from "./api-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
 import { linksOf } from "./paging.ts";
 import { readsTestLayer } from "./reads-support.ts";
+import { addAccessRule } from "./schema-support.ts";
 
 const COLLECTION = "/api/v1/deadDelivery";
 const RETRY = "/api/v1/retryDeadDelivery";
@@ -758,24 +759,18 @@ describe("dead-letter API", () => {
           const ruleId = randomUUID();
           yield* applyChangeSet({
             operations: [
-              {
-                definition: {
-                  actions: ["read"],
-                  active: true,
-                  classId,
-                  condition: null,
+              addAccessRule(
+                classId,
+                [BUILT_IN_ROLE_IDS.admin],
+                {
                   description: "Hide this delivery's record from the operator",
+                },
+                {
                   effect: "deny",
                   id: ruleId,
-                  kind: "accessRule",
                   name: `dead_${ruleId.replaceAll("-", "")}`,
-                  owner: { layer: "local" },
-                  protected: false,
-                  roleIds: [BUILT_IN_ROLE_IDS.admin],
-                  target: { kind: "records" },
-                },
-                op: "createAccessRule",
-              },
+                }
+              ).op,
             ],
           });
           const http = yield* TestHttpClient;
@@ -823,24 +818,18 @@ describe("dead-letter API", () => {
           const ruleId = randomUUID();
           yield* applyChangeSet({
             operations: [
-              {
-                definition: {
-                  actions: ["read"],
-                  active: true,
-                  classId: PLATFORM_CLASS_IDS.subscription,
-                  condition: null,
+              addAccessRule(
+                PLATFORM_CLASS_IDS.subscription,
+                [employee],
+                {
                   description: "Read-only operator fixture",
-                  effect: "allow",
+                },
+                {
                   id: ruleId,
-                  kind: "accessRule",
                   name: `dead_${ruleId.replaceAll("-", "")}`,
                   owner: { layer: "core" },
-                  protected: false,
-                  roleIds: [employee],
-                  target: { kind: "records" },
-                },
-                op: "createAccessRule",
-              },
+                }
+              ).op,
             ],
             origin: setOrigin({ layer: "core" }),
           });

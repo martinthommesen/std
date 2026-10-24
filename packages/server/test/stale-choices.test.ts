@@ -19,6 +19,7 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { arrayOf, objectOf, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
+import { rootVersion } from "./records-support.ts";
 import {
   definitionVersion,
   addField,
@@ -26,7 +27,6 @@ import {
   addOverride,
   change,
 } from "./schema-support.ts";
-import { versionOf } from "./writes-support.ts";
 
 /** Where the test writes: laptop K as the administrator. */
 interface Target {
@@ -53,7 +53,7 @@ const saveTier = Effect.fn("StaleChoices.saveTier")(function* saveTier(
 ) {
   const http = yield* TestHttpClient;
 
-  const version = yield* versionOf(target.id);
+  const version = yield* rootVersion(target.id);
 
   return yield* http.request("PATCH", recordPath("acme.laptop", target.id), {
     body: { tier: key },
@@ -252,7 +252,7 @@ describe("stale requests and choices", () => {
             "grade/choicesChanged",
           ]);
 
-          const version = yield* versionOf(fixture.records.M);
+          const version = yield* rootVersion(fixture.records.M);
 
           const throughParent = yield* http.request(
             "PATCH",

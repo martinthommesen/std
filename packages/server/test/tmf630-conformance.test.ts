@@ -20,13 +20,13 @@ import type {
 import { mergePatch } from "../src/http/api/patch.ts";
 import { TMF_ERROR_TAGS, tmfErrorOf } from "../src/http/api/tmf-error.ts";
 import {
+  patchOptions,
   asArray,
   asObject,
   idsOf,
   numberOf,
   textOf,
   API,
-  apiCallers,
   withQuery,
 } from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
@@ -55,17 +55,6 @@ const linkOf = (response: TestResponse, rel: string): string => {
 
 const namesOf = (response: TestResponse): string[] =>
   asArray(response.json).map((item) => textOf(asObject(item).name));
-
-const patchOptions = (
-  caller: TestRequestOptions,
-  revision: number,
-  contentType: string,
-  body: JsonValue
-): TestRequestOptions => ({
-  ...caller,
-  headers: { "content-type": contentType, "if-match": `"${revision}"` },
-  rawBody: JSON.stringify(body),
-});
 
 /**
  * A fresh asset of Alice's through v2, for the write tests.
@@ -126,7 +115,13 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* collections() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+          };
+
           const { records } = yield* AcmeFixture;
 
           const response = yield* http.get(API.asset, callers.alice);
@@ -150,7 +145,13 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* representation() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+          };
+
           const { records } = yield* AcmeFixture;
 
           const response = yield* http.get(
@@ -211,7 +212,13 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* parentRead() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+          };
+
           const { records } = yield* AcmeFixture;
 
           const response = yield* http.get(
@@ -236,7 +243,16 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* references() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+            bob: {
+              token: yield* http.signIn("bob", "bob-password"),
+            },
+          };
+
           const { alice, bob, records } = yield* AcmeFixture;
 
           const asAlice = asObject(
@@ -294,7 +310,13 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* fields() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+          };
+
           const { records } = yield* AcmeFixture;
           const path = `${API.laptop}/${records.L}`;
 
@@ -362,7 +384,12 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* equality() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+          };
 
           const eq = yield* http.get(
             withQuery(API.asset, [["status", "lost"]]),
@@ -411,7 +438,13 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* comparisons() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+          };
+
           const { alice, records } = yield* AcmeFixture;
 
           const forms: readonly (readonly [string, string])[] = [
@@ -490,7 +523,15 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* refusedFilters() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+            bob: {
+              token: yield* http.signIn("bob", "bob-password"),
+            },
+          };
 
           const hidden = yield* http.get(
             withQuery(API.asset, [["cost", "1"]]),
@@ -546,7 +587,12 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* offsetPages() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+          };
 
           const first = yield* http.get(
             withQuery(API.asset, [
@@ -611,7 +657,13 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* cursorPages() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+          };
+
           const sorted = [["sort", "-cost,+name"]] as const;
 
           const all = namesOf(
@@ -657,7 +709,13 @@ describe("tmf630-conformance", () => {
     dbTest.effect("history is a list of ChangeEntry resources", () =>
       Effect.gen(function* history() {
         const http = yield* TestHttpClient;
-        const callers = yield* apiCallers;
+
+        const callers = {
+          alice: {
+            token: yield* http.signIn("alice", "alice-password"),
+          },
+        };
+
         const { records } = yield* AcmeFixture;
 
         const response = yield* http.get(
@@ -745,7 +803,15 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* metadata() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+            bob: {
+              token: yield* http.signIn("bob", "bob-password"),
+            },
+          };
 
           const list = yield* http.get("/api/v1/tableMetadata", callers.bob);
 
@@ -789,7 +855,13 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* creates() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+          };
+
           const { alice } = yield* AcmeFixture;
 
           const created = yield* http.request("POST", API.asset, {
@@ -864,7 +936,12 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* mergePatches() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+          };
 
           const asset = yield* freshAsset(callers.alice, {
             name: "P",
@@ -885,10 +962,15 @@ describe("tmf630-conformance", () => {
           const patched = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.alice, 1, "application/merge-patch+json", {
-              "@type": "AcmeAsset",
-              status: "in_use",
-            })
+            patchOptions(
+              callers.alice,
+              "application/merge-patch+json",
+              {
+                "@type": "AcmeAsset",
+                status: "in_use",
+              },
+              `"1"`
+            )
           );
 
           assert.strictEqual(patched.status, 200, patched.text);
@@ -898,9 +980,14 @@ describe("tmf630-conformance", () => {
           const stale = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.alice, 1, "application/merge-patch+json", {
-              status: "spare",
-            })
+            patchOptions(
+              callers.alice,
+              "application/merge-patch+json",
+              {
+                status: "spare",
+              },
+              `"1"`
+            )
           );
 
           assert.strictEqual(stale.status, 412);
@@ -910,9 +997,14 @@ describe("tmf630-conformance", () => {
           const otherType = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.alice, 2, "application/merge-patch+json", {
-              "@type": "AcmeLaptop",
-            })
+            patchOptions(
+              callers.alice,
+              "application/merge-patch+json",
+              {
+                "@type": "AcmeLaptop",
+              },
+              `"2"`
+            )
           );
 
           assert.strictEqual(codeOf(otherType), "ValidationFailed");
@@ -920,7 +1012,12 @@ describe("tmf630-conformance", () => {
           const cleared = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.alice, 2, "application/json", { status: null })
+            patchOptions(
+              callers.alice,
+              "application/json",
+              { status: null },
+              `"2"`
+            )
           );
 
           assert.strictEqual(cleared.status, 200, cleared.text);
@@ -933,7 +1030,12 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* jsonPatches() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: {
+              token: yield* http.signIn("alice", "alice-password"),
+            },
+          };
 
           const asset = yield* freshAsset(callers.alice, {
             name: "J",
@@ -946,13 +1048,18 @@ describe("tmf630-conformance", () => {
           const applied = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.alice, 1, jsonPatch, [
-              { op: "test", path: "/status", value: "spare" },
-              { op: "replace", path: "/status", value: "in_use" },
-              { op: "add", path: "/purchasedOn", value: "2026-02-01" },
-              { from: "/name", op: "copy", path: "/status" },
-              { from: "/purchasedOn", op: "move", path: "/purchasedOn" },
-            ])
+            patchOptions(
+              callers.alice,
+              jsonPatch,
+              [
+                { op: "test", path: "/status", value: "spare" },
+                { op: "replace", path: "/status", value: "in_use" },
+                { op: "add", path: "/purchasedOn", value: "2026-02-01" },
+                { from: "/name", op: "copy", path: "/status" },
+                { from: "/purchasedOn", op: "move", path: "/purchasedOn" },
+              ],
+              `"1"`
+            )
           );
 
           const result = asObject(applied.json);
@@ -964,9 +1071,12 @@ describe("tmf630-conformance", () => {
           const removed = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.alice, 2, jsonPatch, [
-              { op: "remove", path: "/purchasedOn" },
-            ])
+            patchOptions(
+              callers.alice,
+              jsonPatch,
+              [{ op: "remove", path: "/purchasedOn" }],
+              `"2"`
+            )
           );
 
           assert.notProperty(asObject(removed.json), "purchasedOn");
@@ -974,10 +1084,15 @@ describe("tmf630-conformance", () => {
           const failed = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.alice, 3, jsonPatch, [
-              { op: "replace", path: "/name", value: "changed" },
-              { op: "test", path: "/status", value: "nope" },
-            ])
+            patchOptions(
+              callers.alice,
+              jsonPatch,
+              [
+                { op: "replace", path: "/name", value: "changed" },
+                { op: "test", path: "/status", value: "nope" },
+              ],
+              `"3"`
+            )
           );
 
           assert.strictEqual(failed.status, 409);
@@ -993,9 +1108,12 @@ describe("tmf630-conformance", () => {
           const readOnly = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.alice, 3, jsonPatch, [
-              { op: "replace", path: "/id", value: RANDOM_ID },
-            ])
+            patchOptions(
+              callers.alice,
+              jsonPatch,
+              [{ op: "replace", path: "/id", value: RANDOM_ID }],
+              `"3"`
+            )
           );
 
           assert.strictEqual(codeOf(readOnly), "ValidationFailed");
@@ -1003,9 +1121,12 @@ describe("tmf630-conformance", () => {
           const malformed = yield* http.request(
             "PATCH",
             path,
-            patchOptions(callers.alice, 3, jsonPatch, [
-              { op: "fly", path: "/x" },
-            ])
+            patchOptions(
+              callers.alice,
+              jsonPatch,
+              [{ op: "fly", path: "/x" }],
+              `"3"`
+            )
           );
 
           assert.strictEqual(malformed.status, 400);
@@ -1015,9 +1136,9 @@ describe("tmf630-conformance", () => {
             path,
             patchOptions(
               callers.alice,
-              3,
               "application/json-patch-query+json",
-              []
+              [],
+              `"3"`
             )
           );
 
@@ -1029,7 +1150,13 @@ describe("tmf630-conformance", () => {
     dbTest.effect("DELETE answers 204; a body is refused; PUT is 405", () =>
       Effect.gen(function* deletes() {
         const http = yield* TestHttpClient;
-        const callers = yield* apiCallers;
+
+        const callers = {
+          alice: {
+            token: yield* http.signIn("alice", "alice-password"),
+          },
+        };
+
         const asset = yield* freshAsset(callers.alice, { name: "D" });
         const path = `${API.asset}/${textOf(asset.id)}`;
 

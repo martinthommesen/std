@@ -139,23 +139,27 @@ const choicesArb = array(tuple(constantFrom(...KEYS), boolean()), {
   }));
 });
 
+const baseField = {
+  autoNumber: null,
+  default: null,
+  helpText: null,
+  id: "00000000-0000-4000-8000-000000000001",
+  inheritedFrom: null,
+  label: "F",
+  name: FIELD,
+  read: "yes",
+  readOnly: false,
+  required: false,
+  state: "active",
+  write: { create: "yes", update: "yes" },
+} as const satisfies Omit<MetaField, "type" | "choices" | "nullable">;
+
 const fieldArb: Arbitrary<MetaField> = tuple(typeArb, choicesArb).map(
   ([type, choices]): MetaField => ({
-    autoNumber: null,
+    ...baseField,
     choices: type.kind === "choice" ? choices : null,
-    default: null,
-    helpText: null,
-    id: "00000000-0000-4000-8000-000000000001",
-    inheritedFrom: null,
-    label: "F",
-    name: FIELD,
     nullable: type.kind !== "boolean",
-    read: "yes",
-    readOnly: false,
-    required: false,
-    state: "active",
     type,
-    write: { create: "yes", update: "yes" },
   })
 );
 
@@ -314,6 +318,9 @@ const RESOURCE = {
 
 const compiled = new Map<string, Schemas>();
 
+// Formats are annotations, as in OpenAPI; the patterns carry the shapes.
+const ajv = new Ajv2020({ strict: false, validateFormats: false });
+
 const compile = (field: MetaField): Schemas => {
   const key = stringifyJson(field);
   const cached = compiled.get(key);
@@ -331,13 +338,13 @@ const compile = (field: MetaField): Schemas => {
     { collection: "acmeT", refs: REFS, type: "AcmeT" }
   );
 
-  // Formats are annotations, as in OpenAPI; the patterns carry the shapes.
-  const ajv = new Ajv2020({ strict: false, validateFormats: false });
-
-  ajv.addSchema({ ...document, $id: "doc" });
+  const documentId = `doc-${compiled.size}`;
+  ajv.addSchema({ ...document, $id: documentId });
 
   const validator = (name: string) => {
-    const validate = ajv.compile({ $ref: `doc#/components/schemas/${name}` });
+    const validate = ajv.compile({
+      $ref: `${documentId}#/components/schemas/${name}`,
+    });
 
     return (value: JsonValue) => validate(value);
   };
@@ -572,21 +579,10 @@ describe("per-table OpenAPI document against the codecs", () => {
       [{ key: "closed", label: "Closed", order: 1, retired: true }],
     ]) {
       const field: MetaField = {
-        autoNumber: null,
+        ...baseField,
         choices,
-        default: null,
-        helpText: null,
-        id: "00000000-0000-4000-8000-000000000001",
-        inheritedFrom: null,
-        label: "F",
-        name: FIELD,
         nullable: true,
-        read: "yes",
-        readOnly: false,
-        required: false,
-        state: "active",
         type: { kind: "choice" },
-        write: { create: "yes", update: "yes" },
       };
 
       const schemas = compile(field);

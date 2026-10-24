@@ -23,6 +23,7 @@ import type { Delivery } from "../src/outbox/delivery-effects.ts";
 import { workerPass } from "../src/outbox/worker.ts";
 import { createRecord, updateRecord } from "../src/records/save-pipeline.ts";
 import { subscribe } from "./outbox-support.ts";
+import { asUser } from "./records-support.ts";
 import {
   addField,
   change,
@@ -32,8 +33,9 @@ import {
   ensureSite,
   freshId,
   values,
+  addAccessRule,
 } from "./schema-support.ts";
-import { actingAs, serveOnly, workerTestLayer } from "./worker-support.ts";
+import { serveOnly, workerTestLayer } from "./worker-support.ts";
 
 // A local access rule for employees on one class.
 const employeeRule = (
@@ -42,21 +44,7 @@ const employeeRule = (
   rule: Pick<AccessRuleDraft, "effect" | "target"> & {
     readonly condition: Condition | null;
   }
-): AccessRuleDraft => ({
-  actions: ["read"],
-  active: true,
-  classId,
-  condition: rule.condition,
-  description: null,
-  effect: rule.effect,
-  id: freshId(),
-  kind: "accessRule",
-  name: null,
-  owner: { layer: "local" },
-  protected: false,
-  roleIds: [roleId],
-  target: rule.target,
-});
+): AccessRuleDraft => addAccessRule(classId, [roleId], {}, rule).op.definition;
 
 const historyFixture = Effect.fn("OutboxPayloadHistory.fixture")(
   function* historyFixture(name: string) {
@@ -136,7 +124,7 @@ const backfilled = Effect.gen(function* backfilledTest() {
   const create = (body: Readonly<Record<string, string | boolean>>) =>
     createRecord({ body, endpointClassId: vault.id }).pipe(
       Effect.map((saved) => saved.id),
-      actingAs(admin)
+      asUser(admin)
     );
 
   const retitle = (id: string, version: number, text: string) =>
@@ -145,7 +133,7 @@ const backfilled = Effect.gen(function* backfilledTest() {
       endpointClassId: vault.id,
       expectedVersion: version,
       id,
-    }).pipe(actingAs(admin));
+    }).pipe(asUser(admin));
 
   // X exists before the field, and changes once before it too.
   const x = yield* create({ owner: bob, title: "X" });
@@ -266,7 +254,7 @@ const defaultChangedAcrossDigits = Effect.gen(function* acrossDigitsTest() {
     endpointClassId: safe.id,
   }).pipe(
     Effect.map((saved) => saved.id),
-    actingAs(admin)
+    asUser(admin)
   );
 
   // Filler change sets until the next one is the last revision before the
@@ -322,7 +310,7 @@ const defaultChangedAcrossDigits = Effect.gen(function* acrossDigitsTest() {
     endpointClassId: safe.id,
     expectedVersion: 1,
     id: x,
-  }).pipe(actingAs(admin));
+  }).pipe(asUser(admin));
 
   const [stored] = yield* values(
     `SELECT confidential::text AS value FROM "site"."safe" WHERE id = $1::uuid`,

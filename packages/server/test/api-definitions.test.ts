@@ -18,7 +18,6 @@ import {
   MERGE_PATCH,
   codeOf,
   API,
-  apiCallers,
   asArray,
   asObject,
   statedRevision,
@@ -53,7 +52,16 @@ describe("api-definitions", () => {
       () =>
         Effect.gen(function* applyChangeSet() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            admin: {
+              token: yield* http.signIn("ada", "ada-password"),
+            },
+            bob: {
+              token: yield* http.signIn("bob", "bob-password"),
+            },
+          };
+
           const note = addField(ACME.asset, "v2_note", { kind: "text" });
 
           const applied = yield* http.request("POST", APPLY, {
@@ -120,7 +128,16 @@ describe("api-definitions", () => {
       () =>
         Effect.gen(function* definitionWrites() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            admin: {
+              token: yield* http.signIn("ada", "ada-password"),
+            },
+            bob: {
+              token: yield* http.signIn("bob", "bob-password"),
+            },
+          };
+
           const name = `auditor_${randomUUID().slice(0, 8)}`;
 
           const created = yield* http.request("POST", ROLES, {
@@ -243,7 +260,12 @@ describe("api-definitions", () => {
       () =>
         Effect.gen(function* deleteRevision() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            admin: {
+              token: yield* http.signIn("ada", "ada-password"),
+            },
+          };
 
           const created = yield* http.request("POST", ROLES, {
             ...callers.admin,
@@ -285,7 +307,12 @@ describe("api-definitions", () => {
       () =>
         Effect.gen(function* mergeJsonAttribute() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            admin: {
+              token: yield* http.signIn("ada", "ada-password"),
+            },
+          };
 
           const dock = addField(ACME.asset, "merge_dock", {
             allowedRecords: {
@@ -335,7 +362,13 @@ describe("api-definitions", () => {
       () =>
         Effect.gen(function* mergeNonObject() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            admin: {
+              token: yield* http.signIn("ada", "ada-password"),
+            },
+          };
+
           const empty = addField(ACME.asset, "merge_empty", { kind: "json" });
 
           const scalar = addField(
@@ -383,7 +416,12 @@ describe("api-definitions", () => {
       () =>
         Effect.gen(function* definitionDocument() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            admin: {
+              token: yield* http.signIn("ada", "ada-password"),
+            },
+          };
 
           const roles = yield* http.get(
             "/api/v1/tableMetadata/coreRole/openapi.json",

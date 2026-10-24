@@ -38,7 +38,14 @@ import type {
 import { Catalog } from "../src/catalog/catalog.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { count } from "./aggregates-support.ts";
-import { apiCallers, asArray, asObject, textOf } from "./api-support.ts";
+import {
+  patchOptions,
+  MERGE_PATCH,
+  apiCallers,
+  asArray,
+  asObject,
+  textOf,
+} from "./api-support.ts";
 import {
   addAccessRule,
   addField,
@@ -238,11 +245,11 @@ const versionIn = (table: string, id: string) =>
 const tmfPatch = (caller: TestRequestOptions, id: string, body: JsonValue) =>
   TestHttpClient.pipe(
     Effect.flatMap((http) =>
-      http.request("PATCH", `${FIXTURE_TICKETS}/${id}`, {
-        ...caller,
-        headers: { "content-type": "application/merge-patch+json" },
-        rawBody: JSON.stringify(body),
-      })
+      http.request(
+        "PATCH",
+        `${FIXTURE_TICKETS}/${id}`,
+        patchOptions(caller, MERGE_PATCH, body)
+      )
     )
   );
 

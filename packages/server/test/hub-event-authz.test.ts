@@ -87,37 +87,23 @@ describe("hub-event-authz", () => {
         const { id: grantId, op: grantOp } = yield* subscribeGrant();
         yield* change([
           grantOp,
-          {
-            definition: {
-              actions: [
-                {
-                  type: "set",
-                  values: [{ fieldId: ACME.status, value: { value: "lost" } }],
-                },
-              ],
-              active: true,
-              classId: ACME.asset,
-              condition: {
-                left: { path: [ACME.cost] },
-                op: "gt",
-                right: { value: "10.00" },
+          addRecordRule(ACME.asset, {
+            actions: [
+              {
+                type: "set",
+                values: [{ fieldId: ACME.status, value: { value: "lost" } }],
               },
-              description: null,
-              id: randomUUID(),
-              kind: "recordRule",
-              name: "derive_status_from_cost",
-              once: false,
-              operations: ["create", "update"],
-              order: 1,
-              owner: { layer: "local" },
-              phase: "before",
-              protected: false,
-              ruleKind: "derive",
-              runAsId: null,
-              subscriptionId: null,
+            ],
+            condition: {
+              left: { path: [ACME.cost] },
+              op: "gt",
+              right: { value: "10.00" },
             },
-            op: "createRecordRule",
-          },
+            name: "derive_status_from_cost",
+            operations: ["create", "update"],
+            order: 1,
+            ruleKind: "derive",
+          }).op,
         ]);
         const callback = yield* listener();
         const hub = yield* register(bob.token ?? "", callback.origin);

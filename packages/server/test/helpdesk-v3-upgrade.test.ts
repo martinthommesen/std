@@ -66,10 +66,10 @@ import {
   addField,
   addRecordRule,
   change,
-  freshId,
   currentRevision,
   schemaTestLayer,
   values,
+  addChoice,
 } from "./schema-support.ts";
 import { itemsOf, TICKETS, tmf621As } from "./tmf621-support.ts";
 
@@ -537,20 +537,10 @@ describe("helpdesk-v3-upgrade", () => {
     () =>
       Effect.gen(function* localPriority() {
         yield* change([
-          {
-            definition: {
-              fieldId: HELPDESK.fields.priority,
-              hidden: false,
-              id: freshId(),
-              key: "local_priority",
-              kind: "choice",
-              label: "Local priority",
-              order: 99,
-              owner: { layer: "local" },
-              protected: false,
-            },
-            op: "createChoice",
-          },
+          addChoice(HELPDESK.fields.priority, "local_priority", {
+            label: "Local priority",
+            order: 99,
+          }).op,
         ]);
 
         const ticket = yield* createRecord({
@@ -596,20 +586,10 @@ describe("helpdesk-v3-upgrade", () => {
     () =>
       Effect.gen(function* invalidImpact() {
         yield* change([
-          {
-            definition: {
-              fieldId: HELPDESK.fields.impact,
-              hidden: false,
-              id: freshId(),
-              key: "local_impact",
-              kind: "choice",
-              label: "Local impact",
-              order: 99,
-              owner: { layer: "local" },
-              protected: false,
-            },
-            op: "createChoice",
-          },
+          addChoice(HELPDESK.fields.impact, "local_impact", {
+            label: "Local impact",
+            order: 99,
+          }).op,
         ]);
 
         const ticket = yield* createRecord({

@@ -377,128 +377,138 @@ describe("api-cache", () => {
           const token = yield* http.signIn("alice", "alice-password");
 
           // A sign-out ends its own session, so each has one of its own.
-          const responses = {
-            "bearer GET records": yield* http.get(listPath("acme.asset"), {
-              token,
-            }),
-            "bearer metadata": yield* http.get(
-              "/api/v1/tableMetadata/acmeAsset",
-              { token }
-            ),
-            "bearer session/current": yield* http.get(`${SESSION}/current`, {
-              token,
-            }),
-            "bearer sign-out": yield* http.request(
-              "DELETE",
-              `${SESSION}/current`,
-              { token: yield* http.signIn("alice", "alice-password") }
-            ),
-            "bearer tableMetadata list": yield* http.get(
-              "/api/v1/tableMetadata",
-              { token }
-            ),
-            "cookie GET records": yield* http.get(listPath("acme.asset"), {
-              cookie,
-            }),
-            "cookie metadata": yield* http.get(
-              "/api/v1/tableMetadata/acmeAsset",
-              { cookie }
-            ),
-            "cookie metadata openapi": yield* http.get(
-              "/api/v1/tableMetadata/acmeAsset/openapi.json",
-              { cookie }
-            ),
-            "cookie metadata schema": yield* http.get(
-              "/api/v1/tableMetadata/acmeAsset/schema.json",
-              { cookie }
-            ),
-            "cookie session/current": yield* http.get(`${SESSION}/current`, {
-              cookie,
-            }),
-            "cookie sign-in": yield* http.request("POST", SESSION, {
-              body: COOKIE_SIGN_IN_BODY,
-              headers: WEB,
-            }),
-            "cookie sign-out": yield* http.request(
-              "DELETE",
-              `${SESSION}/current`,
-              { cookie: yield* http.cookieSignIn("bob", "bob-password") }
-            ),
-            "cookie tableMetadata list": yield* http.get(
-              "/api/v1/tableMetadata",
-              { cookie }
-            ),
-            "error: no session": yield* http.get(`${SESSION}/current`),
-            "error: unknown metadata table": yield* http.get(
-              "/api/v1/tableMetadata/acmeNothing",
-              { cookie }
-            ),
-            // The session is checked before the route is found.
-            "error: unknown route": yield* http.get("/api/v1/nothing-here"),
-            "error: unknown route, signed in": yield* http.get(
-              "/api/v1/nothing-here",
-              { token: cookie }
-            ),
-            "error: unknown table": yield* http.get(listPath("acme.nothing"), {
-              token: cookie,
-            }),
-            "error: wrong password": yield* http.request("POST", SESSION, {
-              body: { ...SIGN_IN_BODY, password: "wrong" },
-            }),
-            openapi: yield* http.get(OPENAPI_PATH),
-            "sign-in": yield* http.request("POST", SESSION, {
-              body: SIGN_IN_BODY,
-            }),
-          };
+          const cases = [
+            [
+              "bearer GET records",
+              yield* http.get(listPath("acme.asset"), {
+                token,
+              }),
+              200,
+            ],
+            [
+              "bearer metadata",
+              yield* http.get("/api/v1/tableMetadata/acmeAsset", { token }),
+              200,
+            ],
+            [
+              "bearer session/current",
+              yield* http.get(`${SESSION}/current`, {
+                token,
+              }),
+              200,
+            ],
+            [
+              "bearer sign-out",
+              yield* http.request("DELETE", `${SESSION}/current`, {
+                token: yield* http.signIn("alice", "alice-password"),
+              }),
+              204,
+            ],
+            [
+              "bearer tableMetadata list",
+              yield* http.get("/api/v1/tableMetadata", { token }),
+              200,
+            ],
+            [
+              "cookie GET records",
+              yield* http.get(listPath("acme.asset"), {
+                cookie,
+              }),
+              200,
+            ],
+            [
+              "cookie metadata",
+              yield* http.get("/api/v1/tableMetadata/acmeAsset", { cookie }),
+              200,
+            ],
+            [
+              "cookie metadata openapi",
+              yield* http.get("/api/v1/tableMetadata/acmeAsset/openapi.json", {
+                cookie,
+              }),
+              200,
+            ],
+            [
+              "cookie metadata schema",
+              yield* http.get("/api/v1/tableMetadata/acmeAsset/schema.json", {
+                cookie,
+              }),
+              200,
+            ],
+            [
+              "cookie session/current",
+              yield* http.get(`${SESSION}/current`, {
+                cookie,
+              }),
+              200,
+            ],
+            [
+              "cookie sign-in",
+              yield* http.request("POST", SESSION, {
+                body: COOKIE_SIGN_IN_BODY,
+                headers: WEB,
+              }),
+              201,
+            ],
+            [
+              "cookie sign-out",
+              yield* http.request("DELETE", `${SESSION}/current`, {
+                cookie: yield* http.cookieSignIn("bob", "bob-password"),
+              }),
+              204,
+            ],
+            [
+              "cookie tableMetadata list",
+              yield* http.get("/api/v1/tableMetadata", { cookie }),
+              200,
+            ],
+            ["error: no session", yield* http.get(`${SESSION}/current`), 401],
+            [
+              "error: unknown metadata table",
+              yield* http.get("/api/v1/tableMetadata/acmeNothing", { cookie }),
+              404,
+            ],
+            [
+              "error: unknown route",
+              yield* http.get("/api/v1/nothing-here"),
+              401,
+            ],
+            [
+              "error: unknown route, signed in",
+              yield* http.get("/api/v1/nothing-here", { token: cookie }),
+              404,
+            ],
+            [
+              "error: unknown table",
+              yield* http.get(listPath("acme.nothing"), {
+                token: cookie,
+              }),
+              404,
+            ],
+            [
+              "error: wrong password",
+              yield* http.request("POST", SESSION, {
+                body: { ...SIGN_IN_BODY, password: "wrong" },
+              }),
+              401,
+            ],
+            ["openapi", yield* http.get(OPENAPI_PATH), 200],
+            [
+              "sign-in",
+              yield* http.request("POST", SESSION, {
+                body: SIGN_IN_BODY,
+              }),
+              201,
+            ],
+          ] as const;
 
-          const seen = Object.fromEntries(
-            Object.entries(responses).map(([name, response]) => [
-              name,
+          for (const [label, response, status] of cases) {
+            assert.deepStrictEqual(
               cacheOf(response),
-            ])
-          );
-
-          assert.deepStrictEqual(seen, {
-            "bearer GET records": { cacheControl: "no-store", status: 200 },
-            "bearer metadata": { cacheControl: "no-store", status: 200 },
-            "bearer session/current": { cacheControl: "no-store", status: 200 },
-            "bearer sign-out": { cacheControl: "no-store", status: 204 },
-            "bearer tableMetadata list": {
-              cacheControl: "no-store",
-              status: 200,
-            },
-            "cookie GET records": { cacheControl: "no-store", status: 200 },
-            "cookie metadata": { cacheControl: "no-store", status: 200 },
-            "cookie metadata openapi": {
-              cacheControl: "no-store",
-              status: 200,
-            },
-            "cookie metadata schema": {
-              cacheControl: "no-store",
-              status: 200,
-            },
-            "cookie session/current": { cacheControl: "no-store", status: 200 },
-            "cookie sign-in": { cacheControl: "no-store", status: 201 },
-            "cookie sign-out": { cacheControl: "no-store", status: 204 },
-            "cookie tableMetadata list": {
-              cacheControl: "no-store",
-              status: 200,
-            },
-            "error: no session": { cacheControl: "no-store", status: 401 },
-            "error: unknown metadata table": {
-              cacheControl: "no-store",
-              status: 404,
-            },
-            "error: unknown route": { cacheControl: "no-store", status: 401 },
-            "error: unknown route, signed in": {
-              cacheControl: "no-store",
-              status: 404,
-            },
-            "error: unknown table": { cacheControl: "no-store", status: 404 },
-            "error: wrong password": { cacheControl: "no-store", status: 401 },
-            openapi: { cacheControl: "no-store", status: 200 },
-            "sign-in": { cacheControl: "no-store", status: 201 },
-          });
+              { cacheControl: "no-store", status },
+              label
+            );
+          }
         })
     );
   });
