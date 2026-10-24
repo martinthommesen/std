@@ -199,6 +199,55 @@ const sorted = (
   ids.map(textOf).toSorted((left, right) => left.localeCompare(right));
 
 describe("tmf621", () => {
+  it.effect(
+    "same-attribute fields conflicts use declared 400 in both marker orders on shipped TMF621 lists and reads",
+    () =>
+      Effect.gen(function* fieldConflicts() {
+        const admin = yield* tmf621As("admin");
+        const ticket = yield* open(admin);
+
+        const specification = yield* admin.post(SPECIFICATIONS, {
+          "@type": "TroubleTicketSpecification",
+          name: "Conflict proof",
+        });
+
+        assert.strictEqual(specification.status, 201, specification.text);
+
+        for (const [path, attribute] of [
+          [TICKETS, "description"],
+          [`${TICKETS}/${textOf(ticket.id)}`, "description"],
+          [SPECIFICATIONS, "name"],
+          [`${SPECIFICATIONS}/${textOf(bodyOf(specification).id)}`, "name"],
+        ] as const) {
+          for (const fields of [
+            `${attribute},!${attribute}`,
+            `!${attribute},${attribute}`,
+          ]) {
+            const response = yield* admin.get(
+              `${path}?fields=${encodeURIComponent(fields)}`
+            );
+
+            assert.strictEqual(
+              response.status,
+              400,
+              `${path}: ${response.text}`
+            );
+            assert.deepStrictEqual(response.json, {
+              "@baseType": "Error",
+              "@schemaLocation":
+                "/api/v1/openapi.json#/components/schemas/FieldsConflict",
+              "@type": "FieldsConflict",
+              code: "FieldsConflict",
+              field: attribute,
+              message: "fields includes and excludes the same attribute",
+              reason: "fields includes and excludes the same attribute",
+              status: "400",
+            });
+          }
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
   it("serves troubleTicket and troubleTicketSpecification at the pinned base path", () => {
     assert.deepStrictEqual(
       [TICKETS, SPECIFICATIONS],

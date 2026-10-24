@@ -114,8 +114,8 @@ describe("tmf630-conformance", () => {
     assert.strictEqual(tmfErrorOf({ _tag: "VersionRequired" }).status, 428);
   });
 
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
+  layer(readsTestLayer(), { excludeTestServices: true })((readTests) => {
+    readTests.effect(
       "a table is a lowerCamelCase collection; qualified names are not paths",
       () =>
         Effect.gen(function* collections() {
@@ -145,7 +145,7 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect(
+    readTests.effect(
       "a resource is flat with id, href, @type, @baseType, @schemaLocation and API names",
       () =>
         Effect.gen(function* representation() {
@@ -212,7 +212,7 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect(
+    readTests.effect(
       "a record read through a parent collection names its own URI",
       () =>
         Effect.gen(function* parentRead() {
@@ -243,7 +243,7 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect(
+    readTests.effect(
       "references are EntityRefs; a label only under 3.6; empty attributes absent; withheld listed",
       () =>
         Effect.gen(function* references() {
@@ -310,7 +310,7 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect(
+    readTests.effect(
       "fields selects attributes and paths; none, !name and conflicts",
       () =>
         Effect.gen(function* fields() {
@@ -384,7 +384,52 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect(
+    readTests.effect(
+      "same-attribute fields conflicts reject both marker orders on generic lists and reads",
+      () =>
+        Effect.gen(function* fieldConflicts() {
+          const http = yield* TestHttpClient;
+
+          const alice = {
+            token: yield* http.signIn("alice", "alice-password"),
+          };
+
+          const { records } = yield* AcmeFixture;
+
+          for (const path of [
+            API.asset,
+            API.laptop,
+            `${API.asset}/${records.L}`,
+            `${API.laptop}/${records.L}`,
+          ]) {
+            for (const fields of ["cost,!cost", "!cost,cost"]) {
+              const response = yield* http.get(
+                withQuery(path, [["fields", fields]]),
+                alice
+              );
+
+              assert.strictEqual(
+                response.status,
+                409,
+                `${path}: ${response.text}`
+              );
+              assert.deepStrictEqual(response.json, {
+                "@baseType": "Error",
+                "@schemaLocation":
+                  "/api/v1/openapi.json#/components/schemas/FieldsConflict",
+                "@type": "FieldsConflict",
+                code: "FieldsConflict",
+                field: "cost",
+                message: "fields includes and excludes the same attribute",
+                reason: "fields includes and excludes the same attribute",
+                status: "409",
+              });
+            }
+          }
+        })
+    );
+
+    readTests.effect(
       "attribute filters: eq, in by comma, semicolon and repeats",
       () =>
         Effect.gen(function* equality() {
@@ -438,7 +483,7 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect(
+    readTests.effect(
       "comparisons in dot and URL-encoded forms, references, @type and condition",
       () =>
         Effect.gen(function* comparisons() {
@@ -523,7 +568,7 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect(
+    readTests.effect(
       "refused filters: hidden equals missing, .regex, empty values, unknown parameters, JSONPath",
       () =>
         Effect.gen(function* refusedFilters() {
@@ -587,7 +632,7 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect(
+    readTests.effect(
       "offset pages carry both counts and self, first, next, prev and last links",
       () =>
         Effect.gen(function* offsetPages() {
@@ -657,7 +702,7 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect(
+    readTests.effect(
       "cursor pages: after, before and both; count=false drops the total",
       () =>
         Effect.gen(function* cursorPages() {
@@ -711,7 +756,7 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect("history is a list of ChangeEntry resources", () =>
+    readTests.effect("history is a list of ChangeEntry resources", () =>
       Effect.gen(function* history() {
         const http = yield* TestHttpClient;
 
@@ -741,7 +786,7 @@ describe("tmf630-conformance", () => {
       })
     );
 
-    dbTest.effect("sessions: create, read and end at /api/v1/session", () =>
+    readTests.effect("sessions: create, read and end at /api/v1/session", () =>
       Effect.gen(function* sessions() {
         const http = yield* TestHttpClient;
 
@@ -803,7 +848,7 @@ describe("tmf630-conformance", () => {
       })
     );
 
-    dbTest.effect(
+    readTests.effect(
       "table metadata: the list, a table with API names, and its JSON Schema",
       () =>
         Effect.gen(function* metadata() {
@@ -854,8 +899,8 @@ describe("tmf630-conformance", () => {
     );
   });
 
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
+  layer(readsTestLayer(), { excludeTestServices: true })((writeTests) => {
+    writeTests.effect(
       "create: 201 with Location and ETag; polymorphic create through a parent",
       () =>
         Effect.gen(function* creates() {
@@ -936,7 +981,7 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect(
+    writeTests.effect(
       "merge-patch: If-Match required, 412 when stale, 200 with ETag; unchanged @type accepted",
       () =>
         Effect.gen(function* mergePatches() {
@@ -1030,7 +1075,7 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect(
+    writeTests.effect(
       "JSON Patch: every operation, a failed test writes nothing, read-only paths refused",
       () =>
         Effect.gen(function* jsonPatches() {
@@ -1152,7 +1197,7 @@ describe("tmf630-conformance", () => {
         })
     );
 
-    dbTest.effect("DELETE answers 204; a body is refused; PUT is 405", () =>
+    writeTests.effect("DELETE answers 204; a body is refused; PUT is 405", () =>
       Effect.gen(function* deletes() {
         const http = yield* TestHttpClient;
 
