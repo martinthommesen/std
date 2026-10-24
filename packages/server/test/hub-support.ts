@@ -36,11 +36,12 @@ export const hubTestLayerWith = (config: Readonly<Record<string, string>>) =>
     ),
     Layer.provideMerge(acmeTestLayer()),
     Layer.provide(
-      ConfigProvider.layer(
+      ConfigProvider.layerAdd(
         ConfigProvider.fromUnknown({
           STD_HUB_ALLOW_PRIVATE_ADDRESSES: "true",
           ...config,
-        })
+        }),
+        { asPrimary: true }
       )
     )
   );

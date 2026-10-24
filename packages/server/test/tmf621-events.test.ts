@@ -76,8 +76,9 @@ const eventsLayer = Layer.mergeAll(
   ),
   Layer.provideMerge(upgradedHelpdesk),
   Layer.provide(
-    ConfigProvider.layer(
-      ConfigProvider.fromUnknown({ STD_HUB_ALLOW_PRIVATE_ADDRESSES: "true" })
+    ConfigProvider.layerAdd(
+      ConfigProvider.fromUnknown({ STD_HUB_ALLOW_PRIVATE_ADDRESSES: "true" }),
+      { asPrimary: true }
     )
   )
 );
