@@ -151,8 +151,18 @@ rows:
     source: TMF630 v5.0.0 P1 §1.5.2 p.12
     level: mandatory
     requirement: JSON exchanged outside a closed ecosystem is encoded in UTF-8, as RFC 8259 section 8.1 requires, so no charset parameter is needed.
-    status: pending
-    note: "gap: Contracts 10 does not state the encoding of request and response bodies; a test should pin UTF-8"
+    status: tested
+    tests:
+      - "packages/server/test/http-media.test.ts#JSON success and error constructors expose their actual representation media"
+      - "packages/server/test/http-media.test.ts#generic writes exchange UTF-8 octets and return JSON for every offered PATCH MIME and its errors"
+      - "packages/server/test/http-media.test.ts#generic and fixed resource variants identify their payload media and unsupported Accept keeps JSON bytes"
+      - "packages/server/test/http-media.test.ts#definition writes return representation JSON rather than the merge-patch request MIME"
+      - "packages/server/test/http-media.test.ts#mapped resources exchange Unicode JSON for plain, merge and JSON Patch requests including mapped errors"
+      - "packages/server/test/http-media.test.ts#shipped TMF621 tickets and specifications declare JSON on reads, writes and pinned errors"
+      - "packages/server/test/http-media.test.ts#generic, mapped and TMF688 hubs declare JSON for registrations, reads and errors"
+      - "packages/server/test/http-media.test.ts#TMF688 topics and client events preserve UTF-8 JSON and ignore unsupported response media"
+      - "packages/server/test/text-policy-http.test.ts#round-trips classified prose through generic/TMF writes, literals, notes and history"
+    note: "P1 pp.12-13 applies to network JSON outside a closed ecosystem. Real TCP tests retain UTF-8 octets, compare an independent non-ASCII byte fixture, decode fatally, round-trip writes and errors, and count octets. Existing classified-prose coverage supplies combining marks and line endings. Empty HEAD/204 and defect responses carry no JSON payload; no charset spelling is required (RFC8259 §§8.1,11)."
   - id: TMF630@5.0.0/P1/1.5.2/no-accept-charset
     source: TMF630 v5.0.0 P1 §1.5.2 p.12
     level: recommended
@@ -163,8 +173,17 @@ rows:
     source: TMF630 v5.0.0 P1 §1.5.2 p.12
     level: mandatory
     requirement: When a client asks for a media type the server does not support, the server answers in application/json as if no Accept header had been sent. (lowercase 'must' in source)
-    status: pending
-    note: "gap: Contracts 10 says nothing about Accept; it must not be answered with 406"
+    status: tested
+    tests:
+      - "packages/server/test/http-media.test.ts#JSON success and error constructors expose their actual representation media"
+      - "packages/server/test/http-media.test.ts#generic writes exchange UTF-8 octets and return JSON for every offered PATCH MIME and its errors"
+      - "packages/server/test/http-media.test.ts#generic and fixed resource variants identify their payload media and unsupported Accept keeps JSON bytes"
+      - "packages/server/test/http-media.test.ts#definition writes return representation JSON rather than the merge-patch request MIME"
+      - "packages/server/test/http-media.test.ts#mapped resources exchange Unicode JSON for plain, merge and JSON Patch requests including mapped errors"
+      - "packages/server/test/http-media.test.ts#shipped TMF621 tickets and specifications declare JSON on reads, writes and pinned errors"
+      - "packages/server/test/http-media.test.ts#generic, mapped and TMF688 hubs declare JSON for registrations, reads and errors"
+      - "packages/server/test/http-media.test.ts#TMF688 topics and client events preserve UTF-8 JSON and ignore unsupported response media"
+    note: "P1 p.12: unsupported requested response media falls back to application/json, without 406. Current generic/fixed/definition/mapped/TMF621/TMF688/hub payload paths are JSON: raw TCP compares absent versus XML Accept and parses actual bodies. The named schema resource also emits application/json (jsonAnswer contentType wins over its header option). Resource-event full reads generate fresh eventTime independently of Accept; media is checked on both full reads and bytes compared with stable eventId/eventType projection. No new negotiation is implemented."
   - id: TMF630@5.0.0/P1/1.5.2/client-may-request-locale
     source: TMF630 v5.0.0 P1 §1.5.2 p.12
     level: optional
@@ -211,14 +230,40 @@ rows:
     source: TMF630 v5.0.0 P1 §1.5.2 p.12
     level: recommended
     requirement: The server should state the response's media type in a response header.
-    status: pending
-    note: "gap: Contracts 10 does not name the response Content-Type; Effect's JSON bodies are `application/json` (pin with a test)"
+    status: tested
+    tests:
+      - "packages/server/test/http-media.test.ts#JSON success and error constructors expose their actual representation media"
+      - "packages/server/test/http-media.test.ts#generic writes exchange UTF-8 octets and return JSON for every offered PATCH MIME and its errors"
+      - "packages/server/test/http-media.test.ts#generic and fixed resource variants identify their payload media and unsupported Accept keeps JSON bytes"
+      - "packages/server/test/http-media.test.ts#definition writes return representation JSON rather than the merge-patch request MIME"
+      - "packages/server/test/http-media.test.ts#mapped resources exchange Unicode JSON for plain, merge and JSON Patch requests including mapped errors"
+      - "packages/server/test/http-media.test.ts#shipped TMF621 tickets and specifications declare JSON on reads, writes and pinned errors"
+      - "packages/server/test/http-media.test.ts#generic, mapped and TMF688 hubs declare JSON for registrations, reads and errors"
+      - "packages/server/test/http-media.test.ts#TMF688 topics and client events preserve UTF-8 JSON and ignore unsupported response media"
+      - "packages/server/test/head-metadata.test.ts#generic and fixed HEAD paths preserve GET byte lengths, projections, masks and error metadata"
+      - "packages/server/test/head-metadata.test.ts#mapped collection and resource HEAD preserve Unicode, selected and masked GET metadata and mapped errors"
+      - "packages/server/test/head-metadata.test.ts#shipped TMF621 collection and resource HEAD retain GET metadata, projections and pinned errors"
+      - "packages/server/test/head-metadata.test.ts#TCP HEAD carries the GET representation length and no bytes through the Node transport"
+    note: "P1 pp.12-13 refers to actual response payload media. TCP success and typed-error tests parse Content-Type semantically and parse actual JSON across generic/fixed/definition/mapped/TMF621/TMF688/hub paths. HEAD metadata reuses existing exact tests; 204 has no payload media. Optional charset formatting is not pinned."
   - id: TMF630@5.0.0/P1/1.5.2/server-uses-content-type
     source: TMF630 v5.0.0 P1 §1.5.2 p.12
     level: mandatory
     requirement: The server states the response media type with the Content-Type header, whose value follows RFC 9110.
-    status: pending
-    note: "gap: Contracts 10 does not name the response Content-Type; Effect's JSON bodies are `application/json` (pin with a test)"
+    status: tested
+    tests:
+      - "packages/server/test/http-media.test.ts#JSON success and error constructors expose their actual representation media"
+      - "packages/server/test/http-media.test.ts#generic writes exchange UTF-8 octets and return JSON for every offered PATCH MIME and its errors"
+      - "packages/server/test/http-media.test.ts#generic and fixed resource variants identify their payload media and unsupported Accept keeps JSON bytes"
+      - "packages/server/test/http-media.test.ts#definition writes return representation JSON rather than the merge-patch request MIME"
+      - "packages/server/test/http-media.test.ts#mapped resources exchange Unicode JSON for plain, merge and JSON Patch requests including mapped errors"
+      - "packages/server/test/http-media.test.ts#shipped TMF621 tickets and specifications declare JSON on reads, writes and pinned errors"
+      - "packages/server/test/http-media.test.ts#generic, mapped and TMF688 hubs declare JSON for registrations, reads and errors"
+      - "packages/server/test/http-media.test.ts#TMF688 topics and client events preserve UTF-8 JSON and ignore unsupported response media"
+      - "packages/server/test/head-metadata.test.ts#generic and fixed HEAD paths preserve GET byte lengths, projections, masks and error metadata"
+      - "packages/server/test/head-metadata.test.ts#mapped collection and resource HEAD preserve Unicode, selected and masked GET metadata and mapped errors"
+      - "packages/server/test/head-metadata.test.ts#shipped TMF621 collection and resource HEAD retain GET metadata, projections and pinned errors"
+      - "packages/server/test/head-metadata.test.ts#TCP HEAD carries the GET representation length and no bytes through the Node transport"
+    note: "P1 p.12 requires the Content-Type response field to identify actual media with RFC9110 syntax. TCP tests parse the field as MIMEType and actual UTF-8 JSON for all current response constructors and route families; existing HEAD tests retain GET metadata. Empty 204 has no content type. Plain JSON with/without UTF-8 charset and the offered patch formats are request media, not response media."
   - id: TMF630@5.0.0/P1/1.5.2/server-supports-json
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
     level: mandatory
@@ -231,8 +276,21 @@ rows:
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
     level: recommended
     requirement: The server should send the Content-Type back so the client need not guess the media type.
-    status: pending
-    note: "gap: Contracts 10 does not name the response Content-Type (pin with a test)"
+    status: tested
+    tests:
+      - "packages/server/test/http-media.test.ts#JSON success and error constructors expose their actual representation media"
+      - "packages/server/test/http-media.test.ts#generic writes exchange UTF-8 octets and return JSON for every offered PATCH MIME and its errors"
+      - "packages/server/test/http-media.test.ts#generic and fixed resource variants identify their payload media and unsupported Accept keeps JSON bytes"
+      - "packages/server/test/http-media.test.ts#definition writes return representation JSON rather than the merge-patch request MIME"
+      - "packages/server/test/http-media.test.ts#mapped resources exchange Unicode JSON for plain, merge and JSON Patch requests including mapped errors"
+      - "packages/server/test/http-media.test.ts#shipped TMF621 tickets and specifications declare JSON on reads, writes and pinned errors"
+      - "packages/server/test/http-media.test.ts#generic, mapped and TMF688 hubs declare JSON for registrations, reads and errors"
+      - "packages/server/test/http-media.test.ts#TMF688 topics and client events preserve UTF-8 JSON and ignore unsupported response media"
+      - "packages/server/test/head-metadata.test.ts#generic and fixed HEAD paths preserve GET byte lengths, projections, masks and error metadata"
+      - "packages/server/test/head-metadata.test.ts#mapped collection and resource HEAD preserve Unicode, selected and masked GET metadata and mapped errors"
+      - "packages/server/test/head-metadata.test.ts#shipped TMF621 collection and resource HEAD retain GET metadata, projections and pinned errors"
+      - "packages/server/test/head-metadata.test.ts#TCP HEAD carries the GET representation length and no bytes through the Node transport"
+    note: "P1 p.13 says the server should provide its actual media header back so clients do not detect the payload type; this is not a requirement to echo request Content-Type. Real generic/definition/mapped/TMF621 PATCH success and typed errors answer application/json for plain JSON, merge-patch and offered JSON Patch inputs; refused formats likewise return JSON errors. Current read/fixed/hub/event paths and HEAD metadata are covered."
   - id: TMF630@5.0.0/P1/1.5.2/client-assumes-requested-or-default
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
     level: recommended
@@ -681,14 +739,32 @@ rows:
     source: TMF630 v5.0.0 P1 §3.2 p.27
     level: mandatory
     requirement: An API controls the media type only through the Accept and Content-Type headers.
-    status: pending
-    note: "C10.5: PATCH formats are chosen by Content-Type; no format query parameter or path suffix exists"
+    status: tested
+    tests:
+      - "packages/server/test/http-media.test.ts#JSON success and error constructors expose their actual representation media"
+      - "packages/server/test/http-media.test.ts#generic writes exchange UTF-8 octets and return JSON for every offered PATCH MIME and its errors"
+      - "packages/server/test/http-media.test.ts#generic and fixed resource variants identify their payload media and unsupported Accept keeps JSON bytes"
+      - "packages/server/test/http-media.test.ts#definition writes return representation JSON rather than the merge-patch request MIME"
+      - "packages/server/test/http-media.test.ts#mapped resources exchange Unicode JSON for plain, merge and JSON Patch requests including mapped errors"
+      - "packages/server/test/http-media.test.ts#shipped TMF621 tickets and specifications declare JSON on reads, writes and pinned errors"
+      - "packages/server/test/http-media.test.ts#generic, mapped and TMF688 hubs declare JSON for registrations, reads and errors"
+      - "packages/server/test/http-media.test.ts#TMF688 topics and client events preserve UTF-8 JSON and ignore unsupported response media"
+    note: "P1 §3.2 p.27 controls representation media via Accept/Content-Type only. TCP read matrices cover rejected or ignored format/$format/_format/output/callback queries, rejected .xml/.json suffixes, and unchanged JSON with X-Format/X-Response-Format across current generic/fixed/definition/mapped/TMF621/hub/TMF688 families. PATCH MIME selects input syntax only; output stays JSON. Named OpenAPI/schema documents are separate resources, not suffix representations. Source response constructors and query/route dispatch contain no alternate selector."
   - id: TMF630@5.0.0/P1/3.2/no-other-media-type-mechanisms
     source: TMF630 v5.0.0 P1 §3.2 p.27
     level: recommended
     requirement: An API should not offer any other mechanism (such as a query parameter or file extension) to choose the media type.
-    status: pending
-    note: "C10.1: none offered; note `/openapi.json` and `/schema.json` are resource names, not format selectors"
+    status: tested
+    tests:
+      - "packages/server/test/http-media.test.ts#JSON success and error constructors expose their actual representation media"
+      - "packages/server/test/http-media.test.ts#generic writes exchange UTF-8 octets and return JSON for every offered PATCH MIME and its errors"
+      - "packages/server/test/http-media.test.ts#generic and fixed resource variants identify their payload media and unsupported Accept keeps JSON bytes"
+      - "packages/server/test/http-media.test.ts#definition writes return representation JSON rather than the merge-patch request MIME"
+      - "packages/server/test/http-media.test.ts#mapped resources exchange Unicode JSON for plain, merge and JSON Patch requests including mapped errors"
+      - "packages/server/test/http-media.test.ts#shipped TMF621 tickets and specifications declare JSON on reads, writes and pinned errors"
+      - "packages/server/test/http-media.test.ts#generic, mapped and TMF688 hubs declare JSON for registrations, reads and errors"
+      - "packages/server/test/http-media.test.ts#TMF688 topics and client events preserve UTF-8 JSON and ignore unsupported response media"
+    note: "P1 §3.2 p.27 discourages other representation mechanisms. The same maintained read matrix proves queries, suffixes and custom format headers do not select alternative media across current route/query families, alongside source inventory of all response constructors and routing. Separate named schema/OpenAPI resources are not alternate formats of the record. No claim is made that these finite probes enumerate every possible HTTP header or client."
   - id: TMF630@5.0.0/P1/3.2/patch-merge-patch
     source: TMF630 v5.0.0 P1 §3.2 p.28
     level: mandatory
