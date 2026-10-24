@@ -21,6 +21,7 @@ import { SqlClient } from "effect/sql";
 
 import { schemaKeyHolders } from "../schema/coordinator.ts";
 import { quoteIdent } from "../schema/sql-text.ts";
+import { unlimitedSession } from "../schema/step-spec.ts";
 import { UPGRADE_BLOCKING_APPLICATION_PREFIXES } from "../sql/database-config.ts";
 import type { DatabaseConfig } from "../sql/database-config.ts";
 import { makeDedicatedConnection } from "../sql/dedicated.ts";
@@ -293,8 +294,7 @@ const applyConcurrentIndex = (
       }
 
       // Concurrent builds wait for older transactions; no timeout applies.
-      yield* connection.execute("SET lock_timeout = 0");
-      yield* connection.execute("SET statement_timeout = 0");
+      yield* unlimitedSession(connection);
       yield* connection.execute(migration.statement);
     }
 

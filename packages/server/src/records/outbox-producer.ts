@@ -44,8 +44,7 @@ import { SqlClient } from "effect/sql";
 
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { acceptsHubEvent } from "../events/filter.ts";
-import { CurrentTransaction } from "../sql/transaction-context.ts";
-import { WorkerWakeup } from "../sql/wake-up.ts";
+import { WorkerWakeup, wakeWorkerAfterCommit } from "../sql/wake-up.ts";
 import { STD_VERSION } from "../version.ts";
 import type { ChangeEntry, ChangeKind } from "./change-entry.ts";
 import { exactTextView } from "./read-query.ts";
@@ -385,10 +384,7 @@ export const writeDeliveries = Effect.fn("Outbox.writeDeliveries")(
 
     yield* insertDeliveries(input.entry, subscriptionIds);
 
-    const wakeup = yield* WorkerWakeup;
-    const transaction = yield* CurrentTransaction;
-
-    return yield* transaction.afterCommit(wakeup.wake);
+    return yield* wakeWorkerAfterCommit;
   }
 );
 

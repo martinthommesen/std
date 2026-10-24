@@ -511,7 +511,16 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     const requesterId = requester.userId;
     const revision = state.revision + 1;
 
-    if (input.coordinatorPid === null && requiresSchemaKey(applied)) {
+    if (
+      input.coordinatorPid === null &&
+      [
+        plan.tables,
+        plan.keys,
+        plan.steps,
+        plan.violations,
+        plan.purgeCounts,
+      ].some((work) => work.length > 0)
+    ) {
       return yield* Effect.die(
         new Error("A change set with DDL ran without SCHEMA_KEY")
       );

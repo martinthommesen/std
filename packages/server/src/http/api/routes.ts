@@ -1,10 +1,8 @@
 import { API_PREFIX } from "@std/api/api";
-import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { MethodNotAllowed } from "@std/api/errors/method-not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
 import type { DefinitionKind } from "@std/definitions/definition";
 import { apiTableNameOf } from "@std/definitions/names";
-import { isJsonObject } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
 /**
  * The `/api/v1` routes (Contracts 10): the generic record routes and the
@@ -322,12 +320,7 @@ const RecordRoutes = Layer.unwrap(
           Effect.gen(function* createRoute() {
             const body = yield* checkedCreate(yield* jsonBodyOf(input.request));
 
-            return isJsonObject(body)
-              ? yield* createIn(input, body)
-              : yield* new InvalidRequest({
-                  message: "The body must be a JSON object of attributes.",
-                  parameter: "body",
-                });
+            return yield* createIn(input, body);
           })
         )
       ),

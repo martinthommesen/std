@@ -9,31 +9,13 @@ import { SqlClient } from "effect/sql";
 import {
   compareLedger,
   installedSetVersions,
-  decodeLedgerRows,
-  decodeLedgerColumns,
-  LEDGER_COLUMNS,
-  ledgerRows,
+  readLedger,
 } from "../platform/ledger.ts";
 import type { PlatformMigration } from "../platform/migration.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import { finding } from "./finding.ts";
 import type { Finding } from "./finding.ts";
-
-/** The ledger, in the columns the database has, read with statements marked read-only. */
-const diagnosticLedger = Effect.gen(function* diagnosticLedger() {
-  const sql = yield* SqlClient.SqlClient;
-
-  const [columns] = yield* readOnly(sql.unsafe(LEDGER_COLUMNS)).pipe(
-    Effect.flatMap(decodeLedgerColumns)
-  );
-
-  return columns?.present === true
-    ? yield* readOnly(
-        sql.unsafe(ledgerRows(columns.stateful, columns.phased))
-      ).pipe(Effect.flatMap(decodeLedgerRows))
-    : [];
-});
 
 /**
  * Check 1: the migration ledger matches the code.
@@ -45,7 +27,7 @@ export const checkLedger = Effect.fn("Doctor.checkLedger")(
   function* checkLedger(migrations: readonly PlatformMigration[]) {
     const comparison = compareLedger(
       migrations,
-      yield* diagnosticLedger,
+      yield* readLedger(yield* SqlClient.SqlClient),
       yield* installedSetVersions(yield* SqlClient.SqlClient)
     );
 

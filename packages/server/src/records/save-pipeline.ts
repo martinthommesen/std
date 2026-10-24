@@ -3,7 +3,6 @@ import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
 import type { PatchTestFailed } from "@std/api/errors/patch-test-failed";
 import { RecordInSave } from "@std/api/errors/record-in-save";
-import type { UnknownField } from "@std/api/errors/unknown-field";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
 import { ownerReferenceOf } from "@std/definitions/aggregates";
@@ -70,7 +69,6 @@ import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { parseUuid } from "@std/values/uuid";
 import { isPlaintext } from "@std/values/write-only";
 import { Effect, Option, Result } from "effect";
-import type { SqlError } from "effect/sql/SqlError";
 
 import { Actor } from "../auth/actor.ts";
 import { protectServiceIdentity } from "../auth/service-identity-policy.ts";
@@ -99,7 +97,6 @@ import {
 import { hookChanges, writtenFields } from "./proposal-changes.ts";
 import { rulesById } from "./proposal-rules.ts";
 import { mapConstraints, withShownFields } from "./save-constraints.ts";
-import type { ConstraintFailure } from "./save-constraints.ts";
 import { SaveHooks } from "./save-hooks.ts";
 import type { HookEnvironment, SaveFailure, SaveMode } from "./save-hooks.ts";
 import type { SaveInput } from "./save-input.ts";
@@ -673,27 +670,8 @@ const individualBody = (
   };
 };
 
-/** What a create in a running request transaction fails with. */
-type CreateFailure =
-  | NotAllowed
-  | UnknownField
-  | SqlError
-  | ConstraintFailure
-  | SaveFailure;
-
-/**
- * What a create in a running request transaction needs: the record
- * service, and what its hooks may use (a record rule's nested saves).
- */
-type CreateServices =
-  | Actor
-  | Catalog
-  | CurrentTransaction
-  | SaveHooks
-  | WriteAccess
-  | WriteOnlyValues
-  | InTransaction
-  | HookEnvironment;
+/** What a create in a running request transaction needs beyond its hooks. */
+type CreateServices = HookEnvironment | CurrentTransaction | InTransaction;
 
 /**
  * A create in a running request transaction. Typed explicitly (the
@@ -704,7 +682,7 @@ type CreateServices =
 type CreateInTransaction = (
   input: CreateInput,
   body: JsonObject
-) => Effect.Effect<SaveResult, CreateFailure, CreateServices>;
+) => Effect.Effect<SaveResult, SaveFailure, CreateServices>;
 
 /**
  * Creates the individual of a new user, as the acting user, in the user's
@@ -721,7 +699,7 @@ const createIndividual = (
   snapshot: ConfigSnapshot,
   userName: DecodedInput | undefined,
   cause: ChangeCause
-): Effect.Effect<string, CreateFailure, CreateServices> => {
+): Effect.Effect<string, SaveFailure, CreateServices> => {
   const body = individualBody(snapshot, userName);
 
   return create(
@@ -810,7 +788,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     input: CreateInput,
     body: JsonObject,
     platformCreate?: typeof DEAD_DELIVERY_ACTION_CREATE
-  ): Effect.fn.Return<SaveResult, CreateFailure, CreateServices> {
+  ): Effect.fn.Return<SaveResult, SaveFailure, CreateServices> {
     yield* checkDepth(yield* SaveStack);
 
     const snapshot = yield* (yield* Catalog).current;
@@ -1603,6 +1581,17 @@ const finishSave = Effect.fn("Records.finishSave")(function* finishSave(
     : saved;
 });
 
+const saveAndFinalize = Effect.fnUntraced(function* saveAndFinalize<E, R>(
+  effect: Effect.Effect<SaveResult, E, R>,
+  endpointClassId: DefinitionId
+) {
+  const { request } = yield* Transactions;
+
+  return yield* request(
+    effect.pipe(Effect.flatMap((saved) => finishSave(saved, endpointClassId)))
+  );
+});
+
 /**
  * Creates a record of exactly the endpoint's class.
  *
@@ -1613,12 +1602,10 @@ export const createRecord = Effect.fn("Records.create")(function* createRecord(
   input: CreateInput
 ) {
   const body = yield* decodeWriteBody(input.body);
-  const { request } = yield* Transactions;
 
-  return yield* request(
-    createInTransaction(input, body).pipe(
-      Effect.flatMap((saved) => finishSave(saved, input.endpointClassId))
-    )
+  return yield* saveAndFinalize(
+    createInTransaction(input, body),
+    input.endpointClassId
   );
 }, poisonIfNested);
 
@@ -1638,14 +1625,14 @@ export const appendDeadDeliveryAction = Effect.fn(
   "Records.appendDeadDeliveryAction"
 )(function* appendDeadDeliveryAction(body: JsonObject) {
   const endpointClassId = PLATFORM_CLASS_IDS.dead_delivery_action;
-  const { request } = yield* Transactions;
 
-  return yield* request(
+  return yield* saveAndFinalize(
     createInTransaction(
       { body, endpointClassId },
       body,
       DEAD_DELIVERY_ACTION_CREATE
-    ).pipe(Effect.flatMap((saved) => finishSave(saved, endpointClassId)))
+    ),
+    endpointClassId
   );
 }, poisonIfNested);
 
@@ -1660,12 +1647,10 @@ export const updateRecord = Effect.fn("Records.update")(function* updateRecord(
   input: UpdateInput
 ) {
   const body = yield* decodeWriteBody(input.body);
-  const { request } = yield* Transactions;
 
-  return yield* request(
-    updateInTransaction(input, body).pipe(
-      Effect.flatMap((saved) => finishSave(saved, input.endpointClassId))
-    )
+  return yield* saveAndFinalize(
+    updateInTransaction(input, body),
+    input.endpointClassId
   );
 }, poisonIfNested);
 
@@ -1679,12 +1664,9 @@ export const updateRecord = Effect.fn("Records.update")(function* updateRecord(
 export const deleteRecord = Effect.fn("Records.delete")(function* deleteRecord(
   input: DeleteInput
 ) {
-  const { request } = yield* Transactions;
-
-  return yield* request(
-    deleteInTransaction(input).pipe(
-      Effect.flatMap((saved) => finishSave(saved, input.endpointClassId))
-    )
+  return yield* saveAndFinalize(
+    deleteInTransaction(input),
+    input.endpointClassId
   );
 }, poisonIfNested);
 

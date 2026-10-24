@@ -8,9 +8,10 @@
  */
 import { HookDepthExceeded } from "@std/api/errors/hook-depth-exceeded";
 import type { RecordInSave } from "@std/api/errors/record-in-save";
-import { Context, Effect, Option } from "effect";
+import { Context, Effect } from "effect";
 
 import { CurrentTransaction } from "../sql/transaction-context.ts";
+import { poisonOnAnyFailure } from "./aggregate-finalize.ts";
 
 /**
  * The deepest nesting of saves: an outermost save and at most this many
@@ -101,17 +102,12 @@ export const poisonIfNested = <A, E, R>(
 ): Effect.Effect<A, E, R> =>
   Effect.gen(function* nestedSave() {
     const stack = yield* SaveStack;
-    const transaction = yield* Effect.serviceOption(CurrentTransaction);
 
-    if (stack.depth === 0 || Option.isNone(transaction)) {
+    if (stack.depth === 0) {
       return yield* effect;
     }
 
-    return yield* effect.pipe(
-      Effect.onError(() =>
-        transaction.value.refuseCommit("a nested save failed")
-      )
-    );
+    return yield* effect.pipe(poisonOnAnyFailure("a nested save failed"));
   });
 
 /**

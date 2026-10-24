@@ -202,21 +202,18 @@ export const readLedger: (
 ) => Effect.Effect<readonly LedgerEntry[], SqlError> = Effect.fn(
   "Platform.readLedger"
 )(function* readLedgerRows(sql: SqlClient.SqlClient) {
-  const [columns] = yield* sql
-    .unsafe(LEDGER_COLUMNS)
-    .pipe(Effect.flatMap(decodeLedgerColumns));
+  const [columns] = yield* readOnly(sql.unsafe(LEDGER_COLUMNS)).pipe(
+    Effect.flatMap(decodeLedgerColumns)
+  );
 
   if (columns?.present !== true) {
     return [];
   }
 
-  return yield* sql
-    .unsafe(ledgerRows(columns.stateful, columns.phased))
-    .pipe(Effect.flatMap(decodeEntries));
+  return yield* readOnly(
+    sql.unsafe(ledgerRows(columns.stateful, columns.phased))
+  ).pipe(Effect.flatMap(decodeEntries));
 });
-
-/** Decodes ledger rows (for `doctor`, which reads them read-only). */
-export const decodeLedgerRows = decodeEntries;
 
 /** Installed optional-app versions; usable before the layer tables exist. */
 export const installedSetVersions = Effect.fn("Platform.installedSetVersions")(

@@ -65,6 +65,8 @@ const levelsOf = (
   return [...lineage, ...descendants];
 };
 
+const relations = new WeakMap<ConfigSnapshot, Map<DefinitionId, SqlFragment>>();
+
 /**
  * The relation of a class.
  *
@@ -77,6 +79,12 @@ export const recordRelation = (
   snapshot: ConfigSnapshot,
   classId: DefinitionId
 ): SqlFragment => {
+  const cached = relations.get(snapshot)?.get(classId);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
   const levels = levelsOf(snapshot, classId);
   const [root, ...rest] = levels;
 
@@ -101,5 +109,15 @@ export const recordRelation = (
 
   const from = sql`${rawSql(tableName(snapshot, root.classId))} AS ${identSql(root.alias)}`;
 
-  return sql`(SELECT ${joinSql(columns, ", ")} FROM ${joinSql([from, ...joins], " ")})`;
+  const relation = sql`(SELECT ${joinSql(columns, ", ")} FROM ${joinSql([from, ...joins], " ")})`;
+  let byClass = relations.get(snapshot);
+
+  if (byClass === undefined) {
+    byClass = new Map();
+    relations.set(snapshot, byClass);
+  }
+
+  byClass.set(classId, relation);
+
+  return relation;
 };

@@ -279,36 +279,34 @@ const concreteRecords = Effect.fn("Tmf.concreteRecords")(
     records: readonly DecodedRecord[]
   ) {
     const keys = sourceKeysOf(read.attributes);
-    const byClass = new Map<DefinitionId, string[]>();
 
-    for (const record of records) {
-      if (
-        record.classId !== view.classId ||
-        read.extraKeys(record.classId).size > 0
-      ) {
-        const ids = byClass.get(record.classId);
-
-        if (ids === undefined) {
-          byClass.set(record.classId, [record.id]);
-        } else {
-          ids.push(record.id);
-        }
-      }
-    }
+    const byClass = Map.groupBy(
+      records.filter(
+        (record) =>
+          record.classId !== view.classId ||
+          read.extraKeys(record.classId).size > 0
+      ),
+      (record) => record.classId
+    );
 
     const concrete = new Map<string, DecodedRecord>();
 
-    for (const [classId, ids] of byClass) {
+    for (const [classId, group] of byClass) {
       const own = read.scope.view(classId, true);
 
-      const found = yield* readByIds(read.scope, own, ids, {
-        ...READ_OPTIONS,
-        selection: selectionOf(
-          read.scope,
-          own,
-          new Set([...keys, ...read.extraKeys(classId)])
-        ),
-      });
+      const found = yield* readByIds(
+        read.scope,
+        own,
+        group.map((record) => record.id),
+        {
+          ...READ_OPTIONS,
+          selection: selectionOf(
+            read.scope,
+            own,
+            new Set([...keys, ...read.extraKeys(classId)])
+          ),
+        }
+      );
 
       for (const [id, record] of found) {
         concrete.set(id, record);

@@ -288,9 +288,18 @@ export const lockAggregates = Effect.fn("Records.lockAggregates")(
 
       if (Option.isSome(link)) {
         const self: ChainLink = { classId: link.value.classId, id: member.id };
-        const above = yield* readChain(snapshot, link.value.classId, member.id);
+        const reference = ownerReferenceOf(snapshot, link.value.classId);
 
-        chains.push(Option.isSome(above) ? above.value : [self]);
+        const above =
+          reference?.type.kind !== "reference" || link.value.ownerId === null
+            ? Option.none()
+            : yield* readChain(
+                snapshot,
+                reference.type.targetClassId,
+                link.value.ownerId
+              );
+
+        chains.push(Option.isSome(above) ? [self, ...above.value] : [self]);
       }
     }
 

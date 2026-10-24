@@ -168,12 +168,8 @@ const sourcesReadable = (
   return true;
 };
 
-const knownReadability = (
-  delivery: EventDelivery,
-  context: RenderContext,
-  previous: boolean
-) => {
-  const entries = previous ? context.entries.slice(0, -1) : context.entries;
+const knownReadability = (delivery: EventDelivery, context: RenderContext) => {
+  const entries = context.entries.slice(0, -1);
   const image = versionImage(delivery.snapshot, entries, context.origins);
 
   const decoded = decodedImage(
@@ -198,11 +194,14 @@ const knownReadability = (
 };
 
 const allowedFields = (delivery: EventDelivery, context: RenderContext) => {
-  const current = knownReadability(delivery, context, false);
+  const current = {
+    fields: new Set(Object.keys(delivery.payload.image)),
+    visible: delivery.payload.visible,
+  };
 
   const before =
     delivery.payload.kind === "update"
-      ? knownReadability(delivery, context, true)
+      ? knownReadability(delivery, context)
       : current;
 
   const sources = derivedSources(delivery.snapshot, delivery.payload.classId);

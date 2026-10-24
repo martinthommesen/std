@@ -130,25 +130,30 @@ export const choicePredicates = (
 const boundPredicates = (
   column: string,
   tightened: FieldType,
-  previous: FieldType
+  previous?: FieldType
 ): readonly string[] => {
   if (
-    (tightened.kind === "integer" ||
-      tightened.kind === "bigInteger" ||
-      tightened.kind === "decimal") &&
-    tightened.kind === previous.kind
+    tightened.kind !== "integer" &&
+    tightened.kind !== "bigInteger" &&
+    tightened.kind !== "decimal"
   ) {
-    return [
-      ...(tightened.min !== undefined && tightened.min !== previous.min
-        ? [`${column} < ${defaultLiteral(tightened, tightened.min)}`]
-        : []),
-      ...(tightened.max !== undefined && tightened.max !== previous.max
-        ? [`${column} > ${defaultLiteral(tightened, tightened.max)}`]
-        : []),
-    ];
+    return [];
   }
 
-  return [];
+  if (previous !== undefined && previous.kind !== tightened.kind) {
+    return [];
+  }
+
+  return [
+    ...(tightened.min !== undefined &&
+    (previous === undefined || tightened.min !== previous.min)
+      ? [`${column} < ${defaultLiteral(tightened, tightened.min)}`]
+      : []),
+    ...(tightened.max !== undefined &&
+    (previous === undefined || tightened.max !== previous.max)
+      ? [`${column} > ${defaultLiteral(tightened, tightened.max)}`]
+      : []),
+  ];
 };
 
 const isTextType = (
@@ -159,13 +164,17 @@ const isTextType = (
 const lengthPredicates = (
   column: string,
   tightened: FieldType,
-  previous: FieldType
+  previous?: FieldType
 ): readonly string[] => {
-  if (!(isTextType(tightened) && isTextType(previous))) {
+  if (
+    !isTextType(tightened) ||
+    (previous !== undefined && !isTextType(previous))
+  ) {
     return [];
   }
 
-  return maxLengthOf(tightened) < maxLengthOf(previous)
+  return previous === undefined ||
+    maxLengthOf(tightened) < maxLengthOf(previous)
     ? [`char_length(${column}) > ${maxLengthOf(tightened)}`]
     : [];
 };
@@ -182,38 +191,11 @@ export const violationPredicates = (
   column: string,
   field: EffectiveField,
   previous?: EffectiveField
-): readonly string[] => {
-  if (previous !== undefined) {
-    return [
-      ...(field.required && !previous.required ? [`${column} IS NULL`] : []),
-      ...lengthPredicates(column, field.type, previous.type),
-      ...boundPredicates(column, field.type, previous.type),
-      ...choicePredicates(column, field.choices, previous.choices),
-    ];
-  }
-
-  const { type } = field;
-  const predicates = field.required ? [`${column} IS NULL`] : [];
-
-  if (isTextType(type)) {
-    predicates.push(`char_length(${column}) > ${maxLengthOf(type)}`);
-  }
-
-  if (
-    type.kind === "integer" ||
-    type.kind === "bigInteger" ||
-    type.kind === "decimal"
-  ) {
-    if (type.min !== undefined) {
-      predicates.push(`${column} < ${defaultLiteral(type, type.min)}`);
-    }
-
-    if (type.max !== undefined) {
-      predicates.push(`${column} > ${defaultLiteral(type, type.max)}`);
-    }
-  }
-
-  predicates.push(...choicePredicates(column, field.choices, null));
-
-  return predicates;
-};
+): readonly string[] => [
+  ...(field.required && previous?.required !== true
+    ? [`${column} IS NULL`]
+    : []),
+  ...lengthPredicates(column, field.type, previous?.type),
+  ...boundPredicates(column, field.type, previous?.type),
+  ...choicePredicates(column, field.choices, previous?.choices ?? null),
+];

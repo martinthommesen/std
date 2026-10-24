@@ -179,13 +179,17 @@ export const listTopics = Effect.fn("Tmf688.listTopics")(function* listTopics(
     topicRepresentation(origin, id, { name: id })
   );
 
+  if (topics.length >= limit) {
+    return topics.slice(0, limit);
+  }
+
   const actor = yield* Actor;
   const snapshot = yield* (yield* Catalog).current;
 
   if (knowsTable(snapshot, actor, EVENT_CLASS_IDS.topic)) {
     for (const record of yield* recordsWindow(
       "core.event_topic",
-      Math.max(1, limit - topics.length)
+      limit - topics.length
     )) {
       topics.push(
         topicRepresentation(origin, textOf(record.id), objectOf(record.values))
