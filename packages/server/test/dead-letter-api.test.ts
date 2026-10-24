@@ -279,6 +279,42 @@ describe("dead-letter API", () => {
         })
     );
     dbTest.effect(
+      "same-attribute fields conflicts reject both marker orders on dead-delivery lists and reads",
+      () =>
+        Effect.gen(function* fieldConflicts() {
+          const { admin } = yield* callers;
+          const seeded = yield* seedDeadLetters(admin);
+          const http = yield* TestHttpClient;
+
+          for (const path of [COLLECTION, `${COLLECTION}/${seeded.firstId}`]) {
+            for (const fields of ["attempts,!attempts", "!attempts,attempts"]) {
+              const response = yield* http.get(
+                `${path}?fields=${encodeURIComponent(fields)}`,
+                admin
+              );
+
+              assert.strictEqual(
+                response.status,
+                409,
+                `${path}: ${response.text}`
+              );
+              assert.deepStrictEqual(response.json, {
+                "@baseType": "Error",
+                "@schemaLocation":
+                  "/api/v1/openapi.json#/components/schemas/FieldsConflict",
+                "@type": "FieldsConflict",
+                code: "FieldsConflict",
+                field: "attempts",
+                message: "fields includes and excludes the same attribute",
+                reason: "fields includes and excludes the same attribute",
+                status: "409",
+              });
+            }
+          }
+        })
+    );
+
+    dbTest.effect(
       "non-admin list and tasks answer exactly like a missing resource, even with malformed bodies",
       () =>
         Effect.gen(function* hidden() {

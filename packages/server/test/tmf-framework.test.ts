@@ -108,6 +108,54 @@ describe("tmf-framework", () => {
     );
 
     dbTest.effect(
+      "same-attribute fields conflicts use declared 400 in both marker orders on mapped lists and reads",
+      () =>
+        Effect.gen(function* fieldConflicts() {
+          const http = yield* TestHttpClient;
+
+          const alice = {
+            token: yield* http.signIn("alice", "alice-password"),
+          };
+
+          const created = yield* createFixtureTicket(alice, {
+            description: "Conflict proof",
+          });
+
+          for (const path of [
+            FIXTURE_TICKETS,
+            `${FIXTURE_TICKETS}/${textOf(created.id)}`,
+          ]) {
+            for (const fields of [
+              "description,!description",
+              "!description,description",
+            ]) {
+              const response = yield* http.get(
+                `${path}?fields=${encodeURIComponent(fields)}`,
+                alice
+              );
+
+              assert.strictEqual(
+                response.status,
+                400,
+                `${path}: ${response.text}`
+              );
+              assert.deepStrictEqual(response.json, {
+                "@baseType": "Error",
+                "@schemaLocation":
+                  "/api/v1/openapi.json#/components/schemas/FieldsConflict",
+                "@type": "FieldsConflict",
+                code: "FieldsConflict",
+                field: "description",
+                message: "fields includes and excludes the same attribute",
+                reason: "fields includes and excludes the same attribute",
+                status: "400",
+              });
+            }
+          }
+        })
+    );
+
+    dbTest.effect(
       "a stale If-Match is VersionConflict with the declared 409 and the current ETag; none applies to the locked version",
       () =>
         Effect.gen(function* versions() {
