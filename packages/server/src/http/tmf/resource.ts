@@ -83,6 +83,7 @@ import {
 } from "../api/patch.ts";
 import type { PatchOperation } from "../api/patch.ts";
 import {
+  collectionAnswer,
   jsonAnswer,
   linkHeader,
   withoutTypeMembers,
@@ -463,9 +464,8 @@ export const listTmf = Effect.fn("Tmf.list")(function* listTmf(
 
   const render = renderInputOf(input, scope, parsed.fields);
 
-  return jsonAnswer(
+  return collectionAnswer(
     records.map((record) => renderFor(render, record)),
-    200,
     {
       link: linkHeader({
         cursorPage: !parsed.offsetPage,

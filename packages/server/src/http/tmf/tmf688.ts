@@ -51,7 +51,7 @@ import type { ChangeSetServices } from "../../schema/change-set.ts";
 import { Transactions } from "../../sql/transactions.ts";
 import { answered } from "../api/answered.ts";
 import { withoutBody } from "../api/methods.ts";
-import { jsonAnswer } from "../api/records.ts";
+import { collectionAnswer, jsonAnswer } from "../api/records.ts";
 import {
   jsonBodyOf,
   mediaTypeOf,
@@ -531,7 +531,7 @@ const eventPageAnswer = Effect.fn("Tmf688.eventPageAnswer")(
       input.query.has("after") ||
       input.query.get("count") === "false"
     ) {
-      return jsonAnswer(page, 200, headers);
+      return collectionAnswer(page, headers);
     }
 
     const hasFilters = [...input.query.keys()].some(
@@ -543,7 +543,7 @@ const eventPageAnswer = Effect.fn("Tmf688.eventPageAnswer")(
         ? scan.scanned
         : scan.selected.length;
 
-    return jsonAnswer(page, 200, {
+    return collectionAnswer(page, {
       ...headers,
       "x-total-count": String(count),
     });

@@ -37,7 +37,12 @@ import { currentReadScope } from "../../records/read-records.ts";
 import type { ReadScope } from "../../records/read-view.ts";
 import { checkRequestRevision } from "../stale-request.ts";
 import { alternativesOf } from "./query.ts";
-import { jsonAnswer, linkHeader, tableOf } from "./records.ts";
+import {
+  collectionAnswer,
+  jsonAnswer,
+  linkHeader,
+  tableOf,
+} from "./records.ts";
 import type { RouteInput } from "./records.ts";
 import { queryOf } from "./request.ts";
 import { entityRef, recordHref } from "./resource.ts";
@@ -638,10 +643,10 @@ export const historyIn = Effect.fn("Api.history")(function* historyIn(
   const headers = { link, "x-result-count": String(entries.length) };
 
   if (page.total === undefined) {
-    return jsonAnswer(body, 200, headers);
+    return collectionAnswer(body, headers);
   }
 
-  return jsonAnswer(body, 200, {
+  return collectionAnswer(body, {
     ...headers,
     "x-total-count": String(page.total),
   });

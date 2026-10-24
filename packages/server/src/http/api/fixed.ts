@@ -65,7 +65,7 @@ import { tableOpenApi } from "../table-openapi.ts";
 import { answered } from "./answered.ts";
 import { getAndHead } from "./methods.ts";
 import { apiOpenApiText } from "./openapi.ts";
-import { jsonAnswer } from "./records.ts";
+import { collectionAnswer, jsonAnswer } from "./records.ts";
 import { checkedSessionCreate } from "./request-schemas.ts";
 import {
   jsonBodyOf,
@@ -565,7 +565,7 @@ export const FixedRoutes = Layer.unwrap(
 
         const entries = tableEntries(snapshot, listed, origin);
 
-        return jsonAnswer(entries, 200, {
+        return collectionAnswer(entries, {
           "x-result-count": String(entries.length),
           "x-total-count": String(entries.length),
         });

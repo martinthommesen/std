@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { knowsTable } from "@std/access/rules";
 /**
  * The generic record routes of `/api/v1` (Contracts 10.1 to 10.5): every
@@ -70,6 +72,9 @@ import {
   tableOfCollection,
 } from "./table-names.ts";
 
+const jsonBytes = (body: JsonValue): Buffer =>
+  Buffer.from(stringifyJson(body), "utf-8");
+
 /**
  * A response with a JSON body written with `stringifyJson` (jsonb key
  * order for json values, Contracts 6.5).
@@ -84,11 +89,37 @@ export const jsonAnswer = (
   status: number,
   headers: Readonly<Record<string, string>> = {}
 ): HttpServerResponse.HttpServerResponse =>
-  HttpServerResponse.text(stringifyJson(body), {
+  HttpServerResponse.uint8Array(jsonBytes(body), {
     contentType: "application/json",
     headers,
     status,
   });
+
+/**
+ * A collection's final selected representation. Serialize and encode once;
+ * hash and send the same bytes (TMF630 P1 §1.5.2; RFC 9110 §8.8.3).
+ * Only caller-visible values belong here. Revision ETags on individual
+ * resources remain the write precondition contract (Contracts 10.5).
+ *
+ * @param resources - The rendered collection after access, selection and paging.
+ * @param headers - Counts and navigation metadata, outside the representation.
+ * @returns A JSON 200 response with a strong complete-representation ETag.
+ */
+export const collectionAnswer = (
+  resources: readonly JsonValue[],
+  headers: Readonly<Record<string, string>> = {}
+): HttpServerResponse.HttpServerResponse => {
+  const bytes = jsonBytes(resources);
+
+  return HttpServerResponse.uint8Array(bytes, {
+    contentType: "application/json",
+    headers: {
+      ...headers,
+      etag: `"sha256-${createHash("sha256").update(bytes).digest("hex")}"`,
+    },
+    status: 200,
+  });
+};
 
 const etagOf = (revision: number): string => `"${revision}"`;
 
@@ -490,7 +521,7 @@ export const listIn = Effect.fn("Api.list")(function* listIn(
   const counts =
     page.count === undefined ? {} : { "x-total-count": String(page.count) };
 
-  return jsonAnswer(
+  return collectionAnswer(
     (yield* concreteRecords(
       input.stated,
       scope,
@@ -498,7 +529,6 @@ export const listIn = Effect.fn("Api.list")(function* listIn(
       page.records,
       fieldsOf(query)
     )).map((record) => resourceOf(scope, input.origin, record)),
-    200,
     {
       link: linkHeader({
         cursorPage,

@@ -111,6 +111,7 @@ describe("list-order", () => {
           ]);
 
         const all = yield* admin.get(query([["limit", "1000"]]));
+        assert.isNotNull(all.headers.get("etag"));
         assert.deepStrictEqual(
           itemsOf(all).map((item) => item.name),
           ENGLISH_ORDER
@@ -249,6 +250,11 @@ describe("list-order", () => {
         );
 
         assert.strictEqual(swedishAnswer.status, 200, swedishAnswer.text);
+        assert.notStrictEqual(swedishAnswer.text, all.text);
+        assert.notStrictEqual(
+          swedishAnswer.headers.get("etag"),
+          all.headers.get("etag")
+        );
         const swedish = itemsOf(swedishAnswer).map((item) => textOf(item.name));
         assert.isBelow(swedish.indexOf("Zulu"), swedish.indexOf("Ångström"));
         assert.strictEqual((yield* runDoctor()).exitCode, 0);
@@ -286,6 +292,11 @@ describe("list-order", () => {
         );
 
         assert.strictEqual(englishAnswer.status, 200, englishAnswer.text);
+        assert.strictEqual(englishAnswer.text, all.text);
+        assert.strictEqual(
+          englishAnswer.headers.get("etag"),
+          all.headers.get("etag")
+        );
         assert.deepStrictEqual(
           itemsOf(englishAnswer).map((item) => item.name),
           ENGLISH_ORDER

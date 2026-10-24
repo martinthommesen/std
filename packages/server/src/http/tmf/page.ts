@@ -9,7 +9,7 @@ import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Result } from "effect";
 
 import { alternativesOf } from "../api/query.ts";
-import { jsonAnswer, linkHeader } from "../api/records.ts";
+import { collectionAnswer, linkHeader } from "../api/records.ts";
 import type { PageLinks } from "../api/records.ts";
 
 /** TMF688 list directives, excluded from scalar resource filters. */
@@ -295,9 +295,8 @@ export const pageAnswer = Effect.fn("Tmf688.page")(function* pageAnswer(
     "x-result-count": String(page.length),
   };
 
-  return jsonAnswer(
+  return collectionAnswer(
     page,
-    200,
     complete
       ? { ...headers, "x-total-count": String(selected.length) }
       : headers

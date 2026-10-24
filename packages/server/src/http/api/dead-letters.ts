@@ -42,6 +42,7 @@ import { answered } from "./answered.ts";
 import { getAndHead } from "./methods.ts";
 import { alternativesOf, parseListQuery, parseReadQuery } from "./query.ts";
 import {
+  collectionAnswer,
   jsonAnswer,
   linkHeader,
   savedAnswer,
@@ -223,7 +224,7 @@ const list = Effect.fn("DeadLetters.list")(function* list(
     headers["x-total-count"] = String(result.page.count);
   }
 
-  return jsonAnswer(resources, 200, { ...headers });
+  return collectionAnswer(resources, { ...headers });
 });
 
 const get = Effect.fn("DeadLetters.get")(function* get(

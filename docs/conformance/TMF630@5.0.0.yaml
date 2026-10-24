@@ -256,7 +256,7 @@ rows:
     level: recommended
     requirement: The server should send an ETag that changes whenever the representation changes; for a list response the ETag covers the whole response.
     status: pending
-    note: 'C10.5: `ETag: "<version>"` on every single-resource response; gap: list responses (C10.4) carry no ETag'
+    note: "C10.4: collection-etag proves final serialized-body ETags on generic, mapped, history, metadata, deadDelivery and TMF688 lists, with independent body hashes and raw TCP HEAD checks; list-order proves locale-dependent ordering changes tags and restored bytes restore tags. Scoped collection evidence only: the whole row remains pending because C10.5/11.1 preserve revision-based single-resource ETags and write preconditions, which do not identify every projection, mask or referenced-label representation."
   - id: TMF630@5.0.0/P1/1.5.2/location-on-create
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
     level: mandatory
