@@ -139,7 +139,11 @@ const linkTo = (
   const path = request.url.split("?")[0] ?? "";
 
   const kept = query.filter(
-    ([key]) => key !== "offset" && key !== "after" && key !== "before"
+    ([key]) =>
+      key !== "offset" &&
+      key !== "after" &&
+      key !== "before" &&
+      !Object.hasOwn(changes, key)
   );
 
   const search = new URLSearchParams([
@@ -160,6 +164,8 @@ export interface PageLinks {
   readonly query: QueryParameters;
   readonly offset: number;
   readonly limit: number;
+  /** Existing exclusive offset-window end; destination limits shrink to fit. */
+  readonly offsetEnd?: number;
   /** Known nonempty previous offset; null omits prev even without an exact count. */
   readonly previousOffset?: number | null;
   readonly cursorPage: boolean;
@@ -197,24 +203,38 @@ export const linkHeader = (links: PageLinks): string => {
     return entries.join(", ");
   }
 
-  const total = page.count ?? 0;
+  const toOffset = (destination: number, end = links.offsetEnd) => {
+    if (end === undefined) {
+      return to({ offset: String(destination) });
+    }
+
+    return to({
+      limit: String(Math.min(limit, end - destination)),
+      offset: String(destination),
+    });
+  };
+
+  const total = Math.min(page.count ?? 0, links.offsetEnd ?? Infinity);
   const lastOffset = Math.max(0, Math.floor((total - 1) / limit) * limit);
 
-  entries.push(`${to({ offset: "0" })}; rel="first"`);
+  entries.push(`${toOffset(0)}; rel="first"`);
 
   if (offset > 0 && page.count !== 0 && links.previousOffset !== null) {
     const previousOffset = links.previousOffset ?? Math.max(0, offset - limit);
     entries.push(
-      `${to({ offset: String(page.count === undefined ? previousOffset : Math.min(previousOffset, lastOffset)) })}; rel="prev"`
+      `${toOffset(page.count === undefined ? previousOffset : Math.min(previousOffset, lastOffset), links.offsetEnd === undefined ? undefined : offset)}; rel="prev"`
     );
   }
 
-  if (page.hasMore) {
-    entries.push(`${to({ offset: String(offset + limit) })}; rel="next"`);
+  if (
+    page.hasMore &&
+    (links.offsetEnd === undefined || offset + limit < links.offsetEnd)
+  ) {
+    entries.push(`${toOffset(offset + limit)}; rel="next"`);
   }
 
   if (page.count !== undefined) {
-    entries.push(`${to({ offset: String(lastOffset) })}; rel="last"`);
+    entries.push(`${toOffset(lastOffset)}; rel="last"`);
   }
 
   return entries.join(", ");
