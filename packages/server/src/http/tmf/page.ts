@@ -9,7 +9,8 @@ import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Result } from "effect";
 
 import { alternativesOf } from "../api/query.ts";
-import { jsonAnswer } from "../api/records.ts";
+import { jsonAnswer, linkHeader } from "../api/records.ts";
+import type { PageLinks } from "../api/records.ts";
 
 /** TMF688 list directives, excluded from scalar resource filters. */
 export const CONTROL: ReadonlySet<string> = new Set([
@@ -234,7 +235,8 @@ export const pageAnswer = Effect.fn("Tmf688.page")(function* pageAnswer(
   resources: readonly JsonObject[],
   params: URLSearchParams,
   attributes: readonly string[],
-  complete = true
+  location: Pick<PageLinks, "origin" | "request">,
+  complete: boolean
 ) {
   const bounds = pageBounds(params);
 
@@ -245,7 +247,7 @@ export const pageAnswer = Effect.fn("Tmf688.page")(function* pageAnswer(
     });
   }
 
-  if (params.has("after") || params.has("sort")) {
+  if (params.has("after") || params.has("before") || params.has("sort")) {
     return yield* new InvalidRequest({
       message: "This resource list uses offset and limit.",
       parameter: "after",
@@ -260,15 +262,29 @@ export const pageAnswer = Effect.fn("Tmf688.page")(function* pageAnswer(
     .slice(bounds.offset, bounds.offset + bounds.limit)
     .map((resource) => selectFields(resource, fields));
 
+  const paging = {
+    firstCursor: null,
+    hasMore: bounds.offset + bounds.limit < selected.length,
+    nextCursor: null,
+  };
+
   const headers = {
+    link: linkHeader({
+      ...location,
+      ...bounds,
+      cursorPage: false,
+      fromCursor: false,
+      page: complete ? { ...paging, count: selected.length } : paging,
+      query: [...params],
+    }),
     "x-result-count": String(page.length),
   };
 
   return jsonAnswer(
     page,
     200,
-    complete === false
-      ? headers
-      : { ...headers, "x-total-count": String(selected.length) }
+    complete
+      ? { ...headers, "x-total-count": String(selected.length) }
+      : headers
   );
 });

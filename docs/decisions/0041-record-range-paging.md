@@ -1,0 +1,5 @@
+# 0041. Preserve record cursor intervals across direction changes
+
+Status: accepted, 2026-10-24 (B2 paging; Contracts 3.5, 10.3–10.4; TMF630 v5.0.0 Part 1 §4.5.3–4.5.6 pp.85–95).
+
+Retaining the opposite bound in link queries loses the original lower bound on a forward move and the original upper bound on a backward move, so it cannot preserve the interval when direction changes using only the existing `after` and `before` parameters. Following decision 0040, bounded record continuation cursors extend decision 0008's position-only envelope with both original exclusive positions in an optional `range` member under the existing sort signature; unbounded cursors retain their existing encoding, no stored schema changes, and callers continue treating cursors as opaque. The record paging module owns interval predicates and directional existence: a lookahead handles the selected direction and an authorized, filtered `EXISTS` in the same statement handles the opposite direction, while counts retain their existing filter-only semantics.

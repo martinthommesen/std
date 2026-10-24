@@ -306,7 +306,7 @@ const readHubs = Effect.fn("Tmf688.readHubs")(function* readHubs(
       }
     }
 
-    return yield* pageAnswer(hubs, input.query, HUB_FIELDS);
+    return yield* pageAnswer(hubs, input.query, HUB_FIELDS, input, true);
   }
 
   const hub = ownedHub(
@@ -610,6 +610,7 @@ const resourceRequest = Effect.fn("Tmf688.resourceRequest")(
           topics,
           input.query,
           TOPIC_FIELDS,
+          input,
           topics.length < 1000
         );
       }

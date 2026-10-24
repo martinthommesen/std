@@ -59,11 +59,43 @@ export interface CursorPosition {
   /** Key values as text, null for empty. */
   readonly values: readonly (string | null)[];
   readonly id: string;
+  /** Original exclusive bounds, separate from the moving page position. */
+  readonly range?: CursorRange;
 }
 
-const CursorSchema = Schema.Struct({
+/** The original interval retained when a bounded page changes direction. */
+export interface CursorRange {
+  readonly after: Pick<CursorPosition, "id" | "values">;
+  readonly before: Pick<CursorPosition, "id" | "values">;
+}
+
+/**
+ * Resolves explicit bounds or the original bounds of a continuation.
+ * @param after - The forward position, when given.
+ * @param before - The backward position, when given.
+ * @returns The original exclusive interval, or an unbounded traversal.
+ */
+export const cursorRange = (
+  after: CursorPosition | undefined,
+  before: CursorPosition | null
+): CursorRange | undefined => {
+  if (after !== undefined && before !== null) {
+    return { after, before };
+  }
+
+  return after?.range ?? before?.range;
+};
+
+const PositionSchema = Schema.Struct({
   i: Schema.String,
   k: Schema.Array(Schema.NullOr(Schema.String)),
+});
+
+const CursorSchema = Schema.Struct({
+  ...PositionSchema.fields,
+  range: Schema.optionalKey(
+    Schema.Struct({ after: PositionSchema, before: PositionSchema })
+  ),
   s: Schema.Array(Schema.String),
 });
 
@@ -204,15 +236,32 @@ export const sortSignature = (keys: readonly SortKey[]): string[] =>
 export const encodeCursor = (
   keys: readonly SortKey[],
   position: CursorPosition
-): string =>
-  Buffer.from(
-    encodeCursorJson({
-      i: position.id,
-      k: [...position.values],
-      s: sortSignature(keys),
-    }),
-    "utf-8"
-  ).toString("base64url");
+): string => {
+  const cursor = {
+    i: position.id,
+    k: [...position.values],
+    s: sortSignature(keys),
+  };
+
+  const encoded =
+    position.range === undefined
+      ? cursor
+      : {
+          ...cursor,
+          range: {
+            after: {
+              i: position.range.after.id,
+              k: [...position.range.after.values],
+            },
+            before: {
+              i: position.range.before.id,
+              k: [...position.range.before.values],
+            },
+          },
+        };
+
+  return Buffer.from(encodeCursorJson(encoded), "utf-8").toString("base64url");
+};
 
 /**
  * Trims a fetched cursor page and builds its navigation cursors.
@@ -220,13 +269,15 @@ export const encodeCursor = (
  * @param limit - The validated positive page limit.
  * @param reversed - Whether SQL read a before page in reverse order.
  * @param keys - Original sort keys, before reversal.
+ * @param range - Original bounds of a bounded cursor traversal.
  * @returns Rows in display order and opaque navigation cursors.
  */
 export const finishPage = <Row extends Readonly<Record<string, string | null>>>(
   fetched: readonly Row[],
   limit: number,
   reversed: boolean,
-  keys: readonly SortKey[]
+  keys: readonly SortKey[],
+  range?: CursorRange
 ) => {
   const read = fetched.slice(0, limit);
   const rows = reversed ? read.toReversed() : read;
@@ -237,11 +288,17 @@ export const finishPage = <Row extends Readonly<Record<string, string | null>>>(
     ? last !== undefined
     : fetched.length > limit && last !== undefined;
 
-  const cursorOf = (row: Row) =>
-    encodeCursor(keys, {
+  const cursorOf = (row: Row) => {
+    const position = {
       id: row.id ?? "",
       values: keys.map((_, index) => row[`k${index}`] ?? null),
-    });
+    };
+
+    return encodeCursor(
+      keys,
+      range === undefined ? position : { ...position, range }
+    );
+  };
 
   return {
     firstCursor: first === undefined ? null : cursorOf(first),
@@ -329,27 +386,47 @@ export const decodeCursor = Effect.fn("ReadCursor.decode")(
       cursor.s.length === signature.length &&
       cursor.s.every((entry, index) => entry === signature[index]);
 
-    const validValues =
-      cursor.k.length === keys.length &&
-      keys.every((key, index) => {
-        const value = cursor.k[index];
+    const validPosition = (position: typeof PositionSchema.Type): boolean => {
+      const validId =
+        identityType === "uuid"
+          ? parseUuid(position.i).ok
+          : parseInt8Text(position.i).ok;
 
-        return (
-          value === null ||
-          value === undefined ||
-          validKeyText(key.field.type, value)
-        );
-      });
+      return (
+        validId &&
+        position.k.length === keys.length &&
+        keys.every((key, index) => {
+          const value = position.k[index];
 
-    const validId =
-      identityType === "uuid"
-        ? parseUuid(cursor.i).ok
-        : parseInt8Text(cursor.i).ok;
+          return (
+            value === null ||
+            value === undefined ||
+            validKeyText(key.field.type, value)
+          );
+        })
+      );
+    };
 
-    if (!sameSort || !validValues || !validId) {
+    const validRange =
+      cursor.range === undefined ||
+      (validPosition(cursor.range.after) && validPosition(cursor.range.before));
+
+    if (!sameSort || !validPosition(cursor) || !validRange) {
       return yield* new InvalidCursor();
     }
 
-    return { id: cursor.i, values: cursor.k } satisfies CursorPosition;
+    const position = { id: cursor.i, values: cursor.k };
+
+    if (cursor.range === undefined) {
+      return position;
+    }
+
+    return {
+      ...position,
+      range: {
+        after: { id: cursor.range.after.i, values: cursor.range.after.k },
+        before: { id: cursor.range.before.i, values: cursor.range.before.k },
+      },
+    } satisfies CursorPosition;
   }
 );

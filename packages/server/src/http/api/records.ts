@@ -161,7 +161,7 @@ export interface PageLinks {
   readonly offset: number;
   readonly limit: number;
   readonly cursorPage: boolean;
-  /** Whether the page was asked for with a cursor (it then has a `prev`). */
+  /** Whether the request uses a cursor; the page decides if `prev` exists. */
   readonly fromCursor: boolean;
   readonly page: Pick<Page, "count" | "firstCursor" | "nextCursor" | "hasMore">;
 }
@@ -200,9 +200,10 @@ export const linkHeader = (links: PageLinks): string => {
 
   entries.push(`${to({ offset: "0" })}; rel="first"`);
 
-  if (offset > 0) {
+  if (offset > 0 && page.count !== 0) {
+    const previousOffset = Math.max(0, offset - limit);
     entries.push(
-      `${to({ offset: String(Math.max(0, offset - limit)) })}; rel="prev"`
+      `${to({ offset: String(page.count === undefined ? previousOffset : Math.min(previousOffset, lastOffset)) })}; rel="prev"`
     );
   }
 
@@ -210,7 +211,9 @@ export const linkHeader = (links: PageLinks): string => {
     entries.push(`${to({ offset: String(offset + limit) })}; rel="next"`);
   }
 
-  entries.push(`${to({ offset: String(lastOffset) })}; rel="last"`);
+  if (page.count !== undefined) {
+    entries.push(`${to({ offset: String(lastOffset) })}; rel="last"`);
+  }
 
   return entries.join(", ");
 };

@@ -1548,7 +1548,7 @@ rows:
     level: mandatory
     requirement: With query-based paging the server must return navigation links in the HTTP `Link` header (self, first, next, prev, last) so the client need not build them.
     status: pending
-    note: 'gap: Contracts 10.4 sends only `rel="next"` (with the next offset); self, first, prev and last are missing'
+    note: "B2 adds maintained topic and hub offset-link proof in packages/server/test/tmf-paging.test.ts, including filters, selection, past-end offsets and following every emitted link. The broad row remains pending: separate event and dead-delivery paging contexts are not fully proved by these tests; no new exclusion is inferred."
   - id: TMF630@5.0.0/P1/4.5.2/content-range-optional
     source: TMF630 v5.0.0 P1 §4.5.2 p.81
     level: optional
@@ -1597,14 +1597,16 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.3 p.91
     level: mandatory
     requirement: The server must answer a `before` or `after` value it does not recognise as a cursor with 400 Bad Request.
-    status: pending
-    note: "C10.3: `InvalidCursor` 400 (3.8)"
+    status: tested
+    tests:
+      - packages/server/test/tmf-paging.test.ts#filtered cursor ends omit empty adjacent pages and malformed cursors fail with 400
+    note: "Both malformed after and before requests return 400 InvalidCursor through the generic HTTP interface."
   - id: TMF630@5.0.0/P1/4.5.3/cursor-navigation-link-header
     source: TMF630 v5.0.0 P1 §4.5.3 p.92
     level: mandatory
     requirement: With cursor paging the server must return navigation links (self, next, prev) in the HTTP `Link` header; a missing next marks the last page and a missing prev the first.
     status: pending
-    note: 'gap: Contracts 10.4 sends only `rel="next"` on cursor pages; self and prev are missing'
+    note: "B2 proves authorized, filtered record and TMF621 navigation across bounded intervals and direction changes in packages/server/test/tmf-paging.test.ts. The broad row remains pending: separate event and dead-delivery cursor paths are not covered by this record-paging proof; no new exclusion is inferred."
   - id: TMF630@5.0.0/P1/4.5.4/after-starts-after-cursor
     source: TMF630 v5.0.0 P1 §4.5.4 p.92
     level: mandatory
@@ -1617,8 +1619,10 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.4 p.92
     level: mandatory
     requirement: When no item follows the `after` cursor, the server must return an empty array.
-    status: pending
-    note: "C10.4: `200` with a JSON array (empty)"
+    status: tested
+    tests:
+      - packages/server/test/tmf-paging.test.ts#filtered cursor ends omit empty adjacent pages and malformed cursors fail with 400
+    note: "An after-last request returns an empty 200 array and only the self link."
   - id: TMF630@5.0.0/P1/4.5.4/before-ends-before-cursor
     source: TMF630 v5.0.0 P1 §4.5.4 p.92
     level: mandatory
@@ -1631,8 +1635,10 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.4 p.92
     level: mandatory
     requirement: When no item precedes the `before` cursor, the server must return an empty array.
-    status: pending
-    note: "C10.4: `200` with a JSON array (empty)"
+    status: tested
+    tests:
+      - packages/server/test/tmf-paging.test.ts#filtered cursor ends omit empty adjacent pages and malformed cursors fail with 400
+    note: "A before-first request returns an empty 200 array and only the self link."
   - id: TMF630@5.0.0/P1/4.5.4/no-cursor-starts-at-first-item
     source: TMF630 v5.0.0 P1 §4.5.4 p.94
     level: mandatory
@@ -1645,14 +1651,19 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.5 p.94
     level: optional
     requirement: A client may send `after` and `before` together to ask for the range strictly between the two cursors; the server then returns that range (empty if `after` is not before `before`).
-    status: pending
-    note: "gap: Contracts 10.3 refuses `offset` with a cursor but does not say whether `after` and `before` together form a range; state it and test it"
+    status: tested
+    tests:
+      - packages/server/test/tmf-paging.test.ts#record range links preserve both exclusive bounds across three pages in both directions
+      - packages/server/test/tmf-paging.test.ts#TMF621 range links preserve both bounds across three pages and filtered ends
+    note: "Both exclusive bounds survive three forward and backward record pages, including direction changes; equal and reversed ranges return empty 200 arrays. Shared generic and TMF621 HTTP proof; totals retain filter-only semantics."
   - id: TMF630@5.0.0/P1/4.5.6/filter-cursor-no-match-empty-array
     source: TMF630 v5.0.0 P1 §4.5.6 p.95
     level: mandatory
     requirement: When filter criteria combined with a cursor select nothing, the server must return an empty array.
-    status: pending
-    note: "C10.4: `200` with a JSON array (empty); filters and cursors share one `WHERE` (3.5)"
+    status: tested
+    tests:
+      - packages/server/test/tmf-paging.test.ts#filtered cursor ends omit empty adjacent pages and malformed cursors fail with 400
+    note: "A cursor plus a filter with no matching authorized records returns an empty 200 array and only the self link."
   - id: TMF630@5.0.0/P1/4.6/sub-resource-items-have-id
     source: TMF630 v5.0.0 P1 §4.6 p.95
     level: mandatory
