@@ -2,6 +2,7 @@
  * Helpers for the `/api/v1` suites (Contracts 10): paths in v2 names,
  * responses as JSON values, and the acme fixture's callers.
  */
+import { assert } from "@effect/vitest";
 import {
   isJsonArray,
   isJsonNumber,
@@ -11,6 +12,7 @@ import {
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
+import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
   TestRequestOptions,
   TestResponse,
@@ -227,3 +229,41 @@ export const stale = (
   ...caller,
   headers: { [REVISION_HEADER]: revision },
 });
+
+/**
+ * An asset of Alice's with three history entries: created, then two
+ * updates.
+ *
+ * @param alice - Alice's request options.
+ * @param name - The fixture record's name.
+ * @returns The asset's path.
+ */
+export const assetWithHistory = Effect.fn("ApiSupport.assetWithHistory")(
+  function* assetWithHistory(alice: TestRequestOptions, name: string) {
+    const http = yield* TestHttpClient;
+
+    const created = yield* http.request("POST", API.asset, {
+      ...alice,
+      body: { name, status: "spare" },
+    });
+
+    assert.strictEqual(created.status, 201, created.text);
+
+    const path = `${API.asset}/${textOf(asObject(created.json).id)}`;
+
+    for (const [revision, status] of [
+      [1, "in_use"],
+      [2, "spare"],
+    ] as const) {
+      const patched = yield* http.request(
+        "PATCH",
+        path,
+        patchOptions(alice, MERGE_PATCH, { status }, `"${revision}"`)
+      );
+
+      assert.strictEqual(patched.status, 200, patched.text);
+    }
+
+    return path;
+  }
+);

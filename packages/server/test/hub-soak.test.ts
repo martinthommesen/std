@@ -49,9 +49,7 @@ describe("hub-soak", () => {
         const { admin } = yield* apiCallers;
         const received = yield* Deferred.make<boolean>();
         let stalled = true;
-        let newEvents = 0;
         const attempted = new Set<string>();
-        const failed = new Set<string>();
 
         const callback = yield* listener((call, response) => {
           if (stalled) {
@@ -62,18 +60,11 @@ describe("hub-soak", () => {
 
           const id = textOf(call.body.eventId);
 
-          if (attempted.has(id)) {
-            failed.delete(id);
-          } else {
-            attempted.add(id);
-            newEvents += 1;
-
-            if (newEvents % 5 === 0) {
-              failed.add(id);
-            }
-          }
-
-          response.writeHead(failed.has(id) ? 503 : 204);
+          const firstAttempt = !attempted.has(id);
+          attempted.add(id);
+          response.writeHead(
+            firstAttempt && attempted.size % 5 === 0 ? 503 : 204
+          );
           response.end();
         });
 

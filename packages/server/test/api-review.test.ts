@@ -36,10 +36,8 @@ import {
   statedRevision,
   textOf,
   API,
-  apiCallers,
   withQuery,
 } from "./api-support.ts";
-import type { ApiCallers } from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import { addAccessRule, addField, change } from "./schema-support.ts";
 
@@ -76,7 +74,11 @@ describe("api-review", () => {
       () =>
         Effect.gen(function* polymorphicStale() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            admin: { token: yield* http.signIn("ada", "ada-password") },
+          };
+
           const { alice } = yield* AcmeFixture;
 
           const childAttr = addField(ACME.laptop, "child_attr", {
@@ -138,7 +140,12 @@ describe("api-review", () => {
       () =>
         Effect.gen(function* unreadableMerge() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            admin: { token: yield* http.signIn("ada", "ada-password") },
+            bob: { token: yield* http.signIn("bob", "bob-password") },
+          };
+
           const { records } = yield* AcmeFixture;
           const catalog = yield* Catalog;
           const built = yield* catalog.refresh;
@@ -233,7 +240,11 @@ describe("api-review", () => {
       () =>
         Effect.gen(function* exclusionStale() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: { token: yield* http.signIn("alice", "alice-password") },
+          };
+
           const noteA = addField(ACME.asset, "note_a", { kind: "text" });
           const noteB = addField(ACME.asset, "note_b", { kind: "text" });
 
@@ -285,7 +296,10 @@ describe("api-review", () => {
       () =>
         Effect.gen(function* patchEnvelope() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: { token: yield* http.signIn("alice", "alice-password") },
+          };
 
           const created = yield* http.request(
             "POST",
@@ -351,7 +365,11 @@ describe("api-review", () => {
       () =>
         Effect.gen(function* methodsPerResource() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            bob: { token: yield* http.signIn("bob", "bob-password") },
+          };
+
           const { records } = yield* AcmeFixture;
 
           const existing = yield* http.request(
@@ -413,7 +431,12 @@ describe("api-review", () => {
       () =>
         Effect.gen(function* concrete() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: { token: yield* http.signIn("alice", "alice-password") },
+            bob: { token: yield* http.signIn("bob", "bob-password") },
+          };
+
           const { records } = yield* AcmeFixture;
 
           const asAlice = byId(yield* http.get(API.asset, callers.alice));
@@ -460,7 +483,11 @@ describe("api-review", () => {
       () =>
         Effect.gen(function* caseSensitivity() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            alice: { token: yield* http.signIn("alice", "alice-password") },
+          };
+
           const { records } = yield* AcmeFixture;
 
           const lower = yield* http.get(
@@ -495,7 +522,10 @@ describe("api-review", () => {
       () =>
         Effect.gen(function* apiNames() {
           const http = yield* TestHttpClient;
-          const callers: ApiCallers = yield* apiCallers;
+
+          const callers = {
+            alice: { token: yield* http.signIn("alice", "alice-password") },
+          };
 
           yield* change([
             addField(ACME.asset, "due__date", { kind: "date" }).op,

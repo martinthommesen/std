@@ -87,7 +87,7 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { tableOf } from "../src/catalog/definition-tables.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { arrayOf, objectOf, textOf } from "./authz-support.ts";
+import { signInAll, arrayOf, objectOf, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
@@ -690,18 +690,6 @@ const nameFor = (choice: NameChoice, taken: string): string =>
     taken,
   })[choice];
 
-/**
- * An operation as the JSON a request body carries.
- *
- * @param operation - The operation.
- * @returns Its JSON.
- */
-const toJson = (operation: Operation): Record<string, JsonValue> => {
-  const parsed = parseJson(JSON.stringify(operation));
-
-  return parsed.ok && isJsonObject(parsed.value) ? { ...parsed.value } : {};
-};
-
 /** A create step's operation and optional bogus field type. */
 interface CreateStep {
   readonly operation: CreateOperation;
@@ -926,11 +914,17 @@ const requestOf = Effect.fn("SchemaFuzz.requestOf")(function* requestOf(
 
     world.siteDefinitions.add(operation.definition.id);
 
-    const json = toJson(operation);
+    const json = {
+      ...operation,
+      definition:
+        bogusType === undefined
+          ? operation.definition
+          : { ...operation.definition, type: bogusType },
+    };
+
     const body = inApiNames(createBodyOf(operation));
 
     if (bogusType !== undefined) {
-      json.definition = { ...objectOf(json.definition), type: bogusType };
       body[apiAttributeNameOf("type")] = bogusType;
     }
 
@@ -960,7 +954,7 @@ const requestOf = Effect.fn("SchemaFuzz.requestOf")(function* requestOf(
 
   if (step.via === "changeSet") {
     return {
-      body: { operations: [toJson(lifecycleOperation(id, version, step))] },
+      body: { operations: [lifecycleOperation(id, version, step)] },
       caller: step.caller,
       method: "POST",
       path: CHANGE_SETS,
@@ -1594,11 +1588,12 @@ const setUp = Effect.fn("SchemaFuzz.setUp")(function* setUp(tag: string) {
   yield* AcmeFixture;
 
   const world = yield* prepare(tag);
+  const { tokens: acmeTokens } = yield* signInAll;
 
   const tokens: Record<Caller, string> = {
-    ada: yield* http.signIn("ada", "ada-password"),
-    alice: yield* http.signIn("alice", "alice-password"),
-    bob: yield* http.signIn("bob", "bob-password"),
+    ada: acmeTokens.admin,
+    alice: acmeTokens.alice,
+    bob: acmeTokens.bob,
     pam: yield* http.signIn(PAM.login, PAM.password),
   };
 

@@ -133,6 +133,26 @@ const startChild = (
     killAndAwait
   );
 
+const blockedIndexBuild = Effect.fn("PlatformMigrations.blockedIndexBuild")(
+  function* blockedIndexBuild() {
+    const database = yield* TestDatabase;
+    yield* runPlatformMigrations(ITEM_TABLE_MIGRATIONS);
+
+    const writer = yield* database.session("smoke-index-writer");
+    yield* writer.query("BEGIN");
+    yield* writer.query("INSERT INTO core.migration_item VALUES (0)");
+
+    const child = yield* startChild(database.url, "item-index");
+    yield* waitUntil(
+      childBackends(
+        "AND query LIKE 'CREATE INDEX CONCURRENTLY%' AND wait_event_type = 'Lock'"
+      ).pipe(Effect.map((pids) => pids.length === 1))
+    );
+
+    return { child, writer };
+  }
+);
+
 describe("platform-migrations", () => {
   it("optional-app prerequisites defer only unstarted migrations", () => {
     for (const versions of [
@@ -527,19 +547,7 @@ describe("platform-migrations", () => {
         () =>
           Effect.scoped(
             Effect.gen(function* killClientDuringIndexBuild() {
-              const database = yield* TestDatabase;
-              yield* runPlatformMigrations(ITEM_TABLE_MIGRATIONS);
-
-              const writer = yield* database.session("smoke-index-writer");
-              yield* writer.query("BEGIN");
-              yield* writer.query("INSERT INTO core.migration_item VALUES (0)");
-
-              const child = yield* startChild(database.url, "item-index");
-              yield* waitUntil(
-                childBackends(
-                  "AND query LIKE 'CREATE INDEX CONCURRENTLY%' AND wait_event_type = 'Lock'"
-                ).pipe(Effect.map((pids) => pids.length === 1))
-              );
+              const { writer, child } = yield* blockedIndexBuild();
               yield* killAndAwait(child);
               yield* writer.query("COMMIT");
               // The build goes on without its client; the backend exits
@@ -571,19 +579,7 @@ describe("platform-migrations", () => {
           Effect.scoped(
             Effect.gen(function* killBackendDuringIndexBuild() {
               const sql = yield* SqlClient.SqlClient;
-              const database = yield* TestDatabase;
-              yield* runPlatformMigrations(ITEM_TABLE_MIGRATIONS);
-
-              const writer = yield* database.session("smoke-index-writer");
-              yield* writer.query("BEGIN");
-              yield* writer.query("INSERT INTO core.migration_item VALUES (0)");
-
-              const child = yield* startChild(database.url, "item-index");
-              yield* waitUntil(
-                childBackends(
-                  "AND query LIKE 'CREATE INDEX CONCURRENTLY%' AND wait_event_type = 'Lock'"
-                ).pipe(Effect.map((pids) => pids.length === 1))
-              );
+              const { writer, child } = yield* blockedIndexBuild();
               yield* sql.unsafe(
                 `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
                  WHERE datname = current_database() AND application_name = $1`,

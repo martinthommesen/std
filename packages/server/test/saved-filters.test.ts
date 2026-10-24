@@ -22,7 +22,7 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
-import { codeOf, collectionOf, readsTestLayer } from "./reads-support.ts";
+import { codeOf, fetchMetadata, readsTestLayer } from "./reads-support.ts";
 import { CHANGE_SETS } from "./schema-paths-support.ts";
 import {
   definitionVersion,
@@ -43,16 +43,10 @@ const filtersOf = Effect.fn("SavedFilters.filtersOf")(function* filtersOf(
   token: string,
   table: string
 ) {
-  const http = yield* TestHttpClient;
+  const { body } = yield* fetchMetadata(token, table);
 
-  const response = yield* http.get(
-    `/api/v1/tableMetadata/${collectionOf(table)}`,
-    { token }
-  );
-
-  return arrayOf(objectOf(response.json).savedFilters).map(
-    (filter) =>
-      `${textOf(objectOf(filter).name)}: ${textOf(objectOf(filter).filter)}`
+  return (body.savedFilters ?? []).map(
+    (filter) => `${filter.name}: ${filter.filter}`
   );
 });
 
@@ -179,7 +173,11 @@ describe("saved-filters", () => {
       () =>
         Effect.gen(function* invalid() {
           const http = yield* TestHttpClient;
-          const { tokens } = yield* signInAll;
+
+          const admin = yield* (yield* TestHttpClient).signIn(
+            "ada",
+            "ada-password"
+          );
 
           yield* change([
             savedFilterOp(ACME.asset, "named", notEmpty(ACME.name), {
@@ -218,7 +216,7 @@ describe("saved-filters", () => {
             const before = yield* committedState;
 
             const generic = yield* create(
-              tokens.admin,
+              admin,
               "core.saved_filter",
               filterBody(entry.filterName, ACME.asset, entry.condition)
             );
@@ -229,7 +227,7 @@ describe("saved-filters", () => {
                   savedFilterOp(ACME.asset, entry.filterName, entry.condition),
                 ],
               },
-              token: tokens.admin,
+              token: admin,
             });
 
             for (const response of [generic, endpoint]) {
@@ -254,7 +252,10 @@ describe("saved-filters", () => {
       "retiring a field a saved filter reads is reported, its purge refused until the filter is deleted; a table purge takes filters along",
       () =>
         Effect.gen(function* lifecycle() {
-          const { tokens } = yield* signInAll;
+          const admin = yield* (yield* TestHttpClient).signIn(
+            "ada",
+            "ada-password"
+          );
 
           yield* ensureSite;
 
@@ -276,14 +277,14 @@ describe("saved-filters", () => {
             }),
           ]);
 
-          assert.deepStrictEqual(
-            yield* filtersOf(tokens.admin, "site.filtered"),
-            ["labelled: label is not empty", "with_extra: extra is not empty"]
-          );
+          assert.deepStrictEqual(yield* filtersOf(admin, "site.filtered"), [
+            "labelled: label is not empty",
+            "with_extra: extra is not empty",
+          ]);
 
           // Retire: allowed, the filter reported, no longer served.
           const retired = yield* patch(
-            tokens.admin,
+            admin,
             "core.field",
             extra.id,
             yield* definitionVersion(extra.id),
@@ -298,10 +299,9 @@ describe("saved-filters", () => {
           );
 
           assert.include(journal ?? "", filterId);
-          assert.deepStrictEqual(
-            yield* filtersOf(tokens.admin, "site.filtered"),
-            ["labelled: label is not empty"]
-          );
+          assert.deepStrictEqual(yield* filtersOf(admin, "site.filtered"), [
+            "labelled: label is not empty",
+          ]);
 
           // Purge: refused while the filter lives.
           const refused = yield* purge(extra.id);
@@ -311,7 +311,7 @@ describe("saved-filters", () => {
           assert.include(JSON.stringify(refused), filterId);
 
           const deleted = yield* remove(
-            tokens.admin,
+            admin,
             "core.saved_filter",
             filterId,
             yield* definitionVersion(filterId)
@@ -345,7 +345,11 @@ describe("saved-filters", () => {
       () =>
         Effect.gen(function* servedInApiNames() {
           const http = yield* TestHttpClient;
-          const { tokens } = yield* signInAll;
+
+          const admin = yield* (yield* TestHttpClient).signIn(
+            "ada",
+            "ada-password"
+          );
 
           const inService = addField(ACME.asset, "in_service", {
             kind: "text",
@@ -353,7 +357,7 @@ describe("saved-filters", () => {
 
           yield* change([inService.op]);
 
-          const created = yield* create(tokens.admin, "core.saved_filter", {
+          const created = yield* create(admin, "core.saved_filter", {
             condition: notEmpty(inService.id),
             label: "In service",
             name: "in_service_set",
@@ -361,12 +365,12 @@ describe("saved-filters", () => {
           });
 
           assert.strictEqual(created.status, 201, created.text);
-          assert.deepStrictEqual(yield* filtersOf(tokens.admin, "acme.asset"), [
+          assert.deepStrictEqual(yield* filtersOf(admin, "acme.asset"), [
             "in_service_set: inService is not empty",
           ]);
 
           const metadata = yield* http.get("/api/v1/tableMetadata/acmeAsset", {
-            token: tokens.admin,
+            token: admin,
           });
 
           const [saved] = arrayOf(objectOf(metadata.json).savedFilters).map(
@@ -377,7 +381,7 @@ describe("saved-filters", () => {
 
           const listed = yield* http.get(
             `/api/v1/acmeAsset?condition=${encodeURIComponent(textOf(saved?.filter))}`,
-            { token: tokens.admin }
+            { token: admin }
           );
 
           assert.strictEqual(listed.status, 200, listed.text);

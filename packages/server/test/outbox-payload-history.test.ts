@@ -44,7 +44,7 @@ const employeeRule = (
   rule: Pick<AccessRuleDraft, "effect" | "target"> & {
     readonly condition: Condition | null;
   }
-): AccessRuleDraft => addAccessRule(classId, [roleId], {}, rule).op.definition;
+) => addAccessRule(classId, [roleId], {}, rule).op;
 
 const historyFixture = Effect.fn("OutboxPayloadHistory.fixture")(
   function* historyFixture(name: string) {
@@ -73,26 +73,20 @@ const historyFixture = Effect.fn("OutboxPayloadHistory.fixture")(
     const employeeId = employee?.id ?? "";
 
     yield* change([
-      {
-        definition: employeeRule(employeeId, recordClass.id, {
-          condition: {
-            left: { path: [owner.id] },
-            op: "eq",
-            right: { ctx: "me" },
-          },
-          effect: "allow",
-          target: { kind: "records" },
-        }),
-        op: "createAccessRule",
-      },
-      {
-        definition: employeeRule(employeeId, recordClass.id, {
-          condition: null,
-          effect: "allow",
-          target: { fields: "*", kind: "fields" },
-        }),
-        op: "createAccessRule",
-      },
+      employeeRule(employeeId, recordClass.id, {
+        condition: {
+          left: { path: [owner.id] },
+          op: "eq",
+          right: { ctx: "me" },
+        },
+        effect: "allow",
+        target: { kind: "records" },
+      }),
+      employeeRule(employeeId, recordClass.id, {
+        condition: null,
+        effect: "allow",
+        target: { fields: "*", kind: "fields" },
+      }),
     ]);
 
     const subscription = yield* subscribe({
@@ -151,18 +145,15 @@ const backfilled = Effect.gen(function* backfilledTest() {
 
   yield* change([confidential.op]);
   yield* change([
-    {
-      definition: employeeRule(employeeId, vault.id, {
-        condition: {
-          left: { path: [confidential.id] },
-          op: "eq",
-          right: { value: true },
-        },
-        effect: "deny",
-        target: { kind: "records" },
-      }),
-      op: "createAccessRule",
-    },
+    employeeRule(employeeId, vault.id, {
+      condition: {
+        left: { path: [confidential.id] },
+        op: "eq",
+        right: { value: true },
+      },
+      effect: "deny",
+      target: { kind: "records" },
+    }),
   ]);
 
   // X changes only its title after the field exists; Y is created after it
@@ -291,18 +282,15 @@ const defaultChangedAcrossDigits = Effect.gen(function* acrossDigitsTest() {
   assert.strictEqual(yield* currentRevision, target + 1);
 
   yield* change([
-    {
-      definition: employeeRule(employeeId, safe.id, {
-        condition: {
-          left: { path: [confidential.id] },
-          op: "eq",
-          right: { value: true },
-        },
-        effect: "deny",
-        target: { kind: "records" },
-      }),
-      op: "createAccessRule",
-    },
+    employeeRule(employeeId, safe.id, {
+      condition: {
+        left: { path: [confidential.id] },
+        op: "eq",
+        right: { value: true },
+      },
+      effect: "deny",
+      target: { kind: "records" },
+    }),
   ]);
 
   yield* updateRecord({

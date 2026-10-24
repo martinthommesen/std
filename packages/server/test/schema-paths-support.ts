@@ -7,6 +7,7 @@
  */
 import type { Definition } from "@std/definitions/definition";
 import { apiAttributeNameOf } from "@std/definitions/names";
+import { RENAMABLE, RETIRABLE, UPDATABLE } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
@@ -254,3 +255,45 @@ export const userWithRoles = (login: string, roles: readonly string[]) =>
 
     return yield* http.signIn(login, `${login}-password`);
   });
+
+/**
+ * Every operation on a protected definition other than a label or
+ * help-text change: renames, lifecycle operations, and an update of each
+ * other updatable property (to its current value, so only the guard can
+ * refuse it).
+ * @param definition - A protected definition.
+ * @returns The operations, each tried as its own change set.
+ */
+export const refusedOperations = (
+  definition: Definition
+): readonly Operation[] => {
+  const { id, version } = definition;
+  const current: JsonObject = definition;
+
+  const updates = UPDATABLE[definition.kind]
+    .filter((key) => key !== "label" && key !== "helpText")
+    .map((key): Operation => ({
+      changes: { [key]: current[key] ?? null },
+      id,
+      op: "update",
+      version,
+    }));
+
+  const lifecycle: Operation[] = [
+    { id, op: "delete", version },
+    { confirm: { id, version }, id, op: "purge", version },
+  ];
+
+  if (RENAMABLE.has(definition.kind)) {
+    lifecycle.push({ id, name: "renamed_by_admin", op: "rename", version });
+  }
+
+  if (RETIRABLE.has(definition.kind)) {
+    lifecycle.push(
+      { id, op: "retire", version },
+      { id, op: "reactivate", version }
+    );
+  }
+
+  return [...lifecycle, ...updates];
+};

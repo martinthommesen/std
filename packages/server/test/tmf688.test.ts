@@ -1,8 +1,6 @@
-import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import { assert, describe, it } from "@effect/vitest";
-import { API_PREFIX } from "@std/api/api";
 import { TMF688_PREFIX } from "@std/api/tmf688";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
@@ -26,8 +24,14 @@ import { workerPass } from "../src/outbox/worker.ts";
 import { asArray, asObject, textOf } from "./api-support.ts";
 import { hubTestLayer, listener } from "./hub-support.ts";
 import { subscribe } from "./outbox-support.ts";
-import { change, createClass, ensureSite } from "./schema-support.ts";
+import {
+  addAccessRule,
+  change,
+  createClass,
+  ensureSite,
+} from "./schema-support.ts";
 import { serveOnly, workerTestLayer } from "./worker-support.ts";
+import { patch } from "./writes-support.ts";
 
 const BASE = TMF688_PREFIX;
 
@@ -137,24 +141,12 @@ describe("tmf688-topics", () => {
         },
       });
       yield* change([
-        {
-          definition: {
-            actions: ["read"],
-            active: true,
-            classId: EVENT_CLASS_IDS.topic,
-            condition: null,
-            description: null,
-            effect: "deny",
-            id: randomUUID(),
-            kind: "accessRule",
-            name: null,
-            owner: { layer: "local" },
-            protected: false,
-            roleIds: [BUILT_IN_ROLE_IDS.admin],
-            target: { kind: "records" },
-          },
-          op: "createAccessRule",
-        },
+        addAccessRule(
+          EVENT_CLASS_IDS.topic,
+          [BUILT_IN_ROLE_IDS.admin],
+          {},
+          { effect: "deny" }
+        ).op,
       ]);
       yield* workerPass();
       assert.lengthOf(callback.calls, 1);
@@ -711,18 +703,9 @@ describe("tmf-oas-contract", () => {
           },
         });
 
-        const changed = yield* http.request(
-          "PATCH",
-          `${API_PREFIX}/coreEventTopic/${id}`,
-          {
-            ...admin,
-            body: { name: "changed" },
-            headers: {
-              "content-type": "application/merge-patch+json",
-              "if-match": '"1"',
-            },
-          }
-        );
+        const changed = yield* patch(admin.token, "core.event_topic", id, 1, {
+          name: "changed",
+        });
 
         assert.strictEqual(changed.status, 200, changed.text);
 

@@ -3,6 +3,7 @@
  * client, the API's paths for a qualified table name, and the parts of a
  * response the tests read (Contracts 10).
  */
+import { assert } from "@effect/vitest";
 import { TableMetadata } from "@std/api/table-metadata";
 import { apiTableNameOf } from "@std/definitions/names";
 import {
@@ -10,7 +11,7 @@ import {
   isJsonObject,
   isJsonString,
 } from "@std/values/json-value";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
+import type { JsonObject } from "@std/values/json-value";
 import { Effect, Layer, Schema } from "effect";
 
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
@@ -19,6 +20,7 @@ import type {
   TestRequestOptions,
   TestResponse,
 } from "../../testing/src/http-client.ts";
+import { asObject, withQuery } from "./api-support.ts";
 import { linksOf } from "./paging.ts";
 
 /**
@@ -40,15 +42,6 @@ export const collectionOf = (table: string): string => {
   return apiTableNameOf(table.slice(0, dot), table.slice(dot + 1));
 };
 
-const withQuery = (
-  path: string,
-  query: Readonly<Record<string, string>>
-): string => {
-  const search = new URLSearchParams(query).toString();
-
-  return search === "" ? path : `${path}?${search}`;
-};
-
 /**
  * The list path of a table with query parameters (`condition`, `fields`,
  * `sort`, `limit`, `after`, attribute filters, ...).
@@ -60,7 +53,7 @@ const withQuery = (
 export const listPath = (
   table: string,
   query: Readonly<Record<string, string>> = {}
-): string => withQuery(`/api/v1/${collectionOf(table)}`, query);
+): string => withQuery(`/api/v1/${collectionOf(table)}`, Object.entries(query));
 
 /**
  * The single-resource path.
@@ -74,10 +67,8 @@ export const recordPath = (
   table: string,
   id: string,
   query: Readonly<Record<string, string>> = {}
-): string => withQuery(`/api/v1/${collectionOf(table)}/${id}`, query);
-
-const objectOf = (value: JsonValue | undefined): JsonObject =>
-  value !== undefined && isJsonObject(value) ? value : {};
+): string =>
+  withQuery(`/api/v1/${collectionOf(table)}/${id}`, Object.entries(query));
 
 /** A list as the tests read it. */
 export interface ListBody {
@@ -110,7 +101,7 @@ export const listOf = (response: TestResponse) =>
   isJsonArray(response.json)
     ? Effect.succeed<ListBody>({
         next: nextCursorOf(response),
-        resources: response.json.map((item) => objectOf(item)),
+        resources: response.json.map((item) => asObject(item)),
         total:
           response.headers.get("x-total-count") === null
             ? undefined
@@ -145,7 +136,7 @@ export const resourceOf = (response: TestResponse) => {
  * @returns The code.
  */
 export const codeOf = (response: TestResponse) => {
-  const { code } = objectOf(response.json);
+  const { code } = asObject(response.json);
 
   return code !== undefined && isJsonString(code)
     ? Effect.succeed(code)
@@ -220,6 +211,8 @@ export const fetchMetadata = Effect.fn("Test.fetchMetadata")(
       `/api/v1/tableMetadata/${collectionOf(table)}`,
       { token }
     );
+
+    assert.strictEqual(response.status, 200, response.text);
 
     const body = yield* decodeMetadata(response.json).pipe(Effect.orDie);
 

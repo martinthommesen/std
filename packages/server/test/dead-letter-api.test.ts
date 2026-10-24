@@ -44,6 +44,20 @@ import { linksOf } from "./paging.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import { addAccessRule } from "./schema-support.ts";
 
+const fixtureSessions = new WeakMap<object, typeof apiCallers>();
+
+const callers = Effect.gen(function* fixtureCallers() {
+  const http = yield* TestHttpClient;
+  let sessions = fixtureSessions.get(http);
+
+  if (sessions === undefined) {
+    sessions = yield* Effect.cached(apiCallers);
+    fixtureSessions.set(http, sessions);
+  }
+
+  return yield* sessions;
+});
+
 const COLLECTION = "/api/v1/deadDelivery";
 const RETRY = "/api/v1/retryDeadDelivery";
 const DISCARD = "/api/v1/discardDeadDelivery";
@@ -110,7 +124,7 @@ describe("dead-letter API", () => {
       "task POST ignores client fields and stores only server action, time, outcome and subscription",
       () =>
         Effect.gen(function* serverFields() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const fixture = yield* AcmeFixture;
           const seeded = yield* seedDeadLetters(admin);
           const http = yield* TestHttpClient;
@@ -158,7 +172,7 @@ describe("dead-letter API", () => {
 
     dbTest.effect("stored actions produce ordinary outbox events", () =>
       Effect.gen(function* actionEvents() {
-        const { admin } = yield* apiCallers;
+        const { admin } = yield* callers;
         const seeded = yield* seedDeadLetters(admin);
         const http = yield* TestHttpClient;
 
@@ -190,7 +204,7 @@ describe("dead-letter API", () => {
       "lists, filters, projects and pages without payload values; typed client and HEAD agree",
       () =>
         Effect.gen(function* list() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const seeded = yield* seedDeadLetters(admin);
           const http = yield* TestHttpClient;
           const path = `${COLLECTION}?subscriptionId=${seeded.subscriptionId}&status=dead&limit=1`;
@@ -268,7 +282,7 @@ describe("dead-letter API", () => {
       "non-admin list and tasks answer exactly like a missing resource, even with malformed bodies",
       () =>
         Effect.gen(function* hidden() {
-          const { admin, bob } = yield* apiCallers;
+          const { admin, bob } = yield* callers;
           const seeded = yield* seedDeadLetters(admin);
           const http = yield* TestHttpClient;
           const missing = yield* http.get(`${COLLECTION}/${MISSING}`, bob);
@@ -306,7 +320,7 @@ describe("dead-letter API", () => {
       "concurrent retries have exactly one winner, reset attempts, and a stale retry loses",
       () =>
         Effect.gen(function* retry() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const seeded = yield* seedDeadLetters(admin);
           const http = yield* TestHttpClient;
 
@@ -350,7 +364,7 @@ describe("dead-letter API", () => {
       "discard under block releases the next version without running the discarded effect",
       () =>
         Effect.gen(function* discard() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const seeded = yield* seedDeadLetters(admin);
           yield* pendingSecond(seeded.secondId);
 
@@ -383,7 +397,7 @@ describe("dead-letter API", () => {
       "rejects invalid queries and IDs without database errors and documents every route",
       () =>
         Effect.gen(function* invalid() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const http = yield* TestHttpClient;
 
           for (const query of [
@@ -436,7 +450,7 @@ describe("dead-letter API", () => {
       "offset links preserve selection and filters on first, middle and empty pages",
       () =>
         Effect.gen(function* offsetLinks() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const seeded = yield* seedDeadLetters(admin);
           const http = yield* TestHttpClient;
           assert.strictEqual(
@@ -522,7 +536,7 @@ describe("dead-letter API", () => {
       "retry racing discard commits exactly one action with readable history",
       () =>
         Effect.gen(function* race() {
-          const { admin, bob } = yield* apiCallers;
+          const { admin, bob } = yield* callers;
           const fixture = yield* AcmeFixture;
           const seeded = yield* seedDeadLetters(admin);
           const http = yield* TestHttpClient;
@@ -581,7 +595,7 @@ describe("dead-letter API", () => {
       "retry under block holds the next version, while skip permits an older retry through the API",
       () =>
         Effect.gen(function* policies() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const http = yield* TestHttpClient;
           const sql = yield* SqlClient.SqlClient;
 
@@ -622,7 +636,7 @@ describe("dead-letter API", () => {
       "disabled and deleted hubs and subscriptions without handlers refuse retry and permit discard",
       () =>
         Effect.gen(function* unavailableSubscriptions() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const http = yield* TestHttpClient;
 
           for (const state of ["disabled", "deleted", "noHandler"] as const) {
@@ -703,7 +717,7 @@ describe("dead-letter API", () => {
       "persisted retired and purged subscription states refuse retry and still allow discard",
       () =>
         Effect.gen(function* historicalStates() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const sql = yield* SqlClient.SqlClient;
 
           for (const state of ["retired", "purged"] as const) {
@@ -752,7 +766,7 @@ describe("dead-letter API", () => {
       "an operator without record access gets restricted identities in resources, filters and cursors",
       () =>
         Effect.gen(function* restricted() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const seeded = yield* seedDeadLetters(admin);
           const snapshot = yield* (yield* Catalog).refresh;
           const classId = snapshot.classByName("acme.asset")?.id ?? "";
@@ -811,7 +825,7 @@ describe("dead-letter API", () => {
       "unconditional read without update cannot run tasks, and non-admin HEAD is hidden",
       () =>
         Effect.gen(function* readOnlyOperator() {
-          const { admin, bob } = yield* apiCallers;
+          const { admin, bob } = yield* callers;
           const seeded = yield* seedDeadLetters(admin);
           const snapshot = yield* (yield* Catalog).refresh;
           const employee = snapshot.roleByName("employee")?.id ?? "";
@@ -859,7 +873,7 @@ describe("dead-letter API", () => {
       "the collection accepts in lists, repeated comparisons, condition, sort and bidirectional cursor pages",
       () =>
         Effect.gen(function* standardQuery() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const seeded = yield* seedDeadLetters(admin);
           const http = yield* TestHttpClient;
 
@@ -926,7 +940,7 @@ describe("dead-letter API", () => {
       "a late request refusal rolls back the transition, action, history and post-commit gauge",
       () =>
         Effect.gen(function* rollback() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const seeded = yield* seedDeadLetters(admin);
           const http = yield* TestHttpClient;
           const before = yield* Metric.value(deadDeliveries);
@@ -956,7 +970,7 @@ describe("dead-letter API", () => {
       "single GET and HEAD reject unknown or repeated directives; conflicting fields are 409",
       () =>
         Effect.gen(function* readDirectives() {
-          const { admin } = yield* apiCallers;
+          const { admin } = yield* callers;
           const seeded = yield* seedDeadLetters(admin);
           const http = yield* TestHttpClient;
 

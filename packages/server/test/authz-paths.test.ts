@@ -21,10 +21,10 @@ import { randomUUID } from "node:crypto";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { apiAttributeNameOf } from "@std/definitions/names";
 import type { Operation } from "@std/definitions/operation";
-import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Exit, Ref } from "effect";
 import type { Layer } from "effect";
+import { forEach } from "effect/Effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import type { AcmeData } from "../../testing/src/acme-fixture.ts";
@@ -1094,13 +1094,7 @@ const postChangeSet = (
   callers: Callers,
   who: Who,
   operations: readonly Operation[]
-) => {
-  const parsed = parseJson(JSON.stringify({ operations }));
-
-  return send(callers, who, "POST", CHANGE_SETS, {
-    body: parsed.ok ? parsed.value : null,
-  });
-};
+) => send(callers, who, "POST", CHANGE_SETS, { body: { operations } });
 
 /**
  * A fresh local role, created by the administrator through the
@@ -1323,14 +1317,19 @@ const checkTableList = Effect.fn("AuthzPaths.checkTableList")(
     const opened: JsonValue[] = [];
     const related: { table: string; field: string }[] = [];
 
-    for (const name of candidates) {
-      const meta = yield* send(
-        callers,
-        who,
-        "GET",
-        `/api/v1/tableMetadata/${collectionOf(name)}`
-      );
+    const metadata = yield* forEach(
+      candidates,
+      (name) =>
+        send(
+          callers,
+          who,
+          "GET",
+          `/api/v1/tableMetadata/${collectionOf(name)}`
+        ).pipe(Effect.map((meta) => ({ meta, name }))),
+      { concurrency: "unbounded" }
+    );
 
+    for (const { name, meta } of metadata) {
       const table = objectOf(meta.json);
 
       if (meta.status === 200) {
@@ -1383,24 +1382,29 @@ const checkTableList = Effect.fn("AuthzPaths.checkTableList")(
 
     // The web app lists related records with this condition; every related
     // list the caller is shown must accept it.
-    for (const entry of related) {
-      const attribute = apiAttributeNameOf(entry.field);
+    yield* forEach(
+      related,
+      (entry) =>
+        Effect.gen(function* probeRelated() {
+          const attribute = apiAttributeNameOf(entry.field);
 
-      const page = yield* send(
-        callers,
-        who,
-        "GET",
-        listPath(entry.table, {
-          condition: `${attribute} = "${randomUUID()}"`,
-        })
-      );
+          const page = yield* send(
+            callers,
+            who,
+            "GET",
+            listPath(entry.table, {
+              condition: `${attribute} = "${randomUUID()}"`,
+            })
+          );
 
-      assert.strictEqual(
-        page.status,
-        200,
-        `${where}: ${entry.table}.${entry.field} ${page.text}`
-      );
-    }
+          assert.strictEqual(
+            page.status,
+            200,
+            `${where}: ${entry.table}.${entry.field} ${page.text}`
+          );
+        }),
+      { concurrency: "unbounded", discard: true }
+    );
   }
 );
 

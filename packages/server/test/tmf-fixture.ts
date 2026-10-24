@@ -1,10 +1,3 @@
-import { assert } from "@effect/vitest";
-import type { Expr } from "@std/conditions/ast";
-import type { Condition } from "@std/definitions/condition";
-import type {
-  AccessAction,
-  AccessRuleDraft,
-} from "@std/definitions/definition";
 /**
  * A test-only TMF API mapping (Contracts 11.1, workstream 3T): the shape
  * of TMF621's `troubleTicket` over fixture classes in a local `tmffx`
@@ -28,6 +21,10 @@ import type {
  * (which he cannot write), never their `priority`, and only notes not
  * marked `internal`.
  */
+import { assert } from "@effect/vitest";
+import type { Expr } from "@std/conditions/ast";
+import type { Condition } from "@std/definitions/condition";
+import type { AccessAction } from "@std/definitions/definition";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
 import { standardEvents } from "@std/tmf/events";
 import {
@@ -64,10 +61,10 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { asObject } from "./api-support.ts";
 import {
   addField,
+  addAccessRule,
   change,
   createClass,
   createNamespace,
-  freshId,
 } from "./schema-support.ts";
 
 /** The fixture's base path; validated against TMF621's document. */
@@ -431,24 +428,21 @@ const accessRule = (
     readonly fields?: "*" | readonly string[];
     readonly condition?: Condition;
   }
-): AccessRuleDraft => ({
-  actions: rule.actions,
-  active: true,
-  classId,
-  condition: rule.condition ?? null,
-  description: null,
-  effect: rule.effect ?? "allow",
-  id: freshId(),
-  kind: "accessRule",
-  name: null,
-  owner: { layer: "local" },
-  protected: false,
-  roleIds,
-  target:
-    rule.fields === undefined
-      ? { kind: "records" }
-      : { fields: rule.fields, kind: "fields" },
-});
+) =>
+  addAccessRule(
+    classId,
+    roleIds,
+    {},
+    {
+      actions: rule.actions,
+      condition: rule.condition ?? null,
+      effect: rule.effect ?? "allow",
+      target:
+        rule.fields === undefined
+          ? { kind: "records" }
+          : { fields: rule.fields, kind: "fields" },
+    }
+  ).op;
 
 const ALL: readonly AccessAction[] = ["read", "create", "update", "delete"];
 
@@ -490,7 +484,7 @@ export const setUpTmfFixture = Effect.gen(function* setUpTmfFixture() {
     FF.customData.id,
   ];
 
-  const rules: AccessRuleDraft[] = [
+  const rules = [
     accessRule(FX.ticket.id, [manager], { actions: ALL }),
     accessRule(FX.ticket.id, [manager], {
       actions: ["read", "create", "update"],
@@ -565,9 +559,7 @@ export const setUpTmfFixture = Effect.gen(function* setUpTmfFixture() {
     }),
   ];
 
-  yield* change(
-    rules.map((definition) => ({ definition, op: "createAccessRule" }))
-  );
+  yield* change(rules);
 });
 
 /**

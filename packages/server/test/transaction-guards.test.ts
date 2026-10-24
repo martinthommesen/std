@@ -4,28 +4,16 @@
  * transaction, and use of a transaction after it ended.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Deferred, Effect, Schema } from "effect";
+import { Deferred, Effect } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { testDatabaseLayer } from "../../testing/src/test-database.ts";
-import { decodeRows } from "../src/sql/rows.ts";
 import { readOnly } from "../src/sql/statement-marks.ts";
 import { CurrentTransaction } from "../src/sql/transaction-context.ts";
 import { refusalFor } from "../src/sql/transaction-state.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { refusalOf } from "./support.ts";
-
-const decodeCount = decodeRows(Schema.Struct({ n: Schema.Int }));
-
-const countRows = (table: string) =>
-  SqlClient.SqlClient.pipe(
-    Effect.flatMap((sql) =>
-      sql.unsafe(`SELECT count(*)::int AS n FROM ${table}`)
-    ),
-    Effect.flatMap(decodeCount),
-    Effect.map(([row]) => row?.n ?? -1)
-  );
+import { countRows, refusalOf } from "./support.ts";
 
 const REFUSED: readonly (readonly [string, string | undefined])[] = [
   [";COMMIT", "transaction-control"],

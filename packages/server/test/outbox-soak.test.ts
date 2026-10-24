@@ -22,7 +22,7 @@ import {
   PLATFORM_CLASS_IDS,
   SYSTEM_USER_ID,
 } from "@std/definitions/well-known";
-import { Duration, Effect, Fiber, Ref, Schedule, Schema } from "effect";
+import { Duration, Effect, Fiber, Ref, Schedule } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
@@ -30,7 +30,7 @@ import { ACME } from "../../testing/src/acme-ids.ts";
 import type { Delivery } from "../src/outbox/delivery-effects.ts";
 import { DeliveryFailed } from "../src/outbox/delivery-failed.ts";
 import { runWorker } from "../src/outbox/worker.ts";
-import { decodeRows } from "../src/sql/rows.ts";
+import { count } from "./aggregates-support.ts";
 import { subscribe } from "./outbox-support.ts";
 import { freshId } from "./schema-support.ts";
 import { waitUntil } from "./support.ts";
@@ -50,15 +50,6 @@ interface Observed {
   /** Effects that started while another of the same record ran. */
   overlaps: number;
 }
-
-const decodeCount = decodeRows(Schema.Struct({ n: Schema.Int }));
-
-const count = (text: string, params: readonly unknown[]) =>
-  SqlClient.SqlClient.pipe(
-    Effect.flatMap((sql) => sql.unsafe(text, params)),
-    Effect.flatMap(decodeCount),
-    Effect.map(([row]) => row?.n ?? 0)
-  );
 
 // One version of every record, with its change entries and delivery rows,
 // committed in one statement.
@@ -152,7 +143,7 @@ const soak = Effect.gen(function* soakTest() {
 
   // Never two in_flight rows of one subscription and record.
   const sampler = yield* count(
-    `SELECT count(*)::int AS n FROM (
+    `SELECT count(*)::text AS value FROM (
        SELECT record_id FROM core.delivery
        WHERE subscription_id = $1::uuid AND status = 'in_flight'
        GROUP BY record_id HAVING count(*) > 1) AS doubled`,
@@ -173,7 +164,7 @@ const soak = Effect.gen(function* soakTest() {
 
   yield* waitUntil(
     count(
-      "SELECT count(*)::int AS n FROM core.delivery WHERE subscription_id = $1::uuid AND status = 'done'",
+      "SELECT count(*)::text AS value FROM core.delivery WHERE subscription_id = $1::uuid AND status = 'done'",
       [subscription]
     ).pipe(Effect.map((done) => done === DELIVERIES)),
     Duration.minutes(4)
@@ -184,7 +175,7 @@ const soak = Effect.gen(function* soakTest() {
 
   assert.strictEqual(
     yield* count(
-      "SELECT count(*)::int AS n FROM core.delivery WHERE subscription_id = $1::uuid AND status <> 'done'",
+      "SELECT count(*)::text AS value FROM core.delivery WHERE subscription_id = $1::uuid AND status <> 'done'",
       [subscription]
     ),
     0,

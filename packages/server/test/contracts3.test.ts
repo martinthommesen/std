@@ -1,10 +1,4 @@
-/**
- * The Contracts 3 acceptance tests through `/api/v1` (Step 3 gate):
- * the two-user example of 3.3 with TMF630 paths, API names and shapes,
- * alongside the standalone authorization, history and session suites.
- */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { apiTableNameOf } from "@std/definitions/names";
 import type { Operation } from "@std/definitions/operation";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
@@ -21,7 +15,6 @@ import {
   letrec,
   oneof,
   option,
-  pre,
   record,
   string,
   subarray,
@@ -43,6 +36,12 @@ import type {
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { DEFINITION_KIND_OF_TABLE } from "../src/http/change-sets.ts";
+/**
+ * The Contracts 3 acceptance tests through `/api/v1` (Step 3 gate):
+ * the two-user example of 3.3 with TMF630 paths, API names and shapes,
+ * alongside the standalone authorization, history and session suites.
+ */
+import { DatabaseConfig } from "../src/sql/database-config.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
   patchOptions,
@@ -51,6 +50,7 @@ import {
   asObject,
   idsOf,
   numberOf,
+  codeOf,
   API,
   apiCallers,
   withQuery,
@@ -66,7 +66,7 @@ import {
 } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { allPagesV2, nextOf } from "./paging.ts";
-import { readsTestLayer } from "./reads-support.ts";
+import { collectionOf, readsTestLayer } from "./reads-support.ts";
 import {
   change,
   createRole,
@@ -101,8 +101,6 @@ export const merge = (
   body: JsonObject
 ): TestRequestOptions =>
   patchOptions(caller, MERGE_PATCH, body, `"${revision}"`);
-
-const codeOf = (response: TestResponse) => asObject(response.json).code;
 
 const revisionOf = Effect.fn("Contracts3V2.revisionOf")(function* revisionOf(
   path: string,
@@ -501,7 +499,6 @@ describe("contracts3", () => {
 const NI_RUNS = 40;
 const RULE_10_LIMIT = 2000;
 const MAX_COST = 9999;
-const MAX_SKIPS = 1000;
 const NI_SEED = 20_261_022;
 
 /** Where S may be docked; `none` is no reference. */
@@ -594,7 +591,7 @@ const QUERY: Arbitrary<Query> = record({
 
 const COST = integer({ max: MAX_COST, min: 0 });
 
-const HIDDEN: Arbitrary<Hidden> = record({
+const HIDDEN_FIELDS = {
   costK: COST,
   costL: COST,
   costM: COST,
@@ -606,7 +603,9 @@ const HIDDEN: Arbitrary<Hidden> = record({
     nil: null,
   }),
   sizeM: integer({ max: 60, min: 10 }),
-});
+};
+
+const HIDDEN: Arbitrary<Hidden> = record(HIDDEN_FIELDS);
 
 /**
  * Rule 10's outcome on Bob's three records: is cost above 2000?
@@ -706,18 +705,24 @@ const observeBoth = Effect.fn("Contracts3V2.observeBoth")(function* observeBoth(
   return { first: first.texts, second: second.texts };
 });
 
-/**
- * The right side of a sample: `dockedTo` on S is hidden only while rule 10
- * holds there; otherwise Bob reads it, so it must not change.
- *
- * @param left - One side.
- * @param candidate - The generated other side.
- * @returns The other side.
- */
-const otherSide = (left: Hidden, candidate: Hidden): Hidden =>
-  left.costS > RULE_10_LIMIT
-    ? candidate
-    : { ...candidate, dockedS: left.dockedS };
+const HIDDEN_PAIR = HIDDEN.chain((left) => {
+  const costOnSameSide = (cost: number) =>
+    integer({
+      max: cost > RULE_10_LIMIT ? MAX_COST : RULE_10_LIMIT,
+      min: cost > RULE_10_LIMIT ? RULE_10_LIMIT + 1 : 0,
+    });
+
+  return record({
+    ...HIDDEN_FIELDS,
+    costL: costOnSameSide(left.costL),
+    costM: costOnSameSide(left.costM),
+    costS: costOnSameSide(left.costS),
+    dockedS:
+      left.costS > RULE_10_LIMIT
+        ? HIDDEN_FIELDS.dockedS
+        : constantFrom(left.dockedS),
+  }).map((right) => ({ left, right }));
+});
 
 describe("noninterference", () => {
   it("compares rule 10 outcomes per record", () => {
@@ -753,18 +758,12 @@ describe("noninterference", () => {
 
           const sample = async (
             query: Query,
-            left: Hidden,
-            candidate: Hidden
+            { left, right }: { readonly left: Hidden; readonly right: Hidden }
           ) => {
-            pre(sameOutcomes(left, candidate));
+            assert.isTrue(sameOutcomes(left, right));
 
             const observed = await run(
-              observeBoth(
-                callers.bob,
-                query,
-                left,
-                otherSide(left, candidate)
-              ).pipe(Effect.orDie)
+              observeBoth(callers.bob, query, left, right).pipe(Effect.orDie)
             );
 
             compared += 1;
@@ -772,8 +771,7 @@ describe("noninterference", () => {
           };
 
           yield* Effect.promise(async () => {
-            await check(asyncProperty(QUERY, HIDDEN, HIDDEN, sample), {
-              maxSkipsPerRun: MAX_SKIPS,
+            await check(asyncProperty(QUERY, HIDDEN_PAIR, sample), {
               numRuns: NI_RUNS,
               seed: NI_SEED,
             });
@@ -790,6 +788,61 @@ describe("noninterference", () => {
 
 const BULK_PAGE = "7";
 
+const checkSortedTraversal = Effect.fn("contracts3.checkSortedTraversal")(
+  function* checkSortedTraversal(caller: TestRequestOptions, sort: string) {
+    const http = yield* TestHttpClient;
+    const condition = 'name starts with "bulk-"';
+
+    const unpaged = yield* http.get(
+      withQuery(API.asset, [
+        ["condition", condition],
+        ["limit", String(BULK_ROWS)],
+        ["sort", sort],
+      ]),
+      caller
+    );
+
+    const paged = yield* allPagesV2(
+      withQuery(API.asset, [
+        ["condition", condition],
+        ["limit", BULK_PAGE],
+        ["sort", sort],
+      ]),
+      caller
+    );
+
+    const expected = idsOf(unpaged);
+
+    assert.strictEqual(expected.length, BULK_ROWS, sort);
+    assert.strictEqual(new Set(paged.ids).size, paged.ids.length, sort);
+    assert.deepStrictEqual(paged.ids, expected, sort);
+
+    if (sort === "purchasedOn") {
+      // Hidden and empty keys are absent and sort last, ascending.
+      const hidden = asArray(unpaged.json).map(
+        (item) => !("purchasedOn" in asObject(item))
+      );
+
+      const firstHidden = hidden.indexOf(true);
+
+      assert.isTrue(firstHidden > 0);
+      assert.isTrue(hidden.slice(firstHidden).every(Boolean));
+    }
+
+    if (sort === "-purchasedOn") {
+      // Descending sorts hidden and empty keys first.
+      const hidden = asArray(unpaged.json).map(
+        (item) => !("purchasedOn" in asObject(item))
+      );
+
+      const lastHidden = hidden.lastIndexOf(true);
+
+      assert.isTrue(lastHidden !== -1);
+      assert.isTrue(hidden.slice(0, lastHidden + 1).every(Boolean));
+    }
+  }
+);
+
 describe("cursor-nulls", () => {
   it("pages with after cursors from the Link header", () => {
     assert.strictEqual(
@@ -804,7 +857,6 @@ describe("cursor-nulls", () => {
       "cursor-nulls: 1,000 rows, half the sort keys hidden, paged 7 at a time with after cursors",
       () =>
         Effect.gen(function* cursorNulls() {
-          const http = yield* TestHttpClient;
           const fixture = yield* AcmeFixture;
           const callers = yield* SignedInCallers;
           const catalog = yield* Catalog;
@@ -823,57 +875,18 @@ describe("cursor-nulls", () => {
             })
           );
 
-          const condition = 'name starts with "bulk-"';
+          const config = yield* DatabaseConfig;
 
-          for (const sort of BULK_SORTS) {
-            const unpaged = yield* http.get(
-              withQuery(API.asset, [
-                ["condition", condition],
-                ["limit", String(BULK_ROWS)],
-                ["sort", sort],
-              ]),
-              callers.bob
-            );
+          // Reserve half the configured pool, as in child-endpoint-reads.sortAll.
+          const concurrency = Math.max(
+            1,
+            Math.floor(config.maxConnections / 2)
+          );
 
-            const paged = yield* allPagesV2(
-              withQuery(API.asset, [
-                ["condition", condition],
-                ["limit", BULK_PAGE],
-                ["sort", sort],
-              ]),
-              callers.bob
-            );
-
-            const expected = idsOf(unpaged);
-
-            assert.strictEqual(expected.length, BULK_ROWS, sort);
-            assert.strictEqual(new Set(paged.ids).size, paged.ids.length, sort);
-            assert.deepStrictEqual(paged.ids, expected, sort);
-
-            if (sort === "purchasedOn") {
-              // Hidden and empty keys are absent and sort last, ascending.
-              const hidden = asArray(unpaged.json).map(
-                (item) => !("purchasedOn" in asObject(item))
-              );
-
-              const firstHidden = hidden.indexOf(true);
-
-              assert.isTrue(firstHidden > 0);
-              assert.isTrue(hidden.slice(firstHidden).every(Boolean));
-            }
-
-            if (sort === "-purchasedOn") {
-              // Descending sorts hidden and empty keys first.
-              const hidden = asArray(unpaged.json).map(
-                (item) => !("purchasedOn" in asObject(item))
-              );
-
-              const lastHidden = hidden.lastIndexOf(true);
-
-              assert.isTrue(lastHidden !== -1);
-              assert.isTrue(hidden.slice(0, lastHidden + 1).every(Boolean));
-            }
-          }
+          yield* Effect.all(
+            BULK_SORTS.map((sort) => checkSortedTraversal(callers.bob, sort)),
+            { concurrency, discard: true }
+          );
         }),
       { timeout: 120_000 }
     );
@@ -1594,19 +1607,6 @@ describe("users", () => {
 const CONFIG_TABLES = ["core.user_role"] as const;
 
 const MISSING = "core.no_such_table";
-
-/**
- * A qualified table name's v2 collection (`core.access_rule` is
- * `coreAccessRule`).
- *
- * @param table - The qualified name.
- * @returns The collection name.
- */
-const collectionOf = (table: string): string => {
-  const [namespace = "", name = ""] = table.split(".");
-
-  return apiTableNameOf(namespace, name);
-};
 
 const platformTables = (snapshot: ConfigSnapshot): string[] =>
   snapshot

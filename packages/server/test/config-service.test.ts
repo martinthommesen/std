@@ -1,4 +1,3 @@
-import { assert, describe, it, layer } from "@effect/vitest";
 /**
  * The config service (Contracts 8.1, 8.2, 8.4): admin edits of shipped
  * records become overrides of the 8.2 properties only, protected records
@@ -6,6 +5,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
  * shipped value, conflicts resolve as `take_shipped` and `replace`, and
  * `adopt` moves a record its set removed into the `local` layer.
  */
+import { assert, describe, it, layer } from "@effect/vitest";
 import {
   OVERRIDABLE,
   PROTECTED_OVERRIDABLE,
@@ -301,7 +301,6 @@ describe("config-service", () => {
         Effect.scoped(
           Effect.gen(function* adoptRemoved() {
             yield* runUpgrade({ sets: [FIXTURE.v1] });
-            yield* insertAdmin;
             yield* insertAdmin;
 
             assert.strictEqual(

@@ -11,9 +11,11 @@ import {
   Option,
   Result,
   Schedule,
+  Schema,
 } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { decodeRows } from "../src/sql/rows.ts";
 import { TransactionRefused } from "../src/sql/transaction-refused.ts";
 
 const POLL_INTERVAL = Duration.millis(20);
@@ -121,3 +123,19 @@ export const lockWaiterCount = Effect.fn("Test.lockWaiterCount")(
     return Number(rows[0]?.waiting ?? "0");
   }
 );
+
+const decodeCount = decodeRows(Schema.Struct({ n: Schema.Int }));
+
+/**
+ * Counts rows from a trusted SQL FROM fragment.
+ * @param table - The FROM fragment, including any predicate.
+ * @returns The count or the original missing-row sentinel.
+ */
+export const countRows = (table: string) =>
+  SqlClient.SqlClient.pipe(
+    Effect.flatMap((sql) =>
+      sql.unsafe(`SELECT count(*)::int AS n FROM ${table}`)
+    ),
+    Effect.flatMap(decodeCount),
+    Effect.map(([row]) => row?.n ?? -1)
+  );

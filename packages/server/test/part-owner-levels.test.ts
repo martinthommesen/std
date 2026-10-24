@@ -54,8 +54,32 @@ import {
   createNamespace,
   values,
 } from "./schema-support.ts";
-import { FF, FIXTURE_TICKETS, FX, tmfTestLayer } from "./tmf-fixture.ts";
+import {
+  createFixtureTicket,
+  FF,
+  FIXTURE_TICKETS,
+  FX,
+  tmfTestLayer,
+} from "./tmf-fixture.ts";
 import { create, patch, remove, savedOf } from "./writes-support.ts";
+
+const checkItemForm = Effect.fn("PartOwnerLevels.checkItemForm")(
+  function* checkItemForm(
+    caller: TestRequestOptions,
+    proposal: {
+      readonly id: string | null;
+      readonly revision: number | null;
+      readonly values: JsonObject;
+    }
+  ) {
+    const http = yield* TestHttpClient;
+
+    return yield* http.request("POST", "/api/v1/checkFormState", {
+      ...caller,
+      body: { table: "pownItem", ...proposal },
+    });
+  }
+);
 
 const NAMESPACE = createNamespace("pown");
 const BOX = createClass("box", { namespaceId: NAMESPACE.id });
@@ -254,26 +278,6 @@ const tmfPatch = (caller: TestRequestOptions, id: string, body: JsonValue) =>
   );
 
 /**
- * A TMF `POST` of a ticket.
- * @param caller - The caller.
- * @param body - The ticket.
- * @returns The created ticket.
- */
-const tmfTicket = (caller: TestRequestOptions, body: JsonObject = {}) =>
-  Effect.gen(function* postTicket() {
-    const http = yield* TestHttpClient;
-
-    const created = yield* http.request("POST", FIXTURE_TICKETS, {
-      ...caller,
-      body: { "@type": "TroubleTicket", description: "Levels", ...body },
-    });
-
-    assert.strictEqual(created.status, 201, created.text);
-
-    return asObject(created.json);
-  });
-
-/**
  * TMF notes to add.
  * @param size - How many.
  * @returns The notes.
@@ -306,7 +310,6 @@ describe("part-owner-levels", () => {
           const fixture = yield* AcmeFixture;
           const { admin, bob } = yield* apiCallers;
           const { AM, M } = fixture.records;
-          const http = yield* TestHttpClient;
 
           const sealed = yield* saved(
             yield* create(admin.token, BOXES, {
@@ -357,19 +360,11 @@ describe("part-owner-levels", () => {
 
             const proposed = { box: { id: owner.id }, label: "Bob's" };
 
-            const checkedCreate = yield* http.request(
-              "POST",
-              "/api/v1/checkFormState",
-              {
-                ...bob,
-                body: {
-                  id: null,
-                  revision: null,
-                  table: "pownItem",
-                  values: proposed,
-                },
-              }
-            );
+            const checkedCreate = yield* checkItemForm(bob, {
+              id: null,
+              revision: null,
+              values: proposed,
+            });
 
             const savedCreate = yield* create(bob.token, ITEMS, proposed);
             assertOwnerRefusal(checkedCreate);
@@ -377,19 +372,11 @@ describe("part-owner-levels", () => {
 
             const edit = { label: "Bob's" };
 
-            const checkedEdit = yield* http.request(
-              "POST",
-              "/api/v1/checkFormState",
-              {
-                ...bob,
-                body: {
-                  id: existing.id,
-                  revision: existing.version,
-                  table: "pownItem",
-                  values: edit,
-                },
-              }
-            );
+            const checkedEdit = yield* checkItemForm(bob, {
+              id: existing.id,
+              revision: existing.version,
+              values: edit,
+            });
 
             const savedEdit = yield* patch(
               bob.token,
@@ -402,19 +389,11 @@ describe("part-owner-levels", () => {
             assertOwnerRefusal(checkedEdit);
             assert.strictEqual(checkedEdit.text, savedEdit.text);
 
-            const checkedEmpty = yield* http.request(
-              "POST",
-              "/api/v1/checkFormState",
-              {
-                ...bob,
-                body: {
-                  id: existing.id,
-                  revision: existing.version,
-                  table: "pownItem",
-                  values: {},
-                },
-              }
-            );
+            const checkedEmpty = yield* checkItemForm(bob, {
+              id: existing.id,
+              revision: existing.version,
+              values: {},
+            });
 
             assert.strictEqual(checkedEmpty.status, 200, checkedEmpty.text);
             const verdict = asObject(checkedEmpty.json);
@@ -518,19 +497,11 @@ describe("part-owner-levels", () => {
           );
 
           for (const ownerId of [box.id, ABSENT]) {
-            const checked = yield* http.request(
-              "POST",
-              "/api/v1/checkFormState",
-              {
-                ...bob,
-                body: {
-                  id: null,
-                  revision: null,
-                  table: "pownItem",
-                  values: { box: { id: ownerId }, label: "Bob's" },
-                },
-              }
-            );
+            const checked = yield* checkItemForm(bob, {
+              id: null,
+              revision: null,
+              values: { box: { id: ownerId }, label: "Bob's" },
+            });
 
             assert.strictEqual(
               checked.status,
@@ -550,19 +521,11 @@ describe("part-owner-levels", () => {
 
           // Hidden ownership precedes both version disclosure and read-only viewing.
           for (const proposed of [{}, { label: "Bob's" }]) {
-            const checked = yield* http.request(
-              "POST",
-              "/api/v1/checkFormState",
-              {
-                ...bob,
-                body: {
-                  id: existing.id,
-                  revision: existing.version + 1,
-                  table: "pownItem",
-                  values: proposed,
-                },
-              }
-            );
+            const checked = yield* checkItemForm(bob, {
+              id: existing.id,
+              revision: existing.version + 1,
+              values: proposed,
+            });
 
             assert.strictEqual(checked.status, savedEdit.status, checked.text);
             assert.strictEqual(checked.text, savedEdit.text);
@@ -607,7 +570,8 @@ describe("part-owner-levels", () => {
           const http = yield* TestHttpClient;
           const { admin, alice } = yield* apiCallers;
 
-          const ticket = yield* tmfTicket(admin, {
+          const ticket = yield* createFixtureTicket(admin, {
+            description: "Levels",
             name: FROZEN,
             note: notes(1),
           });
@@ -659,12 +623,17 @@ describe("part-owner-levels", () => {
           for (const size of [1, 10, 100]) {
             yield* log.clear;
 
-            const created = yield* tmfTicket(alice, { note: notes(size) });
+            const created = yield* createFixtureTicket(alice, {
+              description: "Levels",
+              note: notes(size),
+            });
 
             assert.lengthOf(asArray(created.note), size);
             assert.strictEqual(yield* ownerDecisions, 0, `POST of ${size}`);
 
-            const ticket = yield* tmfTicket(alice);
+            const ticket = yield* createFixtureTicket(alice, {
+              description: "Levels",
+            });
 
             yield* log.clear;
 

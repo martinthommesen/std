@@ -59,6 +59,7 @@ import {
   TABLE as AGGREGATE_TABLE,
   update as updateAggregate,
 } from "./aggregates-support.ts";
+import { signInAll } from "./authz-support.ts";
 import { codeOf, readsTestLayer } from "./reads-support.ts";
 import { asUser, USERS, rootVersion } from "./records-support.ts";
 import { postChangeSet } from "./schema-paths-support.ts";
@@ -867,12 +868,12 @@ describe("record-rule-actions", () => {
       "after actions are refused by access rules exactly as the acting user's own write",
       () =>
         Effect.gen(function* accessRules() {
-          const http = yield* TestHttpClient;
-          const fixture = yield* AcmeFixture;
+          const {
+            fixture,
+            tokens: { admin: ada, alice, bob },
+          } = yield* signInAll;
+
           const { AM, K, L, M } = fixture.records;
-          const ada = yield* http.signIn("ada", "ada-password");
-          const alice = yield* http.signIn("alice", "alice-password");
-          const bob = yield* http.signIn("bob", "bob-password");
 
           const created = yield* postChangeSet(ada, [
             dockLaptops("sync", null).op,

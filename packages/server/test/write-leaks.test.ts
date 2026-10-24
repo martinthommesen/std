@@ -1,16 +1,3 @@
-/**
- * Review regressions of the write side (Contracts 3.7, 3.8, 6.4):
- *
- * - history reads permissions and entries under one snapshot, so a
- *   concurrent change cannot pair a new value with old read rights;
- * - validation errors name only fields the caller supplied or could read
- *   on the proposed record;
- * - a stale create is checked for fields that became required without a
- *   default;
- * - a stale write names fields by write rights as well as read rights.
- */
-import { randomUUID } from "node:crypto";
-
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Operation } from "@std/definitions/operation";
 import type { JsonValue } from "@std/values/json-value";
@@ -36,7 +23,18 @@ import {
   recordPath,
 } from "./reads-support.ts";
 import { rootVersion } from "./records-support.ts";
-import { addOverride, change } from "./schema-support.ts";
+/**
+ * Review regressions of the write side (Contracts 3.7, 3.8, 6.4):
+ *
+ * - history reads permissions and entries under one snapshot, so a
+ *   concurrent change cannot pair a new value with old read rights;
+ * - validation errors name only fields the caller supplied or could read
+ *   on the proposed record;
+ * - a stale create is checked for fields that became required without a
+ *   default;
+ * - a stale write names fields by write rights as well as read rights.
+ */
+import { addAccessRule, addOverride, change } from "./schema-support.ts";
 import { lockWaiterCount, waitUntil } from "./support.ts";
 import { ASSET, create, history, LAPTOP, patch } from "./writes-support.ts";
 
@@ -228,24 +226,12 @@ describe("write-leaks", () => {
           const fixture = yield* AcmeFixture;
 
           yield* change([
-            {
-              definition: {
-                actions: ["update"],
-                active: true,
-                classId: ACME.asset,
-                condition: null,
-                description: "employees may update cost",
-                effect: "allow",
-                id: randomUUID(),
-                kind: "accessRule",
-                name: null,
-                owner: { layer: "local" },
-                protected: false,
-                roleIds: [EMPLOYEE],
-                target: { fields: [COST], kind: "fields" },
-              },
-              op: "createAccessRule",
-            },
+            addAccessRule(
+              ACME.asset,
+              [EMPLOYEE],
+              { description: "employees may update cost", fields: [COST] },
+              { actions: ["update"] }
+            ).op,
           ]);
 
           const bob = yield* http.signIn("bob", "bob-password");

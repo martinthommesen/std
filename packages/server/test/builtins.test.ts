@@ -14,12 +14,12 @@
  * they were; label and help-text changes succeed on both paths and change
  * no catalog object.
  */
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Definition } from "@std/definitions/definition";
 import { isLive } from "@std/definitions/definition";
-import { RENAMABLE, RETIRABLE, UPDATABLE } from "@std/definitions/operation";
+import { RENAMABLE, RETIRABLE } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
 import {
   BUILT_IN_ROLE_IDS,
@@ -28,7 +28,6 @@ import {
   SYSTEM_USER_ID,
   USER_CLASS_ID,
 } from "@std/definitions/well-known";
-import type { JsonObject } from "@std/values/json-value";
 import { Plaintext } from "@std/values/write-only";
 import { Effect, Exit } from "effect";
 import { forEach } from "effect/Effect";
@@ -37,6 +36,7 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { effectiveRoles } from "../src/auth/actor.ts";
 import { hashPassword } from "../src/auth/password.ts";
+import { newSessionToken } from "../src/auth/sessions.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import {
   deleteOperation,
@@ -47,6 +47,7 @@ import { observe } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
+  refusedOperations,
   genericFormOf,
   postChangeSet,
   sendGeneric,
@@ -113,7 +114,7 @@ const CORE_LAYER = "core";
  */
 const plantSession = (userId: string) =>
   Effect.gen(function* plantSessionRow() {
-    const token = randomBytes(32).toString("base64url");
+    const token = newSessionToken();
     const hash = createHash("sha256").update(token, "utf-8").digest("hex");
 
     yield* values(
@@ -125,48 +126,6 @@ const plantSession = (userId: string) =>
 
     return token;
   });
-
-/**
- * Every operation on a protected definition other than a label or
- * help-text change (as `schema-protected.test.ts` lists them for the
- * engine): delete, purge, rename, retire and reactivate where the kind
- * has them, and an update of each other updatable property to its
- * current value, so only the guard can refuse it.
- *
- * @param definition - A protected definition.
- * @returns The operations, each tried as its own change set.
- */
-const refusedOperations = (definition: Definition): readonly Operation[] => {
-  const { id, version } = definition;
-  const current: JsonObject = definition;
-
-  const updates = UPDATABLE[definition.kind]
-    .filter((key) => key !== "label" && key !== "helpText")
-    .map((key): Operation => ({
-      changes: { [key]: current[key] ?? null },
-      id,
-      op: "update",
-      version,
-    }));
-
-  const lifecycle: Operation[] = [
-    { id, op: "delete", version },
-    { confirm: { id, version }, id, op: "purge", version },
-  ];
-
-  if (RENAMABLE.has(definition.kind)) {
-    lifecycle.push({ id, name: "renamed_by_admin", op: "rename", version });
-  }
-
-  if (RETIRABLE.has(definition.kind)) {
-    lifecycle.push(
-      { id, op: "retire", version },
-      { id, op: "reactivate", version }
-    );
-  }
-
-  return [...lifecycle, ...updates];
-};
 
 /** The refusals 1.8 allows for these operations, by status. */
 const PROTECTED_REFUSALS: ReadonlyMap<string, number> = new Map([

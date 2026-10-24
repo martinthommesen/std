@@ -110,17 +110,20 @@ describe("schema-recovery", () => {
     );
   });
 
-  layer(schemaTestLayer({ maxConnections: 12 }), {
-    excludeTestServices: true,
-    timeout: 180_000,
-  })((dbTest) => {
+  layer(
+    Layer.effectDiscard(loadCoreAndAcme).pipe(
+      Layer.provideMerge(schemaTestLayer({ maxConnections: 12 }))
+    ),
+    {
+      excludeTestServices: true,
+      timeout: 180_000,
+    }
+  )((dbTest) => {
     dbTest.effect(
       "an index build blocked by an idle-in-transaction session is reported by the watchdog and not cancelled",
       () =>
         Effect.scoped(
           Effect.gen(function* watchdog() {
-            yield* loadCoreAndAcme;
-
             const crate = createClass("crate_w");
             const size = addField(crate.id, "size", { kind: "integer" });
 
@@ -193,8 +196,6 @@ describe("schema-recovery", () => {
       () =>
         Effect.scoped(
           Effect.gen(function* abandonBuild() {
-            yield* loadCoreAndAcme;
-
             const built = yield* duplicateDuringBuild("stamp_a");
             const id = built.result.changeSetId ?? "";
             const indexName = generatedName("ix", built.unique.id);
@@ -263,8 +264,6 @@ describe("schema-recovery", () => {
       () =>
         Effect.scoped(
           Effect.gen(function* resumeBuild() {
-            yield* loadCoreAndAcme;
-
             const built = yield* duplicateDuringBuild("stamp_r");
             const id = built.result.changeSetId ?? "";
 
@@ -301,8 +300,6 @@ describe("schema-recovery", () => {
       "the resumer of a process finishes a change set its coordinator left applying",
       () =>
         Effect.gen(function* resumer() {
-          yield* loadCoreAndAcme;
-
           const bale = createClass("bale");
           const weight = addField(bale.id, "weight", { kind: "integer" });
 
@@ -348,8 +345,6 @@ describe("schema-recovery", () => {
       () =>
         Effect.scoped(
           Effect.gen(function* abandonFinished() {
-            yield* loadCoreAndAcme;
-
             const first = createClass("first_a");
             const second = createClass("second_b");
             const a = addField(first.id, "a", { kind: "integer" });
@@ -431,8 +426,6 @@ describe("schema-recovery", () => {
       "abandoning an interrupted drop of a unique index finishes the drop",
       () =>
         Effect.gen(function* abandonDrop() {
-          yield* loadCoreAndAcme;
-
           const token = createClass("token_d");
           const value = addField(token.id, "value", { kind: "integer" });
           const unique = addIndex(token.id, [value.id], true);
@@ -468,8 +461,6 @@ describe("schema-recovery", () => {
 
     dbTest.effect("std schema status and abandon run as commands", () =>
       Effect.gen(function* commands() {
-        yield* loadCoreAndAcme;
-
         const database = yield* TestDatabase;
 
         const status = yield* runCli(database.url, [

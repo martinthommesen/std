@@ -58,16 +58,6 @@ type MetaTable = typeof TableMetadata.Type;
 
 type MetaSavedFilter = NonNullable<MetaTable["savedFilters"]>[number];
 
-const metadataOf = Effect.fn("HelpdeskRename.metadataOf")(function* metadataOf(
-  token: string
-) {
-  const { body, response } = yield* fetchMetadata(token, INCIDENT);
-
-  assert.strictEqual(response.status, 200, response.text);
-
-  return body;
-});
-
 /**
  * A layout as `name@fieldId` and `#section`.
  *
@@ -109,7 +99,7 @@ const observe = Effect.fn("HelpdeskRename.observe")(function* observe(
   token: string,
   filterName: string
 ) {
-  const table = yield* metadataOf(token);
+  const { body: table } = yield* fetchMetadata(token, INCIDENT);
   const filter = savedFilter(table, filterName);
 
   const { resources } = yield* allPages({ token }, INCIDENT, {

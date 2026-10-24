@@ -32,6 +32,7 @@ import {
   itilLayer,
   recordServices,
 } from "./itil-support.ts";
+import { linksOf } from "./paging.ts";
 import {
   addField,
   change,
@@ -161,15 +162,15 @@ const outcome = (response: {
  * @returns The path and query, or empty.
  */
 const linkOf = (response: TestResponse, relation: string): string => {
-  const header = response.headers.get("link") ?? "";
+  const uri = linksOf(response.headers.get("link")).get(relation);
 
-  const entry = header
-    .split(",")
-    .find((part) => part.includes(`rel="${relation}"`));
+  if (uri === undefined) {
+    return "";
+  }
 
-  const url = entry?.slice(entry.indexOf("<") + 1, entry.indexOf(">")) ?? "";
+  const url = new URL(uri);
 
-  return url === "" ? "" : url.slice(new URL(url).origin.length);
+  return `${url.pathname}${url.search}`;
 };
 
 const statuses = (ticket: JsonObject): readonly string[] =>
