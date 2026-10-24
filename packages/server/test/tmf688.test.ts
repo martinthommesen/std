@@ -335,6 +335,238 @@ describe("tmf688-topics", () => {
 
 describe("tmf-oas-contract", () => {
   it.effect(
+    "TMF688 fields conflicts use exact errors and each operation's declared status",
+    () =>
+      Effect.gen(function* selectorConflicts() {
+        const http = yield* TestHttpClient;
+        const admin = { token: yield* http.signIn("ada", "ada-password") };
+
+        const topic = yield* http.request("POST", `${BASE}/topic`, {
+          ...admin,
+          body: { name: "selector conflicts" },
+        });
+
+        assert.strictEqual(topic.status, 201, topic.text);
+        const id = textOf(asObject(topic.json).id);
+        const callback = yield* listener();
+
+        const hub = yield* http.request("POST", `${BASE}/topic/${id}/hub`, {
+          ...admin,
+          body: { callback: callback.origin, query: "eventType=Selection" },
+        });
+
+        assert.strictEqual(hub.status, 201, hub.text);
+        const hubId = textOf(asObject(hub.json).id);
+
+        const event = yield* http.request("POST", `${BASE}/topic/${id}/event`, {
+          ...admin,
+          body: {
+            "@type": "SelectionEvent",
+            event: {},
+            eventId: "selection",
+            eventType: "Selection",
+          },
+        });
+
+        assert.strictEqual(event.status, 201, event.text);
+
+        const topHub = yield* http.request("POST", `${BASE}/hub`, {
+          ...admin,
+          body: { callback: callback.origin },
+        });
+
+        assert.strictEqual(topHub.status, 201, topHub.text);
+
+        for (const [path, attribute, status] of [
+          ["/topic", "name", 409],
+          [`/topic/${id}`, "name", 409],
+          [`/topic/${id}/hub`, "query", 409],
+          [`/topic/${id}/hub/${hubId}`, "query", 409],
+          [`/topic/${id}/event`, "eventType", 409],
+          [`/topic/${id}/event/selection`, "eventType", 409],
+          [`/hub/${textOf(asObject(topHub.json).id)}`, "query", 400],
+        ] as const) {
+          for (const fields of [
+            `${attribute},!${attribute}`,
+            `!${attribute}, ${attribute}`,
+          ]) {
+            const response = yield* http.get(
+              `${BASE}${path}?fields=${encodeURIComponent(fields)}`,
+              admin
+            );
+
+            assert.strictEqual(
+              response.status,
+              status,
+              `${path}: ${response.text}`
+            );
+            assert.deepStrictEqual(response.json, {
+              code: "FieldsConflict",
+              reason: "The request could not be completed",
+              status: String(status),
+            });
+          }
+
+          for (const [fields, code] of [
+            ["missing", "UnknownField"],
+            ["!missing", "UnknownField"],
+            ["", "InvalidRequest"],
+            [`${attribute},`, "InvalidRequest"],
+          ] as const) {
+            const response = yield* http.get(
+              `${BASE}${path}?fields=${encodeURIComponent(fields)}`,
+              admin
+            );
+
+            assert.strictEqual(
+              response.status,
+              400,
+              `${path}: ${response.text}`
+            );
+            assert.deepStrictEqual(response.json, {
+              code,
+              reason: "The request could not be completed",
+              status: "400",
+            });
+          }
+        }
+
+        const empty = yield* http.get(
+          `${BASE}/topic?name=absent-selector-topic&fields=name,!name`,
+          admin
+        );
+
+        assert.strictEqual(empty.status, 409, empty.text);
+        assert.deepStrictEqual(empty.json, {
+          code: "FieldsConflict",
+          reason: "The request could not be completed",
+          status: "409",
+        });
+      }).pipe(Effect.provide(hubTestLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "TMF688 applies distinct mixed fields in order and preserves identity under none and exclusions",
+    () =>
+      Effect.gen(function* selectorProjections() {
+        const http = yield* TestHttpClient;
+        const admin = { token: yield* http.signIn("ada", "ada-password") };
+
+        const topic = yield* http.request("POST", `${BASE}/topic`, {
+          ...admin,
+          body: {
+            contentQuery: "content",
+            headerQuery: "header",
+            name: "selector projections",
+          },
+        });
+
+        assert.strictEqual(topic.status, 201, topic.text);
+        const id = textOf(asObject(topic.json).id);
+
+        const topicIdentity = {
+          "@type": "Topic",
+          href: `http://localhost${BASE}/topic/${id}`,
+          id,
+        };
+
+        const callback = yield* listener();
+
+        const hub = yield* http.request("POST", `${BASE}/topic/${id}/hub`, {
+          ...admin,
+          body: { callback: callback.origin, query: "eventType=Selection" },
+        });
+
+        assert.strictEqual(hub.status, 201, hub.text);
+        const hubId = textOf(asObject(hub.json).id);
+
+        const hubIdentity = {
+          "@type": "Hub",
+          callback: callback.origin,
+          href: `http://localhost${BASE}/topic/${id}/hub/${hubId}`,
+          id: hubId,
+        };
+
+        const event = yield* http.request("POST", `${BASE}/topic/${id}/event`, {
+          ...admin,
+          body: {
+            "@baseType": "Event",
+            "@schemaLocation": "https://example.test/selection.schema.json",
+            "@type": "SelectionEvent",
+            event: { value: "kept whole" },
+            eventId: "selection",
+            eventType: "Selection",
+          },
+        });
+
+        assert.strictEqual(event.status, 201, event.text);
+
+        const eventIdentity = {
+          "@baseType": "Event",
+          "@schemaLocation": "https://example.test/selection.schema.json",
+          "@type": "SelectionEvent",
+          href: `http://localhost${BASE}/topic/${id}/event/selection`,
+          id: "selection",
+        };
+
+        for (const [paths, fields, expected] of [
+          [
+            [`/topic?name=selector%20projections`, `/topic/${id}`],
+            ["name,!headerQuery", "!headerQuery,name", " name , !headerQuery "],
+            { ...topicIdentity, name: "selector projections" },
+          ],
+          [
+            [`/topic/${id}/hub`, `/topic/${id}/hub/${hubId}`],
+            ["query,!callback", "!callback,query"],
+            { ...hubIdentity, query: "eventType=Selection" },
+          ],
+          [
+            [`/topic/${id}/event`, `/topic/${id}/event/selection`],
+            ["eventType,!event", "!event,eventType"],
+            { ...eventIdentity, eventType: "Selection" },
+          ],
+          [
+            [`/topic?name=selector%20projections`, `/topic/${id}`],
+            ["none", "!id,!href,!@type,!name,!headerQuery,!contentQuery"],
+            topicIdentity,
+          ],
+          [
+            [`/topic/${id}/hub`, `/topic/${id}/hub/${hubId}`],
+            ["none", "!id,!href,!@type,!callback,!query"],
+            hubIdentity,
+          ],
+          [
+            [`/topic/${id}/event`, `/topic/${id}/event/selection`],
+            [
+              "none",
+              "!id,!href,!@type,!@baseType,!@schemaLocation,!event,!eventId,!eventTime,!eventType",
+            ],
+            eventIdentity,
+          ],
+        ] as const) {
+          for (const path of paths) {
+            for (const selection of fields) {
+              const response = yield* http.get(
+                `${BASE}${path}${path.includes("?") ? "&" : "?"}fields=${encodeURIComponent(selection)}`,
+                admin
+              );
+
+              assert.strictEqual(
+                response.status,
+                200,
+                `${path}: ${response.text}`
+              );
+              assert.deepStrictEqual(
+                response.json,
+                path === paths[0] ? [expected] : expected
+              );
+            }
+          }
+        }
+      }).pipe(Effect.provide(hubTestLayer), TestClock.withLive)
+  );
+
+  it.effect(
     "the contract validator refuses undeclared routes, methods and non-hub rate limits",
     () =>
       Effect.gen(function* rejectedExchanges() {
