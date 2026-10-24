@@ -11,11 +11,39 @@ import {
   DefinitionSchema,
   FieldDraftSchema,
   OverrideDraftSchema,
+  SubscriptionDraftSchema,
+  withAddedDefaults,
 } from "../src/definition.ts";
 import { OperationSchema } from "../src/operation.ts";
 
 const ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 const OTHER = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e90";
+
+const subscription = {
+  classId: OTHER,
+  condition: null,
+  deadLetter: "block",
+  enabled: true,
+  id: ID,
+  identityId: OTHER,
+  kind: "subscription",
+  maxAttempts: 10,
+  name: "released_subscription",
+  operations: ["create"],
+  owner: { layer: "local" },
+  protected: false,
+} as const;
+
+const hub = {
+  api: "generic",
+  callback: "https://listener.example/events",
+  eventTypes: ["RecordCreateEvent"],
+  origin: "https://std.example",
+  query: null,
+  queryFieldIds: [],
+  resource: "coreUser",
+  topicId: null,
+};
 
 /** An `addField` draft as v0.0.1's quickstart sends it. */
 const releasedField = {
@@ -52,6 +80,87 @@ const releasedOverride = {
 } as const;
 
 describe("release compatibility of definitions", () => {
+  it("normalizes absent and null subscription hubs, preserving valid hubs on drafts, operations and revisions", () => {
+    for (const supplied of [
+      subscription,
+      { ...subscription, hub: null },
+      { ...subscription, hub },
+    ]) {
+      const expected = "hub" in supplied ? supplied.hub : null;
+      const draft = Schema.decodeUnknownSync(SubscriptionDraftSchema)(supplied);
+
+      const operation = Schema.decodeUnknownSync(OperationSchema)({
+        definition: supplied,
+        op: "createSubscription",
+      });
+
+      const definition = Schema.decodeUnknownSync(DefinitionSchema)({
+        ...supplied,
+        state: "active",
+        version: 1,
+      });
+
+      assert.deepStrictEqual(draft.hub, expected);
+      assert.isTrue(operation.op === "createSubscription");
+
+      if (operation.op === "createSubscription") {
+        assert.deepStrictEqual(operation.definition.hub, expected);
+      }
+
+      assert.isTrue(definition.kind === "subscription");
+
+      if (definition.kind === "subscription") {
+        assert.deepStrictEqual(definition.hub, expected);
+      }
+
+      assert.deepStrictEqual(withAddedDefaults(supplied), {
+        ...supplied,
+        hub: expected,
+      });
+    }
+
+    assert.isFalse("hub" in subscription);
+  });
+
+  it("rejects malformed present hubs and required subscription properties instead of defaulting them", () => {
+    for (const supplied of [
+      ...[false, "", 7, [], {}, { ...hub, callback: 7 }].map((hubValue) => ({
+        ...subscription,
+        hub: hubValue,
+      })),
+      { ...subscription, maxAttempts: 0 },
+      { ...subscription, operations: ["read"] },
+      { ...subscription, identityId: "not-a-uuid" },
+    ]) {
+      assert.isTrue(
+        Result.isFailure(
+          Schema.decodeUnknownResult(SubscriptionDraftSchema)(supplied)
+        )
+      );
+      assert.isTrue(
+        Result.isFailure(
+          Schema.decodeUnknownResult(OperationSchema)({
+            definition: supplied,
+            op: "createSubscription",
+          })
+        )
+      );
+      assert.isTrue(
+        Result.isFailure(
+          Schema.decodeUnknownResult(DefinitionSchema)({
+            ...supplied,
+            state: "active",
+            version: 1,
+          })
+        )
+      );
+      assert.deepStrictEqual(withAddedDefaults(supplied), {
+        hub: null,
+        ...supplied,
+      });
+    }
+  });
+
   it("decodes a v0.0.1 field draft with numberPrefix null", () => {
     const decoded = Schema.decodeUnknownSync(FieldDraftSchema)(releasedField);
 

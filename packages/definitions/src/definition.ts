@@ -434,7 +434,7 @@ const subscriptionFields = {
   condition: NullOr(ConditionSchema),
   deadLetter: Literals(["block", "skip"]),
   enabled: SchemaBoolean,
-  hub: optionalKey(NullOr(HubConfigurationSchema)),
+  hub: nullWhenAbsent(NullOr(HubConfigurationSchema)),
   identityId: DefinitionIdSchema,
   kind: Literal("subscription"),
   maxAttempts: Int.check(isGreaterThanOrEqualTo(1)),
@@ -737,6 +737,7 @@ export const ADDED_PROPERTY_DEFAULTS: Readonly<
 > = {
   field: { numberPrefix: null },
   override: { choices: null, numberPrefix: null },
+  subscription: { hub: null },
 };
 
 /**

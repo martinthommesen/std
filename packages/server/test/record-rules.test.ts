@@ -1147,6 +1147,7 @@ describe("record-rules", () => {
                   condition: null,
                   deadLetter: "block",
                   enabled: true,
+                  hub: null,
                   id: carrier,
                   identityId: USERS.alice,
                   kind: "subscription",

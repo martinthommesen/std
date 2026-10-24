@@ -863,6 +863,7 @@ export const setUpAggregates = Effect.gen(function* setUpAggregates() {
         condition: null,
         deadLetter: "block",
         enabled: true,
+        hub: null,
         id: TICKET_WATCH,
         identityId: USERS.alice,
         kind: "subscription",

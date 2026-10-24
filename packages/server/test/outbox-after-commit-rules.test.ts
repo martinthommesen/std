@@ -82,6 +82,7 @@ const ruleRuns = Effect.gen(function* ruleRunsTest() {
           condition: null,
           deadLetter: "block",
           enabled: true,
+          hub: null,
           id: carrier,
           identityId: admin,
           kind: "subscription",

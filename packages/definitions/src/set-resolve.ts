@@ -29,7 +29,7 @@ import type {
   RecordRuleDraft,
   FormRuleDraft,
   RoleDraft,
-  SubscriptionDraft,
+  SubscriptionDraftSchema,
 } from "./definition.ts";
 import type { DefinitionId } from "./ids.ts";
 import { splitQualifiedName } from "./names.ts";
@@ -54,7 +54,7 @@ import type {
 } from "./set-file.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
 
-/** Any draft. */
+/** Any resolved set draft; absent hub stays absent in shipped content and its hash. */
 export type Draft =
   | NamespaceDraft
   | ClassDraft
@@ -65,7 +65,7 @@ export type Draft =
   | PermissionDraft
   | GrantDraft
   | AccessRuleDraft
-  | SubscriptionDraft
+  | typeof SubscriptionDraftSchema.Encoded
   | ChoiceDraft
   | LayoutDraft
   | SavedFilterDraft
