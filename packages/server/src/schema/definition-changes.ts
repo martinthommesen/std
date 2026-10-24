@@ -18,7 +18,7 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
-import { tableOf } from "../catalog/definition-tables.ts";
+import { definitionColumns, tableOf } from "../catalog/definition-tables.ts";
 import { writeChangeEntry } from "../records/change-entry.ts";
 import type { ChangeCause, ChangeEntry } from "../records/change-entry.ts";
 import { writeChangeImageValues } from "../records/change-image.ts";
@@ -29,46 +29,6 @@ export interface WrittenDefinitionChange {
   readonly after: Definition;
   readonly entry: ChangeEntry;
 }
-
-const fieldsValue = (fields: "*" | readonly string[]): JsonValue =>
-  fields === "*" ? "*" : [...fields];
-
-/**
- * A definition's row as column values in canonical JSON.
- *
- * @param definition - Any definition.
- * @returns Column name to value.
- */
-export const definitionColumns = (
-  definition: Definition
-): ReadonlyMap<string, JsonValue> => {
-  const entry = tableOf(definition.kind);
-  const json: JsonObject = definition;
-  const { owner } = definition;
-
-  const columns = new Map<string, JsonValue>([
-    ["owner_layer", owner.layer],
-    ["owner_set_id", owner.layer === "app" ? owner.setId : null],
-    ["state", definition.state],
-    ["protected", definition.protected],
-  ]);
-
-  for (const spec of entry.columns) {
-    columns.set(spec.column, json[spec.property] ?? null);
-  }
-
-  if (definition.kind === "accessRule") {
-    const { target } = definition;
-
-    columns.set("target", target.kind);
-    columns.set(
-      "fields",
-      target.kind === "fields" ? fieldsValue(target.fields) : null
-    );
-  }
-
-  return columns;
-};
 
 /**
  * A definition's complete canonical platform image, keyed by field ID.

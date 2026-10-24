@@ -114,6 +114,10 @@ const updateEach = Effect.fn("Rules.updateEach")(function* updateEach(
       const via = input.snapshot.field(target.via);
       const targetId = source?.image[target.via];
 
+      if (isString(targetId) && saved.has(targetId)) {
+        continue;
+      }
+
       endpointClassId =
         via?.type.kind === "reference"
           ? via.type.targetClassId

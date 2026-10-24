@@ -310,48 +310,40 @@ const columnOfProperty = (
  *
  * @param kind - The definition kind.
  * @param definition - The draft built from the body.
+ * @param failure - The existing draft decoding failure.
  * @returns The field errors; none when no property is to blame.
  */
 const draftFieldErrors = (
   kind: DefinitionKind,
-  definition: JsonObject
+  definition: JsonObject,
+  failure: SchemaIssue.Issue
 ): readonly FieldError[] => {
-  const result = Schema.decodeUnknownResult(DRAFT_SCHEMAS[kind])(definition, {
-    errors: "all",
-  });
+  const errors = issuePaths(failure).issues.flatMap((issue): FieldError[] => {
+    const property = issue.path?.[0];
 
-  if (Result.isSuccess(result)) {
-    return [];
-  }
-
-  const errors = issuePaths(result.failure.issue).issues.flatMap(
-    (issue): FieldError[] => {
-      const property = issue.path?.[0];
-
-      if (!Predicate.isString(property)) {
-        return [];
-      }
-
-      const column = columnOfProperty(kind, property, definition);
-
-      if (column === undefined) {
-        return [];
-      }
-
-      if (definition[property] === undefined) {
-        return [{ _tag: "Required", field: column }];
-      }
-
-      return [
-        {
-          _tag: "InvalidValue",
-          field: column,
-          message: COLUMN_HINTS.get(`${kind}.${column}`) ?? INVALID_PROPERTY,
-          reason: "invalidFormat",
-        },
-      ];
+    if (!Predicate.isString(property)) {
+      return [];
     }
-  );
+
+    const column = columnOfProperty(kind, property, definition);
+
+    if (column === undefined) {
+      return [];
+    }
+
+    if (definition[property] === undefined) {
+      return [{ _tag: "Required", field: column }];
+    }
+
+    return [
+      {
+        _tag: "InvalidValue",
+        field: column,
+        message: COLUMN_HINTS.get(`${kind}.${column}`) ?? INVALID_PROPERTY,
+        reason: "invalidFormat",
+      },
+    ];
+  });
 
   return errors.filter(
     (error, index) =>
@@ -363,20 +355,12 @@ const draftFieldErrors = (
 
 const decoded = (
   candidate: JsonObject
-): Effect.Effect<Operation, InvalidRequest> => {
-  const result = decodeOperation(candidate);
-
-  return Result.isSuccess(result)
-    ? Effect.succeed(result.success)
-    : Effect.fail(
-        invalidBody("The body does not describe a valid definition.")
-      );
-};
-
-const fromResult = <A, E>(result: Result.Result<A, E>): Effect.Effect<A, E> =>
-  Result.isSuccess(result)
-    ? Effect.succeed(result.success)
-    : Effect.fail(result.failure);
+): Effect.Effect<Operation, InvalidRequest> =>
+  Effect.fromResult(decodeOperation(candidate)).pipe(
+    Effect.mapError(() =>
+      invalidBody("The body does not describe a valid definition.")
+    )
+  );
 
 /**
  * The operation a generic `DELETE` stands for.
@@ -408,7 +392,9 @@ export const createOperation = Effect.fn("Http.definitionCreate")(
     id: DefinitionId,
     body: Readonly<Record<string, JsonValue>>
   ) {
-    const properties = yield* fromResult(propertiesOf(kind, body, false));
+    const properties = yield* Effect.fromResult(
+      propertiesOf(kind, body, false)
+    );
 
     const defaults = defaultsOf(kind);
 
@@ -422,10 +408,12 @@ export const createOperation = Effect.fn("Http.definitionCreate")(
       protected: false,
     };
 
-    const result = Schema.decodeUnknownResult(DRAFT_SCHEMAS[kind])(definition);
+    const result = Schema.decodeUnknownResult(DRAFT_SCHEMAS[kind])(definition, {
+      errors: "all",
+    });
 
     if (Result.isFailure(result)) {
-      const errors = draftFieldErrors(kind, definition);
+      const errors = draftFieldErrors(kind, definition, result.failure.issue);
 
       return yield* errors.length === 0
         ? invalidBody("The body does not describe a valid definition.")
@@ -539,7 +527,7 @@ export const updateOperations = Effect.fn("Http.definitionUpdate")(
     version: number,
     body: Readonly<Record<string, JsonValue>>
   ) {
-    const properties = yield* fromResult(
+    const properties = yield* Effect.fromResult(
       propertiesOf(current.kind, mergedJsonColumns(current, body), true)
     );
 

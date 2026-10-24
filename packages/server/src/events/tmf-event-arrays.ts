@@ -75,15 +75,16 @@ import type { RenderPrepared } from "../outbox/delivery-effects.ts";
 import {
   entryTargetKey,
   PayloadUnreadable,
-  payloadOf,
+  projectVersionImage,
+  savedVersionImage,
   readFieldOrigins,
   readEntriesAt,
   versionImage,
 } from "../outbox/delivery-payload.ts";
 import type {
-  DeliveryPayload,
+  ProjectedImage,
+  VersionImage,
   FieldOrigin,
-  StoredEntry,
 } from "../outbox/delivery-payload.ts";
 import { ChangeKindSchema } from "../records/change-entry.ts";
 import { currentReadScope, readByIds } from "../records/read-records.ts";
@@ -146,50 +147,12 @@ interface ArrayRead {
 /** A part at one version: its whole image and what the identity sees. */
 interface PartAt {
   readonly row: PartRow;
-  /** Field ID to canonical JSON, unmasked (the owner reference). */
-  readonly known: ReadonlyMap<DefinitionId, JsonValue>;
-  readonly payload: DeliveryPayload;
+  readonly projection: ProjectedImage;
 }
 
 /**
- * A part change with its saved image as the entries `payloadOf` reads: the
- * image is the version's whole image (a delete's: the one it removed), so
- * the entry is read as a version of it.
- *
- * @param row - The part change.
- * @param text - Its saved image.
- * @returns The entries, or undefined when the image does not parse.
- */
-const savedEntries = (
-  row: PartRow,
-  text: string
-): readonly StoredEntry[] | undefined => {
-  const saved = parseJsonbText(text);
-  const occurredAt = parseTimestamptzText(row.occurred_at);
-
-  if (!saved.ok || !isJsonObject(saved.value)) {
-    return undefined;
-  }
-
-  return [
-    {
-      actorId: "",
-      changeId: row.change_id,
-      fields: {},
-      image: saved.value,
-      kind: row.kind === "delete" ? "update" : row.kind,
-      occurredAt: occurredAt.ok ? occurredAt.value : 0,
-      operationId: "",
-      recordClassId: row.record_class_id,
-      recordVersion: row.version,
-      schemaRevision: row.schema_revision,
-    },
-  ];
-};
-
-/**
  * Part changes as the identity may see them: each saved image masked by
- * `payloadOf`; the entries the image backfill (migration 0028) has not
+ * the shared version-image projection; the entries the image backfill (migration 0028) has not
  * reached yet are rebuilt together (`readEntriesAt`: two statements for
  * all, each version reduced in SQL to at most three entries), with each
  * class's field origins read once.
@@ -221,37 +184,47 @@ const partsAt = Effect.fnUntraced(function* partsAt(
   const parts: PartAt[] = [];
 
   for (const row of rows) {
-    const entries =
-      row.image === null
-        ? histories.get(
-            entryTargetKey({ recordId: row.record_id, version: row.version })
-          )
-        : savedEntries(row, row.image);
+    let version: VersionImage | undefined;
 
-    if (entries === undefined || entries.length === 0) {
+    if (row.image === null) {
+      const entries = histories.get(
+        entryTargetKey({ recordId: row.record_id, version: row.version })
+      );
+
+      if (entries !== undefined && entries.length > 0) {
+        version = versionImage(
+          snapshot,
+          entries,
+          origins.get(row.record_class_id) ?? new Map()
+        );
+      }
+    } else {
+      const saved = parseJsonbText(row.image);
+
+      if (saved.ok && isJsonObject(saved.value)) {
+        version = savedVersionImage(snapshot, row.record_class_id, saved.value);
+      }
+    }
+
+    if (version === undefined) {
       return yield* new PayloadUnreadable({
         reason: `Part ${row.record_id} at version ${row.version} (change ${row.change_id}) is not readable.`,
       });
     }
 
-    const classOrigins = origins.get(row.record_class_id) ?? new Map();
-
-    const payload = payloadOf(
+    const projection = projectVersionImage(
       snapshot,
       read.scope.caller,
-      { entries, origins: classOrigins, recordId: row.record_id },
+      row.record_class_id,
+      version,
       read.scope.context
     );
 
-    if (payload instanceof PayloadUnreadable) {
-      return yield* payload;
+    if (projection instanceof PayloadUnreadable) {
+      return yield* projection;
     }
 
-    parts.push({
-      known: versionImage(snapshot, entries, classOrigins).known,
-      payload,
-      row,
-    });
+    parts.push({ projection, row });
   }
 
   return parts;
@@ -325,8 +298,8 @@ ${PART_IMAGES}`
 
     if (
       array !== undefined &&
-      part.payload.visible &&
-      part.known.get(array.item.ownerField) === delivery.recordId
+      part.projection.visible &&
+      part.projection.known.get(array.item.ownerField) === delivery.recordId
     ) {
       touched.add(array.name);
     }
@@ -350,7 +323,7 @@ const sourcePartOf = (
   const updated = parseTimestamptzText(part.row.occurred_at);
 
   const values = new Map(
-    sourceValuesOf(read.delivery.snapshot, part.payload.image)
+    sourceValuesOf(read.delivery.snapshot, part.projection.image)
   );
 
   for (const [key, time] of [
@@ -363,12 +336,12 @@ const sourcePartOf = (
   }
 
   return {
-    classId: part.payload.classId,
+    classId: part.row.record_class_id,
     createdAt: created.ok ? created.value : 0,
     id: part.row.record_id,
     parts: new Map(),
     values,
-    version: part.payload.recordVersion,
+    version: part.row.version,
   };
 };
 
@@ -433,8 +406,8 @@ ORDER BY "p"."record_id", "p"."record_version" DESC`
 
   for (const part of yield* partsAt(read, kept)) {
     if (
-      part.payload.visible &&
-      part.payload.image[owner.id] === delivery.recordId
+      part.projection.visible &&
+      part.projection.image[owner.id] === delivery.recordId
     ) {
       parts.push(sourcePartOf(read, part));
     }

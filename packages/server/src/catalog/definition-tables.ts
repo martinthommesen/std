@@ -429,6 +429,46 @@ export interface BoundValue {
   readonly text: string | null;
 }
 
+const fieldsValue = (fields: "*" | readonly string[]): JsonValue =>
+  fields === "*" ? "*" : [...fields];
+
+/**
+ * A definition's row as column values in canonical JSON.
+ *
+ * @param definition - Any definition.
+ * @returns Column name to value.
+ */
+export const definitionColumns = (
+  definition: Definition
+): ReadonlyMap<string, JsonValue> => {
+  const entry = tableOf(definition.kind);
+  const json: JsonObject = definition;
+  const { owner } = definition;
+
+  const columns = new Map<string, JsonValue>([
+    ["owner_layer", owner.layer],
+    ["owner_set_id", owner.layer === "app" ? owner.setId : null],
+    ["state", definition.state],
+    ["protected", definition.protected],
+  ]);
+
+  for (const spec of entry.columns) {
+    columns.set(spec.column, json[spec.property] ?? null);
+  }
+
+  if (definition.kind === "accessRule") {
+    const { target } = definition;
+
+    columns.set("target", target.kind);
+    columns.set(
+      "fields",
+      target.kind === "fields" ? fieldsValue(target.fields) : null
+    );
+  }
+
+  return columns;
+};
+
 const textOf = (
   codec: ColumnCodec,
   value: JsonValue | undefined
@@ -456,41 +496,22 @@ const textOf = (
  */
 export const boundValues = (definition: Definition): readonly BoundValue[] => {
   const entry = tableOf(definition.kind);
-  const json: JsonObject = definition;
-  const { owner } = definition;
+  const columns = definitionColumns(definition);
 
-  const values: BoundValue[] = [
-    { cast: "text", column: "owner_layer", text: owner.layer },
-    {
-      cast: "uuid",
-      column: "owner_set_id",
-      text: owner.layer === "app" ? owner.setId : null,
-    },
-    { cast: "text", column: "state", text: definition.state },
-    {
-      cast: "boolean",
-      column: "protected",
-      text: String(definition.protected),
-    },
-    ...entry.columns.map((spec) => ({
-      cast: CODECS[spec.codec].cast,
-      column: spec.column,
-      text: textOf(spec.codec, json[spec.property]),
-    })),
+  const specs: readonly {
+    readonly column: string;
+    readonly codec: ColumnCodec;
+  }[] = [
+    { codec: "text", column: "owner_layer" },
+    { codec: "uuid", column: "owner_set_id" },
+    { codec: "text", column: "state" },
+    { codec: "boolean", column: "protected" },
+    ...columnsOf(entry),
   ];
 
-  if (definition.kind === "accessRule") {
-    const { target } = definition;
-
-    values.push(
-      { cast: "text", column: "target", text: target.kind },
-      {
-        cast: "jsonb",
-        column: "fields",
-        text: target.kind === "fields" ? stringifyJson(target.fields) : null,
-      }
-    );
-  }
-
-  return values;
+  return specs.map((spec) => ({
+    cast: CODECS[spec.codec].cast,
+    column: spec.column,
+    text: textOf(spec.codec, columns.get(spec.column)),
+  }));
 };

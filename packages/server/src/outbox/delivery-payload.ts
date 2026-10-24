@@ -64,7 +64,7 @@ import {
   parseTimestamptzText,
 } from "@std/values/postgres-text";
 import { isPlaintext } from "@std/values/write-only";
-import { Effect, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 
 import { definitionOf } from "../catalog/definition-revisions.ts";
 import type { AccessContext } from "../records/access-sql.ts";
@@ -386,12 +386,15 @@ const entriesFromImages = Effect.fnUntraced(function* entriesFromImages(
  * version (`entryTargetKey`), so two versions of one record never mix.
  *
  * @param targets - The records and versions.
- * @returns Each target's entries, the requested entry last; empty when the
- *   version has no entry.
+ * @returns Each target's entries or its decoding failure; SQL failures still fail the effect.
+ *   The requested entry is last; entries are empty when the version has none.
  */
-export const readEntriesAt = Effect.fn("Outbox.readEntriesAt")(
-  function* readEntriesAt(targets: readonly EntryTarget[]) {
-    const result = new Map<string, readonly StoredEntry[]>();
+export const readEntryResultsAt = Effect.fn("Outbox.readEntryResultsAt")(
+  function* readEntryResultsAt(targets: readonly EntryTarget[]) {
+    const result = new Map<
+      string,
+      Result.Result<readonly StoredEntry[], PayloadUnreadable>
+    >();
 
     const unique = [
       ...new Map(
@@ -420,12 +423,21 @@ ORDER BY "t"."record_id", "t"."version", "c"."record_version"`
 
     for (const target of unique) {
       const key = entryTargetKey(target);
-      const entries = yield* entriesFromImages(target, imaged.get(key) ?? []);
 
-      if (entries === null) {
+      const entries = yield* entriesFromImages(
+        target,
+        imaged.get(key) ?? []
+      ).pipe(Effect.result);
+
+      if (Result.isSuccess(entries) && entries.success === null) {
         legacy.push(target);
       } else {
-        result.set(key, entries);
+        result.set(
+          key,
+          Result.isFailure(entries)
+            ? Result.fail(entries.failure)
+            : Result.succeed(entries.success ?? [])
+        );
       }
     }
 
@@ -473,19 +485,42 @@ ORDER BY "c"."target_id", "c"."target_version", "c"."record_version"`
 
     for (const target of legacy) {
       const key = entryTargetKey(target);
-      const entries: StoredEntry[] = [];
 
-      for (const row of reduced.get(key) ?? []) {
-        entries.push({
-          ...(yield* entryOf(row)),
-          completeFromCreate: row.complete === "true",
-        });
-      }
+      const decoded = yield* Effect.gen(function* decodeLegacy() {
+        const entries: StoredEntry[] = [];
 
-      result.set(key, entries);
+        for (const row of reduced.get(key) ?? []) {
+          entries.push({
+            ...(yield* entryOf(row)),
+            completeFromCreate: row.complete === "true",
+          });
+        }
+
+        return entries;
+      }).pipe(Effect.result);
+
+      result.set(key, decoded);
     }
 
     return result;
+  }
+);
+
+/**
+ * Several versions' entries, failing on the first unreadable target.
+ * @param targets - The requested versions.
+ * @returns Each target's entries in version order.
+ */
+export const readEntriesAt = Effect.fn("Outbox.readEntriesAt")(
+  function* readEntriesAt(targets: readonly EntryTarget[]) {
+    const results = yield* readEntryResultsAt(targets);
+    const entries = new Map<string, readonly StoredEntry[]>();
+
+    for (const [key, result] of results) {
+      entries.set(key, yield* Effect.fromResult(result));
+    }
+
+    return entries;
   }
 );
 
@@ -673,7 +708,14 @@ const unmentionedWithImage = (
   return unmentionedValue(input);
 };
 
-const savedVersionImage = (
+/**
+ * Restricts a saved image to current non-secret payload fields.
+ * @param snapshot - The current configuration.
+ * @param classId - The concrete class.
+ * @param image - The saved canonical image.
+ * @returns Known values and unknown field IDs.
+ */
+export const savedVersionImage = (
   snapshot: ConfigSnapshot,
   classId: DefinitionId,
   image: JsonObject
@@ -922,6 +964,52 @@ export const readabilityOf = (
   return { fields, visible };
 };
 
+/** The known values and caller-visible projection of one version. */
+export interface ProjectedImage {
+  readonly known: ReadonlyMap<DefinitionId, JsonValue>;
+  readonly image: JsonObject;
+  readonly visible: boolean;
+}
+
+/**
+ * Decodes and masks a version image under current authorization rules.
+ * @param snapshot - The current configuration.
+ * @param caller - The caller and roles.
+ * @param classId - The concrete class.
+ * @param version - The known canonical values.
+ * @param context - The authorization context.
+ * @returns The projection, or the same class/value failure as a delivery payload.
+ */
+export const projectVersionImage = (
+  snapshot: ConfigSnapshot,
+  caller: Caller,
+  classId: DefinitionId,
+  version: VersionImage,
+  context: AccessContext
+): ProjectedImage | PayloadUnreadable => {
+  if (snapshot.class(classId) === undefined) {
+    return unreadable(
+      `Class ${classId} of the change is not in the configuration.`
+    );
+  }
+
+  const image = decodedImage(snapshot, classId, version.known);
+
+  if (image instanceof PayloadUnreadable) {
+    return image;
+  }
+
+  const readable = readabilityOf(snapshot, caller, classId, image, context);
+
+  return {
+    image: Object.fromEntries(
+      [...version.known].filter(([fieldId]) => readable.fields.has(fieldId))
+    ),
+    known: version.known,
+    visible: readable.visible,
+  };
+};
+
 /**
  * The payload of one delivery from its record's entries, filtered for a
  * caller (pure: the entries and origins are read by `readEntries` and
@@ -950,42 +1038,34 @@ export const payloadOf = (
     return unreadable("The delivery's change entry does not exist.");
   }
 
-  if (snapshot.class(entry.recordClassId) === undefined) {
-    return unreadable(
-      `Class ${entry.recordClassId} of the change is not in the configuration.`
-    );
-  }
-
-  const { known } = versionImage(snapshot, input.entries, input.origins);
-  const image = decodedImage(snapshot, entry.recordClassId, known);
-
-  if (image instanceof PayloadUnreadable) {
-    return image;
-  }
-
-  const readable = readabilityOf(
+  const projected = projectVersionImage(
     snapshot,
     caller,
     entry.recordClassId,
-    image,
+    versionImage(snapshot, input.entries, input.origins),
     context
   );
 
-  const shown = (fieldId: DefinitionId) => readable.fields.has(fieldId);
+  if (projected instanceof PayloadUnreadable) {
+    return projected;
+  }
+
+  const shown = (fieldId: DefinitionId) =>
+    Object.hasOwn(projected.image, fieldId);
 
   return {
-    actorId: readable.visible ? entry.actorId : null,
+    actorId: projected.visible ? entry.actorId : null,
     changeId: entry.changeId,
     changes: Object.fromEntries(
       Object.entries(entry.fields).filter(([fieldId]) => shown(fieldId))
     ),
     classId: entry.recordClassId,
-    image: Object.fromEntries([...known].filter(([fieldId]) => shown(fieldId))),
+    image: projected.image,
     kind: entry.kind,
     occurredAt: entry.occurredAt,
     operationId: entry.operationId,
     recordId: input.recordId,
     recordVersion: entry.recordVersion,
-    visible: readable.visible,
+    visible: projected.visible,
   };
 };

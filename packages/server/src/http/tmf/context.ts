@@ -129,21 +129,33 @@ export const renderContextOf = (
   snapshot: ConfigSnapshot,
   registry: TmfRegistry,
   origin: string
-): RenderContext => ({
-  hrefOf: (classId, id) => {
-    const mapped = resourceOfClass(snapshot, registry, classId);
+): RenderContext => {
+  const mappedByClass = new Map<DefinitionId, MappedResource | undefined>();
 
-    return mapped === undefined ? undefined : hrefOf(origin, mapped, id);
-  },
-  lineageOf: (classId) => ancestryOf(snapshot, classId),
-  typeOf: (classId) => {
-    const mapped = resourceOfClass(snapshot, registry, classId);
+  const mappedFor = (classId: DefinitionId) => {
+    if (!mappedByClass.has(classId)) {
+      mappedByClass.set(classId, resourceOfClass(snapshot, registry, classId));
+    }
 
-    return mapped === undefined
-      ? typeNameOf(snapshot, classId)
-      : typeAttributesFor(snapshot, mapped.resource, classId)["@type"];
-  },
-});
+    return mappedByClass.get(classId);
+  };
+
+  return {
+    hrefOf: (classId, id) => {
+      const mapped = mappedFor(classId);
+
+      return mapped === undefined ? undefined : hrefOf(origin, mapped, id);
+    },
+    lineageOf: (classId) => ancestryOf(snapshot, classId),
+    typeOf: (classId) => {
+      const mapped = mappedFor(classId);
+
+      return mapped === undefined
+        ? typeNameOf(snapshot, classId)
+        : typeAttributesFor(snapshot, mapped.resource, classId)["@type"];
+    },
+  };
+};
 
 /**
  * The attributes of a concrete class's local classes (Contracts 11.1): the
@@ -243,13 +255,13 @@ const writtenFieldOf = (key: SourceKey): DefinitionId =>
  *
  * @param scope - The caller's scope.
  * @param classId - The concrete class.
- * @param actions - The write actions the body may be used for.
+ * @param action - The write action the body is used for.
  * @returns The access.
  */
 export const classAccessOf = (
   scope: ReadScope,
   classId: DefinitionId,
-  actions: readonly NamingAction[]
+  action: NamingAction
 ): ClassAccess => {
   const { caller, snapshot } = scope;
   const view = scope.view(classId, true);
@@ -260,23 +272,17 @@ export const classAccessOf = (
     (snapshot.field(writtenFieldOf(key))?.state ?? "purged") !== "purged" &&
     (pathOf(key) === undefined || canRead(key));
 
-  const decisions = (key: SourceKey) =>
-    actions.map(
-      (action) =>
-        fieldDecision(snapshot, caller, action, classId, writtenFieldOf(key))
-          .kind
-    );
+  const decision = (key: SourceKey) =>
+    fieldDecision(snapshot, caller, action, classId, writtenFieldOf(key)).kind;
 
   return {
     canName: (key) =>
       exists(key) &&
-      (canRead(writtenFieldOf(key)) ||
-        decisions(key).some((kind) => kind !== "never")),
+      (canRead(writtenFieldOf(key)) || decision(key) !== "never"),
     canRead,
-    // Write permission on every record of the class, for every action:
+    // Write permission on every record of the class for this action:
     // a conditional field rule may refuse some records.
-    canWrite: (key) =>
-      exists(key) && decisions(key).every((kind) => kind === "always"),
+    canWrite: (key) => exists(key) && decision(key) === "always",
     knows: knowsTable(snapshot, caller, classId),
   };
 };
@@ -312,7 +318,7 @@ export const knownOn = (
 /** What rendering a record needs. */
 export interface RenderInput {
   readonly scope: ReadScope;
-  readonly registry: TmfRegistry;
+  readonly context: RenderContext;
   readonly mapped: MappedResource;
   readonly origin: string;
   /** `fields`: null for all. */
@@ -334,7 +340,7 @@ export const renderFor = (
   const { resource } = input.mapped;
 
   return renderResource(resource, record, {
-    ...renderContextOf(snapshot, input.registry, input.origin),
+    ...input.context,
     extensions: extensionsOf(snapshot, resource, record.classId),
     fields: input.fields,
     href: hrefOf(input.origin, input.mapped, record.id),

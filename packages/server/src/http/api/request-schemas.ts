@@ -47,11 +47,16 @@ const decodeSession = Schema.decodeUnknownEffect(SessionCreate);
  * @param body - The parsed body.
  * @returns The body, or `InvalidRequest`.
  */
-export const checkedCreate = (body: JsonValue) =>
-  decodeCreate(body).pipe(
+export const checkedCreate = (body: JsonValue) => {
+  if (!isJsonObject(body)) {
+    return Effect.fail(refused("ResourceCreate")());
+  }
+
+  return decodeCreate(body).pipe(
     Effect.mapError(refused("ResourceCreate")),
     Effect.as(body)
   );
+};
 
 /**
  * A merge patch body, checked against `ResourcePatch`.

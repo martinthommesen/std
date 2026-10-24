@@ -492,13 +492,15 @@ export const checkTargetsVisible = Effect.fn("Http.checkTargetsVisible")(
  * @param view - What the operation may read (`BatchView`).
  * @param operation - The operation.
  * @param hidden - Definitions hidden from the caller or missing.
+ * @param checked - Scopes already checked within this invocation, when deduplicating.
  * @returns Fails with `SchemaChanged`.
  */
 const operationScopeCheck = (
   stated: Option.Option<ConfigState>,
   view: BatchView,
   operation: Operation,
-  hidden: ReadonlySet<DefinitionId>
+  hidden: ReadonlySet<DefinitionId>,
+  checked: Set<string> | null
 ) => {
   const kind = hidden.has(targetIdOf(operation))
     ? undefined
@@ -511,12 +513,29 @@ const operationScopeCheck = (
   const table = `core.${tableOf(kind).table}`;
   const action = actionOf(operation);
 
+  const fields =
+    action === "delete" ? "" : writtenColumns(view, operation, kind).join(",");
+
+  const writeAction = action === "create" ? "create" : "update";
+
+  const scopeKey = JSON.stringify([
+    table,
+    fields,
+    action === "delete" ? null : writeAction,
+  ]);
+
+  if (checked?.has(scopeKey) === true) {
+    return Effect.void;
+  }
+
+  checked?.add(scopeKey);
+
   return action === "delete"
     ? checkRequestRevision(stated, table, {})
     : checkRequestRevision(
         stated,
         table,
-        { fields: writtenColumns(view, operation, kind).join(",") },
+        { fields },
         { action: action === "create" ? "create" : "update" }
       );
 };
@@ -541,8 +560,10 @@ export const checkChangeSetRevision = Effect.fn("Http.checkChangeSetRevision")(
   ) {
     const views = batchViews(yield* (yield* Catalog).current, operations);
 
+    const checked = new Set<string>();
+
     for (const { operation, view } of views) {
-      yield* operationScopeCheck(stated, view, operation, new Set());
+      yield* operationScopeCheck(stated, view, operation, new Set(), checked);
     }
 
     return yield* Effect.void;
@@ -574,7 +595,8 @@ const refuseUnknownRevision = Effect.fn("Http.refuseUnknownRevision")(
         Option.some(stated),
         view,
         operation,
-        hidden
+        hidden,
+        null
       ).pipe(
         Effect.as([]),
         Effect.catchTag("SchemaChanged", (failure) =>

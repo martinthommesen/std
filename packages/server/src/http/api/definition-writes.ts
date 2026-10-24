@@ -107,10 +107,6 @@ const definitionWriteOf = Effect.fn("Api.definitionWrite")(
     if (action === "create") {
       const body = yield* checkedCreate(yield* jsonBodyOf(request));
 
-      if (!isJsonObject(body)) {
-        return yield* notAnObject();
-      }
-
       return {
         action,
         body: yield* inRequestTransaction(

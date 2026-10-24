@@ -47,7 +47,7 @@ import { isPlaintext } from "@std/values/write-only";
 import { Clock, Effect, Option, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { tableOf } from "../catalog/definition-tables.ts";
+import { definitionColumns, tableOf } from "../catalog/definition-tables.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { writeChangeEntry } from "../records/change-entry.ts";
 import type { ChangeEntry } from "../records/change-entry.ts";
@@ -60,7 +60,7 @@ import { NOW } from "../records/save-sql.ts";
 import type { StoredRecord } from "../records/stored-record.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { WORKER_CHANNEL } from "../sql/wake-up.ts";
-import { definitionColumns, definitionImage } from "./definition-changes.ts";
+import { definitionImage } from "./definition-changes.ts";
 import type { WrittenDefinitionChange } from "./definition-changes.ts";
 import { quoteIdent } from "./sql-text.ts";
 

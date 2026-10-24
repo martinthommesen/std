@@ -504,17 +504,27 @@ const groupFilters = Effect.fn("ApiQuery.groupFilters")(function* groupFilters(
   const grouped = new Map<string, string[]>();
 
   for (const [parameter, value] of query) {
+    if (DIRECTIVES.has(parameter)) {
+      continue;
+    }
+
     const values = alternativesOf(value);
 
-    if (!DIRECTIVES.has(parameter) && values.includes("")) {
+    if (values.includes("")) {
       return yield* invalidFilter(
         "emptyValue",
         "An attribute filter needs a value."
       );
     }
 
-    if (!DIRECTIVES.has(parameter)) {
-      grouped.set(parameter, [...(grouped.get(parameter) ?? []), ...values]);
+    const existing = grouped.get(parameter);
+
+    if (existing === undefined) {
+      grouped.set(parameter, values);
+    } else {
+      for (const alternative of values) {
+        existing.push(alternative);
+      }
     }
   }
 

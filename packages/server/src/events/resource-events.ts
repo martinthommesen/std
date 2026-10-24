@@ -1,6 +1,6 @@
 import { DefinitionIdSchema } from "@std/definitions/ids";
 import type { JsonObject } from "@std/values/json-value";
-import { Clock, Effect, Schema } from "effect";
+import { Clock, Effect, Result, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { Actor } from "../auth/actor.ts";
@@ -9,8 +9,7 @@ import { InstanceSettings } from "../config/instance-settings.ts";
 import {
   payloadOf,
   PayloadUnreadable,
-  readEntries,
-  readEntriesAt,
+  readEntryResultsAt,
   entryTargetKey,
   readFieldOrigins,
 } from "../outbox/delivery-payload.ts";
@@ -99,10 +98,12 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
       } satisfies EventBatch;
     }
 
-    const readPage =
+    const seek =
       cursor === undefined
-        ? sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version, c.id::text AS id, c.occurred_at::text AS occurred_at FROM unnest(${classIds}::uuid[]) AS classes(id) CROSS JOIN LATERAL (SELECT c.record_id, c.record_version, c.occurred_at, c.id FROM core.change c WHERE c.record_class_id = classes.id ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit + 1}) c ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit + 1}`
-        : sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version, c.id::text AS id, c.occurred_at::text AS occurred_at FROM unnest(${classIds}::uuid[]) AS classes(id) CROSS JOIN LATERAL (SELECT c.record_id, c.record_version, c.occurred_at, c.id FROM core.change c WHERE c.record_class_id = classes.id AND (c.occurred_at, c.id) < (${cursor.occurredAt ?? ""}::timestamptz, ${cursor.id}::uuid) ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit + 1}) c ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit + 1}`;
+        ? sql`TRUE`
+        : sql`(c.occurred_at, c.id) < (${cursor.occurredAt ?? ""}::timestamptz, ${cursor.id}::uuid)`;
+
+    const readPage = sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version, c.id::text AS id, c.occurred_at::text AS occurred_at FROM unnest(${classIds}::uuid[]) AS classes(id) CROSS JOIN LATERAL (SELECT c.record_id, c.record_version, c.occurred_at, c.id FROM core.change c WHERE c.record_class_id = classes.id AND ${seek} ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit + 1}) c ORDER BY c.occurred_at DESC, c.id DESC LIMIT ${limit + 1}`;
 
     let rows =
       eventId === undefined
@@ -126,13 +127,12 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
     };
 
     const candidates = [];
-    const events = [];
     const originsByClass = new Map<string, ReadonlyMap<string, FieldOrigin>>();
 
     // A malformed target must still be isolated and logged per candidate.
-    const pageEntries = yield* readEntriesAt(
+    const pageEntries = yield* readEntryResultsAt(
       rows.map((row) => ({ recordId: row.record_id, version: row.version }))
-    ).pipe(Effect.catchTag("PayloadUnreadable", () => Effect.succeed(null)));
+    );
 
     for (const [index, row] of rows.entries()) {
       const rendered: JsonObject[] = [];
@@ -141,18 +141,18 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
         position: { id: row.id, occurredAt: row.occurred_at },
       });
 
+      const result = pageEntries.get(
+        entryTargetKey({ recordId: row.record_id, version: row.version })
+      );
+
+      if (result !== undefined && Result.isFailure(result)) {
+        yield* Effect.logWarning("Resource event payload is unreadable", {
+          changeId: row.id,
+        });
+      }
+
       const entries =
-        pageEntries === null
-          ? yield* readEntries(row.record_id, row.version).pipe(
-              Effect.catchTag("PayloadUnreadable", () =>
-                Effect.logWarning("Resource event payload is unreadable", {
-                  changeId: row.id,
-                }).pipe(Effect.as([]))
-              )
-            )
-          : (pageEntries.get(
-              entryTargetKey({ recordId: row.record_id, version: row.version })
-            ) ?? []);
+        result === undefined || Result.isFailure(result) ? [] : result.success;
 
       const entry = entries.at(-1);
 
@@ -198,16 +198,12 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
       }
     }
 
-    for (const candidate of candidates) {
-      events.push(...candidate.events);
-    }
-
     const last = rows.at(-1);
 
     return {
       candidates,
       complete,
-      events,
+      events: candidates.flatMap((candidate) => candidate.events),
       position:
         last === undefined
           ? cursor

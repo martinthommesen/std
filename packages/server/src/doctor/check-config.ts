@@ -52,6 +52,10 @@ import type { Finding } from "./finding.ts";
 
 const decodeCount = decodeRows(Schema.Struct({ n: Schema.String }));
 
+const decodeAuditCounts = decodeRows(
+  Schema.Struct({ n: Schema.String, ordinal: Schema.Int })
+);
+
 const decodeRevisions = decodeRows(
   Schema.Struct({
     journal: Schema.NullOr(Schema.String),
@@ -908,18 +912,25 @@ export const checkAuditUsers = Effect.fn("Doctor.checkAuditUsers")(
           existing(definition.id)
       );
 
-    for (const definition of platform) {
+    const statements = platform.map(
+      (definition, ordinal) =>
+        `SELECT ${ordinal} AS ordinal, count(*)::text AS n FROM ${tableName(snapshot, definition.id)} AS t
+       WHERE NOT EXISTS (SELECT 1 FROM ${users} AS u WHERE u.id = t.created_by)
+          OR NOT EXISTS (SELECT 1 FROM ${users} AS u WHERE u.id = t.updated_by)`
+    );
+
+    const rows =
+      statements.length === 0
+        ? []
+        : yield* readOnly(sql.unsafe(statements.join(" UNION ALL "))).pipe(
+            Effect.flatMap(decodeAuditCounts)
+          );
+
+    const counts = new Map(rows.map((row) => [row.ordinal, Number(row.n)]));
+
+    for (const [ordinal, definition] of platform.entries()) {
       const table = tableName(snapshot, definition.id);
-
-      const [row] = yield* readOnly(
-        sql.unsafe(
-          `SELECT count(*)::text AS n FROM ${table} AS t
-           WHERE NOT EXISTS (SELECT 1 FROM ${users} AS u WHERE u.id = t.created_by)
-              OR NOT EXISTS (SELECT 1 FROM ${users} AS u WHERE u.id = t.updated_by)`
-        )
-      ).pipe(Effect.flatMap(decodeCount));
-
-      const count = Number(row?.n ?? "0");
+      const count = counts.get(ordinal) ?? 0;
 
       if (count > 0) {
         found.push(

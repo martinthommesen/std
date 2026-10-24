@@ -293,10 +293,10 @@ const renderInputOf = (
   scope: ReadScope,
   fields: ReadonlySet<string> | null
 ): RenderInput => ({
+  context: renderContextOf(scope.snapshot, input.registry, input.origin),
   fields,
   mapped: input.mapped,
   origin: input.origin,
-  registry: input.registry,
   scope,
 });
 
@@ -790,13 +790,22 @@ const planFor = Effect.fn("Tmf.planFor")(function* planFor(
 ) {
   const { snapshot } = scope;
 
+  const attributes = attributesOf(snapshot, mapped.resource, classId);
+
+  const needsActor = attributes.some(
+    (attribute) =>
+      attribute.kind === "parts" &&
+      Object.hasOwn(body, attribute.name) &&
+      attribute.item.newItemRendering !== undefined
+  );
+
   const request = {
-    access: classAccessOf(scope, classId, [
-      current === undefined ? "create" : "update",
-    ]),
-    // What a new part's read-only attributes would render from.
-    actor: yield* actorReference(scope),
-    attributes: attributesOf(snapshot, mapped.resource, classId),
+    access: classAccessOf(
+      scope,
+      classId,
+      current === undefined ? "create" : "update"
+    ),
+    attributes,
     body,
     jsonMerge,
     lineage: ancestryOf(snapshot, classId),
@@ -804,14 +813,19 @@ const planFor = Effect.fn("Tmf.planFor")(function* planFor(
     // created as the item's class.
     partAccess: (item: ItemMapping, existing: SourceRecord | undefined) =>
       existing === undefined
-        ? classAccessOf(scope, item.classId, ["create"])
-        : classAccessOf(scope, existing.classId, ["update"]),
+        ? classAccessOf(scope, item.classId, "create")
+        : classAccessOf(scope, existing.classId, "update"),
   };
+
+  // What a new part's read-only attributes would render from.
+  const attributed = needsActor
+    ? { ...request, actor: yield* actorReference(scope) }
+    : request;
 
   const planned =
     current === undefined
-      ? planWrite(request)
-      : planWrite({ ...request, current });
+      ? planWrite(attributed)
+      : planWrite({ ...attributed, current });
 
   return Result.isFailure(planned)
     ? yield* writeIssuesError(planned.failure)

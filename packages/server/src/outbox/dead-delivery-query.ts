@@ -290,10 +290,13 @@ export const readDeadPage = Effect.fn("Outbox.readDeadPage")(
       );
     }
 
+    const selected = new Set(query.selection.map((item) => item.field.id));
+
     const columns = [
-      ...view.fields.map(
-        (field) =>
-          sql`${view.value("r", field)}::text AS ${identSql(field.name)}`
+      ...view.fields.flatMap((field) =>
+        field.name === "id" || selected.has(field.id)
+          ? [sql`${view.value("r", field)}::text AS ${identSql(field.name)}`]
+          : []
       ),
       rawSql('"r"."restricted"::text AS restricted'),
       ...keys.map(

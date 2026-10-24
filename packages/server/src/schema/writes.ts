@@ -33,30 +33,42 @@ export class DefinitionRowConflictError extends Error {
   override readonly name = "DefinitionRowConflictError";
 }
 
-const insertDefinition = Effect.fn("Schema.insertDefinition")(
-  function* insertDefinition(
-    definition: Definition,
+const insertDefinitions = Effect.fn("Schema.insertDefinitions")(
+  function* insertDefinitions(
+    definitions: readonly Definition[],
     requesterId: DefinitionId
   ) {
+    const [first] = definitions;
+
+    if (first === undefined) {
+      return;
+    }
+
     const sql = yield* SqlClient.SqlClient;
-    const entry = tableOf(definition.kind);
-    const values = boundValues(definition);
+    const entry = tableOf(first.kind);
+    const values = boundValues(first);
+    const columns = values.map((value) => value.column).join(", ");
 
-    const params: (string | null)[] = [
-      definition.id,
-      entry.classId,
-      String(definition.version),
-      requesterId,
-      ...values.map((value) => value.text),
-    ];
-
-    const placeholders = values.map(
-      (value, index) => `$${index + 5}::${value.cast}`
+    // Each JSON row carries id, version, then the bound column texts in their catalog order.
+    const expressions = values.map(
+      (value, index) => `(e ->> ${index + 2})::${value.cast}`
     );
 
     yield* sql.unsafe(
-      `INSERT INTO core."${entry.table}" (id, class_id, version, created_at, created_by, updated_at, updated_by, ${values.map((value) => value.column).join(", ")}) VALUES ($1::uuid, $2::uuid, $3::int8, now(), $4::uuid, now(), $4::uuid, ${placeholders.join(", ")})`,
-      params
+      `INSERT INTO core."${entry.table}" (id, class_id, version, created_at, created_by, updated_at, updated_by, ${columns})
+       SELECT (e ->> 0)::uuid, $1::uuid, (e ->> 1)::int8, now(), $2::uuid, now(), $2::uuid, ${expressions.join(", ")}
+       FROM jsonb_array_elements($3::jsonb) WITH ORDINALITY AS rows(e, ordinal) ORDER BY ordinal`,
+      [
+        entry.classId,
+        requesterId,
+        stringifyJson(
+          definitions.map((definition) => [
+            definition.id,
+            String(definition.version),
+            ...boundValues(definition).map((value) => value.text),
+          ])
+        ),
+      ]
     );
   }
 );
@@ -114,13 +126,27 @@ export const writeDefinitions = Effect.fn("Schema.writeDefinitions")(
     before: ConfigSnapshot,
     requesterId: DefinitionId
   ) {
+    let pending: Definition[] = [];
+
     for (const definition of definitions) {
       const stored = before.get(definition.id);
 
-      yield* stored === undefined
-        ? insertDefinition(definition, requesterId)
-        : updateDefinition(definition, stored.version, requesterId);
+      if (
+        stored !== undefined ||
+        (pending.length > 0 && pending[0]?.kind !== definition.kind)
+      ) {
+        yield* insertDefinitions(pending, requesterId);
+        pending = [];
+      }
+
+      if (stored === undefined) {
+        pending.push(definition);
+      } else {
+        yield* updateDefinition(definition, stored.version, requesterId);
+      }
     }
+
+    yield* insertDefinitions(pending, requesterId);
   }
 );
 

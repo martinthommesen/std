@@ -31,6 +31,7 @@ import type { ValidateFunction } from "ajv";
 import { Result } from "effect";
 import { parse } from "yaml";
 
+import { parsePointer } from "../api/patch.ts";
 import { isRfc3339DateTime } from "./rfc3339.ts";
 
 /** The pinned documents' directory, `packages/tmf/specs/`. */
@@ -245,14 +246,6 @@ export interface SchemaProblem {
   readonly message: string;
 }
 
-const pointerSegments = (pointer: string): readonly string[] =>
-  pointer === ""
-    ? []
-    : pointer
-        .slice(1)
-        .split("/")
-        .map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"));
-
 /** The pinned document files, loaded together on the first lookup. */
 let pinnedFiles: ReadonlyMap<string, string | undefined> | undefined;
 
@@ -315,6 +308,6 @@ export const schemaProblemOf = (
 
   return {
     message: loaded.ajv.errorsText(validate.errors),
-    path: pointerSegments(error?.instancePath ?? ""),
+    path: parsePointer(error?.instancePath ?? "") ?? [],
   };
 };

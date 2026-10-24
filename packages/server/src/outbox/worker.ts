@@ -843,7 +843,7 @@ export const workerPass = Effect.fn("Outbox.workerPass")(
   )
 );
 
-const decodeDeleted = decodeRows(Schema.Struct({ id: Schema.String }));
+const decodeDeletedCount = decodeRows(Schema.Struct({ count: Schema.Int }));
 
 /**
  * Deletes `done` rows that finished more than 7 days ago, in batches of
@@ -861,24 +861,25 @@ export const deleteOldDeliveries = Effect.fn("Outbox.deleteOldDeliveries")(
         SqlClient.SqlClient.pipe(
           Effect.flatMap((sql) =>
             sql.unsafe(
-              `DELETE FROM core.delivery
+              `WITH deleted AS (DELETE FROM core.delivery
                WHERE id IN (
                  SELECT id FROM core.delivery
                  WHERE status = 'done' AND finished_at < now() - $1::interval
                  ORDER BY finished_at
                  LIMIT $2::int8
                  FOR UPDATE SKIP LOCKED)
-               RETURNING id::text AS id`,
+               RETURNING 1) SELECT count(*)::int AS count FROM deleted`,
               [intervalOf(DONE_RETENTION), String(RETENTION_BATCH)]
             )
           ),
-          Effect.flatMap(decodeDeleted)
+          Effect.flatMap(decodeDeletedCount),
+          Effect.map(([row]) => row?.count ?? 0)
         )
       );
 
-      total += deleted.length;
+      total += deleted;
 
-      if (deleted.length < RETENTION_BATCH) {
+      if (deleted < RETENTION_BATCH) {
         return total;
       }
     }
