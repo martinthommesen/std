@@ -1,3 +1,4 @@
+import { FieldsConflict } from "@std/api/errors/fields-conflict";
 import { InvalidCursor } from "@std/api/errors/invalid-cursor";
 /**
  * History of `/api/v1/{table}/{id}` (Contracts 10.4; TMF630 v5.0.0 Part 1
@@ -16,13 +17,15 @@ import { InvalidCursor } from "@std/api/errors/invalid-cursor";
  */
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { NotFound } from "@std/api/errors/not-found";
+import { UnknownField } from "@std/api/errors/unknown-field";
 import { apiAttributeNameOf } from "@std/definitions/names";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
+import { parseTmfFields } from "@std/tmf/query";
 import { formatDateTime, parseDateTime } from "@std/values/date-time";
 import { isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { parseInt8Text } from "@std/values/postgres-text";
-import { Effect, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 
 import type { RenderedHistoryEntry } from "../../records/history-endpoint.ts";
 import { recordHistory } from "../../records/history-endpoint.ts";
@@ -62,6 +65,23 @@ const ALWAYS: ReadonlySet<string> = new Set([
   "@type",
   "@baseType",
 ]);
+
+// ChangeEntry attributes (Contracts 10.4), independent of the record's fields.
+const ATTRIBUTES: readonly string[] = [
+  "action",
+  "actor",
+  "cause",
+  "changes",
+  "creationDate",
+  "entity",
+  "fields",
+  "kind",
+  "occurredAt",
+  "operationId",
+  "revisedBy",
+  "revision",
+  "schemaRevision",
+];
 
 const ACTIONS: ReadonlyMap<string, string> = new Map([
   ["create", "created"],
@@ -223,13 +243,29 @@ const pagingNumber = Effect.fn("Api.historyPaging")(function* pagingNumber(
       );
 });
 
-const fieldSelection = (text: string): ReadonlySet<string> =>
-  new Set(
-    text
-      .split(",")
-      .map((item) => item.trim().split(".")[0] ?? "")
-      .filter((item) => item !== "")
-  );
+const fieldSelection = Effect.fn("Api.historyFields")(function* fieldSelection(
+  text: string
+) {
+  // Dotted selections keep the whole authorized attribute, as before;
+  // changes/fields are embedded maps, not paths into the current record.
+  const parsed = parseTmfFields(text, ATTRIBUTES);
+
+  if (Result.isSuccess(parsed)) {
+    return parsed.success;
+  }
+
+  const issue = parsed.failure;
+
+  if (issue.kind === "conflict") {
+    return yield* new FieldsConflict({ field: issue.attribute });
+  }
+
+  if (issue.kind === "unknownAttribute") {
+    return yield* new UnknownField({ field: issue.attribute });
+  }
+
+  return yield* invalid("fields", "fields lists attribute names.");
+});
 
 const PAGING_PARAMETERS: ReadonlySet<string> = new Set([
   "offset",
@@ -372,7 +408,7 @@ const parseHistoryQuery = Effect.fn("Api.historyQuery")(function* parseQuery(
 
   for (const [key, value] of queryOf(input.request)) {
     if (key === "fields") {
-      fields = fieldSelection(value);
+      fields = yield* fieldSelection(value);
     } else if (allowed === "entry") {
       return yield* invalid(key, "A history entry takes only fields.");
     } else if (SERVICE_PARAMETERS.has(key)) {

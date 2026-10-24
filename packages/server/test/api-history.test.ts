@@ -226,6 +226,286 @@ describe("api-history", () => {
       })
     );
 
+    dbTest.effect(
+      "same-attribute fields conflicts reject both marker orders on history lists and reads",
+      () =>
+        Effect.gen(function* fieldConflicts() {
+          const http = yield* TestHttpClient;
+          const { alice } = yield* apiCallers;
+          const { records } = yield* AcmeFixture;
+
+          for (const collection of [API.asset, API.laptop]) {
+            const history = `${collection}/${records.L}/history`;
+            const baseline = yield* http.get(history, alice);
+            assert.strictEqual(baseline.status, 200, baseline.text);
+            const entry = textOf(asObject(asArray(baseline.json)[0]).id);
+            assert.notStrictEqual(entry, "");
+
+            for (const [path, query] of [
+              [history, []],
+              [`${history}/${entry}`, []],
+              [history, [["action", "deleted"]]],
+              [history, [["offset", "50"]]],
+            ] as const) {
+              const unselected = yield* http.get(withQuery(path, query), alice);
+              assert.strictEqual(unselected.status, 200, unselected.text);
+
+              if (query.length > 0) {
+                assert.deepStrictEqual(unselected.json, []);
+              }
+
+              for (const [included, excluded, field] of [
+                ["action", "action", "action"],
+                ["revision", "revision", "revision"],
+                ["fields", "fields", "fields"],
+                ["changes.name", "changes.cost", "changes"],
+              ] as const) {
+                for (const fields of [
+                  `${included},!${excluded}`,
+                  `!${excluded}, ${included}`,
+                ]) {
+                  const response = yield* http.get(
+                    withQuery(path, [...query, ["fields", fields]]),
+                    alice
+                  );
+
+                  assert.strictEqual(response.status, 409, response.text);
+                  assert.deepStrictEqual(response.json, {
+                    "@baseType": "Error",
+                    "@schemaLocation":
+                      "/api/v1/openapi.json#/components/schemas/FieldsConflict",
+                    "@type": "FieldsConflict",
+                    code: "FieldsConflict",
+                    field,
+                    message: "fields includes and excludes the same attribute",
+                    reason: "fields includes and excludes the same attribute",
+                    status: "409",
+                  });
+                }
+              }
+            }
+          }
+        })
+    );
+
+    dbTest.effect(
+      "history fields preserve identity, distinct mixed markers and whole nested attributes",
+      () =>
+        Effect.gen(function* selections() {
+          const http = yield* TestHttpClient;
+          const { alice } = yield* apiCallers;
+          const { records } = yield* AcmeFixture;
+          const history = `${API.laptop}/${records.L}/history`;
+          const baseline = yield* http.get(history, alice);
+          assert.strictEqual(baseline.status, 200, baseline.text);
+          const entry = asObject(asArray(baseline.json)[0]);
+
+          const {
+            action = null,
+            revision = null,
+            changes = null,
+            fields: descriptions = null,
+            ...rest
+          } = entry;
+
+          assert.strictEqual(action, "created");
+          assert.strictEqual(revision, 1);
+          assert.property(asObject(changes), "name");
+          assert.property(asObject(changes), "cost");
+          assert.property(asObject(descriptions), "cost");
+
+          const identity = {
+            "@baseType": "History",
+            "@type": "ChangeEntry",
+            href: textOf(entry.href),
+            id: textOf(entry.id),
+          };
+
+          for (const path of [history, `${history}/${textOf(entry.id)}`]) {
+            for (const [selection, expected] of [
+              ["none", identity],
+              ["id,!id", identity],
+              ["!id,id", identity],
+              ["action,!kind", { ...identity, action }],
+              ["!kind,action", { ...identity, action }],
+              ["action,!id,!href,!@type,!@baseType", { ...identity, action }],
+              ["revision", { ...identity, revision }],
+              ["!action", { ...rest, changes, fields: descriptions, revision }],
+              [
+                "changes.name,fields.name",
+                { ...identity, changes, fields: descriptions },
+              ],
+              [
+                "revisedBy.id,entity.id,cause",
+                {
+                  ...identity,
+                  cause: entry.cause ?? null,
+                  entity: entry.entity ?? null,
+                  revisedBy: entry.revisedBy ?? null,
+                },
+              ],
+              ["!changes.name,!fields.name", { ...rest, action, revision }],
+            ] as const) {
+              const response = yield* http.get(
+                withQuery(path, [["fields", selection]]),
+                alice
+              );
+
+              assert.strictEqual(
+                response.status,
+                200,
+                `${selection}: ${response.text}`
+              );
+              assert.deepStrictEqual(
+                response.json,
+                path === history ? [expected] : expected,
+                selection
+              );
+            }
+
+            for (const [attribute, value] of Object.entries(rest)) {
+              const response = yield* http.get(
+                withQuery(path, [["fields", attribute]]),
+                alice
+              );
+
+              const expected = { ...identity, [attribute]: value };
+              assert.strictEqual(response.status, 200, response.text);
+              assert.deepStrictEqual(
+                response.json,
+                path === history ? [expected] : expected
+              );
+            }
+          }
+        })
+    );
+
+    dbTest.effect(
+      "history fields reject malformed and unknown selectors before empty results",
+      () =>
+        Effect.gen(function* invalidSelections() {
+          const http = yield* TestHttpClient;
+          const { alice } = yield* apiCallers;
+          const { records } = yield* AcmeFixture;
+          const history = `${API.laptop}/${records.L}/history`;
+          const baseline = yield* http.get(history, alice);
+          assert.strictEqual(baseline.status, 200, baseline.text);
+          const entry = textOf(asObject(asArray(baseline.json)[0]).id);
+          assert.notStrictEqual(entry, "");
+
+          for (const [path, query] of [
+            [history, [["action", "deleted"]]],
+            [`${history}/${entry}`, []],
+          ] as const) {
+            for (const selection of ["nosuchfield", "!nosuchfield", "cost"]) {
+              const response = yield* http.get(
+                withQuery(path, [...query, ["fields", selection]]),
+                alice
+              );
+
+              assert.strictEqual(response.status, 400, response.text);
+              assert.deepStrictEqual(response.json, {
+                "@baseType": "Error",
+                "@schemaLocation":
+                  "/api/v1/openapi.json#/components/schemas/UnknownField",
+                "@type": "UnknownField",
+                code: "UnknownField",
+                field: selection === "!nosuchfield" ? "nosuchfield" : selection,
+                message: "No such field",
+                reason: "No such field",
+                status: "400",
+              });
+            }
+
+            for (const selection of ["", "action,"]) {
+              const response = yield* http.get(
+                withQuery(path, [...query, ["fields", selection]]),
+                alice
+              );
+
+              assert.strictEqual(response.status, 400, response.text);
+              assert.deepStrictEqual(response.json, {
+                "@baseType": "Error",
+                "@schemaLocation":
+                  "/api/v1/openapi.json#/components/schemas/InvalidRequest",
+                "@type": "InvalidRequest",
+                code: "InvalidRequest",
+                message: "fields lists attribute names.",
+                parameter: "fields",
+                reason: "A request parameter is malformed",
+                status: "400",
+              });
+            }
+          }
+        })
+    );
+
+    dbTest.effect(
+      "history fields cannot widen record or changed-field authorization",
+      () =>
+        Effect.gen(function* authorizedSelections() {
+          const http = yield* TestHttpClient;
+          const { alice, bob } = yield* apiCallers;
+          const { records } = yield* AcmeFixture;
+
+          for (const collection of [API.asset, API.laptop]) {
+            const visible = `${collection}/${records.L}/history`;
+            const baseline = yield* http.get(visible, bob);
+            assert.strictEqual(baseline.status, 200, baseline.text);
+            const entry = asObject(asArray(baseline.json)[0]);
+
+            const expected = {
+              "@baseType": "History",
+              "@type": "ChangeEntry",
+              changes: asObject(entry.changes),
+              fields: asObject(entry.fields),
+              href: textOf(entry.href),
+              id: textOf(entry.id),
+            };
+
+            for (const path of [visible, `${visible}/${textOf(entry.id)}`]) {
+              const response = yield* http.get(
+                withQuery(path, [["fields", "changes.cost,fields.cost"]]),
+                bob
+              );
+
+              assert.strictEqual(response.status, 200, response.text);
+              assert.deepStrictEqual(
+                response.json,
+                path === visible ? [expected] : expected
+              );
+              assert.notProperty(asObject(entry.changes), "cost");
+              assert.notProperty(asObject(entry.fields), "cost");
+              assert.property(asObject(entry.changes), "name");
+            }
+
+            const hiddenHistory = `${collection}/${records.K}/history`;
+            const hiddenList = yield* http.get(hiddenHistory, alice);
+            assert.strictEqual(hiddenList.status, 200, hiddenList.text);
+            const hiddenId = textOf(asObject(asArray(hiddenList.json)[0]).id);
+            assert.notStrictEqual(hiddenId, "");
+
+            for (const suffix of ["", `/${hiddenId}`]) {
+              const missing = yield* http.get(
+                `${collection}/${UNKNOWN_ID}/history${suffix}`,
+                bob
+              );
+
+              const hidden = yield* http.get(
+                withQuery(`${hiddenHistory}${suffix}`, [
+                  ["fields", "changes.cost,fields.cost"],
+                ]),
+                bob
+              );
+
+              assert.strictEqual(hidden.status, 404, hidden.text);
+              assert.strictEqual(hidden.text, missing.text);
+              assert.isNull(hidden.headers.get("link"));
+            }
+          }
+        })
+    );
+
     dbTest.effect("serves one entry and refuses others identically", () =>
       Effect.gen(function* single() {
         const http = yield* TestHttpClient;
