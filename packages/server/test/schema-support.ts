@@ -18,11 +18,18 @@ import type {
   RoleDraft,
 } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
-import { SYSTEM_USER_ID } from "@std/definitions/well-known";
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
+import {
+  USER_ROLE_CLASS_ID,
+  PLATFORM_CLASS_IDS,
+  CORE_NAMESPACE_ID,
+  SYSTEM_USER_ID,
+} from "@std/definitions/well-known";
 import type { FieldType } from "@std/values/field-type";
 import { Duration, Effect, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { ACME } from "../../testing/src/acme-ids.ts";
 import { testDatabaseLayer } from "../../testing/src/test-database.ts";
 import type { TestDatabaseOptions } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -603,3 +610,91 @@ export const definitionVersion = (id: string) =>
   Effect.gen(function* readVersion() {
     return (yield* (yield* Catalog).refresh).get(id)?.version ?? 0;
   });
+
+/**
+ * Refused local definitions shared by engine and HTTP checks.
+ * @param snapshot - The loaded core and acme catalog.
+ * @returns Reason, HTTP diagnostic label and operation for each refusal.
+ */
+export const refusedLocalAdditions = (snapshot: ConfigSnapshot) => {
+  const roleName =
+    snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name")?.id ?? "";
+
+  const userRoleUser =
+    snapshot.fieldByName(USER_ROLE_CLASS_ID, "user")?.id ?? "";
+
+  const additions: readonly (readonly [string, string, BuiltOperation])[] = [
+    [
+      "reserved",
+      "a table in the core namespace",
+      createClass("intruder", { namespaceId: CORE_NAMESPACE_ID }),
+    ],
+    [
+      "reserved",
+      "a table in the acme app namespace",
+      createClass("intruder", { namespaceId: ACME.namespace }),
+    ],
+    [
+      "notExtensible",
+      "a field on the non-extensible core.user_role",
+      addField(USER_ROLE_CLASS_ID, "note", { kind: "text" }),
+    ],
+    [
+      "platform",
+      "a field on the platform table core.role",
+      addField(PLATFORM_CLASS_IDS.role, "note", { kind: "text" }),
+    ],
+    [
+      "platform",
+      "a child class of the platform table core.role",
+      createClass("role_child", {
+        parentId: PLATFORM_CLASS_IDS.role,
+      }),
+    ],
+    [
+      "notExtensible",
+      "a child class of the non-extensible core.user_role",
+      createClass("user_role_child", {
+        parentId: USER_ROLE_CLASS_ID,
+      }),
+    ],
+    [
+      "platform",
+      "an index on the platform table core.role",
+      addIndex(PLATFORM_CLASS_IDS.role, [roleName], false),
+    ],
+    [
+      "notExtensible",
+      "an index on the non-extensible core.user_role",
+      addIndex(USER_ROLE_CLASS_ID, [userRoleUser], false),
+    ],
+    [
+      "platform",
+      "an override on the platform table core.role",
+      addOverride(PLATFORM_CLASS_IDS.role, roleName, {
+        maxLength: 5,
+      }),
+    ],
+    [
+      "notExtensible",
+      "an override on the non-extensible core.user_role",
+      addOverride(USER_ROLE_CLASS_ID, userRoleUser, {
+        required: true,
+      }),
+    ],
+    // Platform storage belongs to the core set: nothing creates
+    // such a table or schema (before the fix, a 500).
+    [
+      "platform",
+      "a local table with platform storage",
+      createClass("own_platform", { storage: "platform" }),
+    ],
+    [
+      "platform",
+      "a local namespace with platform storage",
+      createNamespace("own_platform", "platform"),
+    ],
+  ];
+
+  return additions;
+};

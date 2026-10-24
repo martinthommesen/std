@@ -8,10 +8,12 @@ import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { ACME } from "../../testing/src/acme-ids.ts";
+import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { keyExpression } from "../src/records/read-cursor.ts";
+import { DatabaseConfig } from "../src/sql/database-config.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
   bulkRecords,
@@ -22,6 +24,49 @@ import {
 import { allPages, listOf, listPath, readsTestLayer } from "./reads-support.ts";
 
 const PAGE = "7";
+
+const checkSortedTraversal = Effect.fn("cursor-nulls.checkSortedTraversal")(
+  function* checkSortedTraversal(caller: TestRequestOptions, sort: string) {
+    const http = yield* TestHttpClient;
+    const condition = 'name starts with "bulk-"';
+
+    const unpaged = yield* listOf(
+      yield* http.get(
+        listPath("acme.asset", {
+          condition,
+          limit: String(ROWS),
+          sort,
+        }),
+        caller
+      )
+    );
+
+    const paged = yield* allPages(caller, "acme.asset", {
+      condition,
+      limit: PAGE,
+      sort,
+    });
+
+    const expected = unpaged.resources.map((resource) => resource.id);
+    const actual = paged.resources.map((resource) => resource.id);
+
+    assert.strictEqual(expected.length, ROWS, sort);
+    assert.strictEqual(new Set(actual).size, actual.length, sort);
+    assert.deepStrictEqual(actual, expected, sort);
+
+    if (sort === "purchasedOn") {
+      // Hidden and empty keys are absent and sort last, ascending.
+      const hidden = unpaged.resources.map(
+        (resource) => !("purchasedOn" in resource)
+      );
+
+      const firstHidden = hidden.indexOf(true);
+
+      assert.isTrue(firstHidden > 0);
+      assert.isTrue(hidden.slice(firstHidden).every(Boolean));
+    }
+  }
+);
 
 describe("cursor-nulls", () => {
   it("sorts text in code point order through a collation, never a row comparison", () => {
@@ -58,45 +103,19 @@ describe("cursor-nulls", () => {
           );
 
           const token = yield* http.signIn("bob", "bob-password");
-          const condition = 'name starts with "bulk-"';
 
-          for (const sort of SORTS) {
-            const unpaged = yield* listOf(
-              yield* http.get(
-                listPath("acme.asset", {
-                  condition,
-                  limit: String(ROWS),
-                  sort,
-                }),
-                { token }
-              )
-            );
+          const config = yield* DatabaseConfig;
 
-            const paged = yield* allPages({ token }, "acme.asset", {
-              condition,
-              limit: PAGE,
-              sort,
-            });
+          // Reserve half the configured pool, as in child-endpoint-reads.sortAll.
+          const concurrency = Math.max(
+            1,
+            Math.floor(config.maxConnections / 2)
+          );
 
-            const expected = unpaged.resources.map((resource) => resource.id);
-            const actual = paged.resources.map((resource) => resource.id);
-
-            assert.strictEqual(expected.length, ROWS, sort);
-            assert.strictEqual(new Set(actual).size, actual.length, sort);
-            assert.deepStrictEqual(actual, expected, sort);
-
-            if (sort === "purchasedOn") {
-              // Hidden and empty keys are absent and sort last, ascending.
-              const hidden = unpaged.resources.map(
-                (resource) => !("purchasedOn" in resource)
-              );
-
-              const firstHidden = hidden.indexOf(true);
-
-              assert.isTrue(firstHidden > 0);
-              assert.isTrue(hidden.slice(firstHidden).every(Boolean));
-            }
-          }
+          yield* Effect.all(
+            SORTS.map((sort) => checkSortedTraversal({ token }, sort)),
+            { concurrency, discard: true }
+          );
         }),
       { timeout: 120_000 }
     );

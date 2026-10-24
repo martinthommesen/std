@@ -269,32 +269,28 @@ describe("tmf-noninterference-fixture", () => {
             restricted
           );
 
-          const requests: readonly (readonly [
-            string,
-            (id: string) => TestRequestOptions,
-          ])[] = [
-            ["GET", () => bob],
-            ["PATCH", () => mergeOptions(bob, { severity: "Minor" })],
+          const requests: readonly (readonly [string, TestRequestOptions])[] = [
+            ["GET", bob],
+            ["PATCH", mergeOptions(bob, { severity: "Minor" })],
             [
               "PATCH",
-              () =>
-                mergeOptions(bob, { severity: "Minor" }, { "if-match": '"1"' }),
+              mergeOptions(bob, { severity: "Minor" }, { "if-match": '"1"' }),
             ],
-            ["DELETE", () => bob],
-            ["DELETE", () => ({ ...bob, headers: { "if-match": '"1"' } })],
+            ["DELETE", bob],
+            ["DELETE", { ...bob, headers: { "if-match": '"1"' } }],
           ];
 
           for (const [method, options] of requests) {
             const hidden = yield* http.request(
               method,
               `${FIXTURE_TICKETS}/${restricted}`,
-              options(restricted)
+              options
             );
 
             const random = yield* http.request(
               method,
               `${FIXTURE_TICKETS}/${RANDOM_ID}`,
-              options(RANDOM_ID)
+              options
             );
 
             assert.strictEqual(hidden.status, 404, `${method}: ${hidden.text}`);

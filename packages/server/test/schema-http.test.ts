@@ -865,21 +865,8 @@ const HIDDEN_OVERRIDE_LABEL = "Matrix hidden override";
  * @returns The draft.
  */
 const matrixOverride = (id: string): OverrideDraft => ({
-  ...LOCAL,
-  choices: null,
-  classId: ACME.laptop,
-  default: null,
-  fieldId: ACME.cost,
-  helpText: null,
-  id,
-  kind: "override",
+  ...addOverride(ACME.laptop, ACME.cost, { id }).op.definition,
   label: HIDDEN_OVERRIDE_LABEL,
-  max: null,
-  maxLength: null,
-  min: null,
-  numberPrefix: null,
-  readOnly: null,
-  required: null,
 });
 
 /**
@@ -913,17 +900,11 @@ const refIdsOf = (refs: MatrixRefs): readonly string[] => [
  * @param id - The ID.
  * @returns The operation.
  */
-const matrixRole = (id: string): Operation => ({
-  definition: {
-    ...LOCAL,
-    helpText: null,
-    id,
-    kind: "role",
-    label: "Matrix",
-    name: "m_role",
-  },
-  op: "createRole",
-});
+const matrixRole = (id: string): Operation => {
+  const role = addRole("m_role", id).op;
+
+  return { ...role, definition: { ...role.definition, label: "Matrix" } };
+};
 
 /**
  * Every operation kind the change-set endpoint accepts. The record is

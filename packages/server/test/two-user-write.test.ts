@@ -1,10 +1,3 @@
-/**
- * The two-user write scenario of the plan's Stage 0 gate and Contracts 3
- * (`two-user-write`), the 2.2 endpoint-independence tests through the HTTP
- * API, `field-rule-states` with rule 7 replaced for `name`, the
- * stale-request check of writes (6.4), and secret exclusion from history
- * (4.3).
- */
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
@@ -20,7 +13,14 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { objectOf } from "./authz-support.ts";
 import { codeOf, readsTestLayer, recordPath } from "./reads-support.ts";
 import { rootVersion, changeLog, rowCount } from "./records-support.ts";
-import { change, values } from "./schema-support.ts";
+/**
+ * The two-user write scenario of the plan's Stage 0 gate and Contracts 3
+ * (`two-user-write`), the 2.2 endpoint-independence tests through the HTTP
+ * API, `field-rule-states` with rule 7 replaced for `name`, the
+ * stale-request check of writes (6.4), and secret exclusion from history
+ * (4.3).
+ */
+import { addAccessRule, change, values } from "./schema-support.ts";
 import {
   ASSET,
   create,
@@ -73,28 +73,20 @@ const replaceRule7ForName = Effect.gen(function* replaceRule7() {
       op: "update",
       version: rule.version,
     },
-    {
-      definition: {
-        actions: ["create", "update"],
-        active: true,
-        classId: ACME.asset,
+    addAccessRule(
+      ACME.asset,
+      [ACME.employee],
+      {
         condition: {
           left: { path: [ACME.status] },
           op: "eq",
           right: { value: "in_use" },
         },
         description: "employees may write name while in use",
-        effect: "allow",
-        id: randomUUID(),
-        kind: "accessRule",
-        name: null,
-        owner: { layer: "local" },
-        protected: false,
-        roleIds: [ACME.employee],
-        target: { fields: [ACME.name], kind: "fields" },
+        fields: [ACME.name],
       },
-      op: "createAccessRule",
-    },
+      { actions: ["create", "update"] }
+    ).op,
   ];
 
   return yield* change(operations);

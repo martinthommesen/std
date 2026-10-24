@@ -10,16 +10,12 @@ import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type {
-  TestRequestOptions,
-  TestResponse,
-} from "../../testing/src/http-client.ts";
+import type { TestResponse } from "../../testing/src/http-client.ts";
 import { recordHref } from "../src/http/api/resource.ts";
 import {
-  MERGE_PATCH,
+  assetWithHistory,
   UNKNOWN_ID,
   revisionsOf,
-  patchOptions,
   asArray,
   asObject,
   textOf,
@@ -44,44 +40,6 @@ const linkRels = (response: TestResponse): string[] =>
     WORD_RELATION.test(relation)
   );
 
-/**
- * An asset of Alice's with three history entries: created, then two
- * updates.
- *
- * @param alice - Alice's request options.
- * @returns The asset's path.
- */
-const assetWithHistory = (
-  alice: TestRequestOptions
-): Effect.Effect<string, never, TestHttpClient> =>
-  Effect.gen(function* createHistory() {
-    const http = yield* TestHttpClient;
-
-    const created = yield* http.request("POST", API.asset, {
-      ...alice,
-      body: { name: "H", status: "spare" },
-    });
-
-    assert.strictEqual(created.status, 201, created.text);
-
-    const path = `${API.asset}/${textOf(asObject(created.json).id)}`;
-
-    for (const [revision, status] of [
-      [1, "in_use"],
-      [2, "spare"],
-    ] as const) {
-      const patched = yield* http.request(
-        "PATCH",
-        path,
-        patchOptions(alice, MERGE_PATCH, { status }, `"${revision}"`)
-      );
-
-      assert.strictEqual(patched.status, 200, patched.text);
-    }
-
-    return path;
-  });
-
 describe("api-history", () => {
   it("builds a record's URL from the origin and collection", () => {
     assert.strictEqual(
@@ -97,7 +55,7 @@ describe("api-history", () => {
 
         const { alice: user } = yield* AcmeFixture;
         const alice = { token: yield* http.signIn(user.login, user.password) };
-        const path = yield* assetWithHistory(alice);
+        const path = yield* assetWithHistory(alice, "H");
 
         const all = yield* http.get(`${path}/history`, alice);
 
@@ -158,7 +116,7 @@ describe("api-history", () => {
 
         const { alice: user } = yield* AcmeFixture;
         const alice = { token: yield* http.signIn(user.login, user.password) };
-        const path = yield* assetWithHistory(alice);
+        const path = yield* assetWithHistory(alice, "H");
 
         const revisionsFor = (query: readonly (readonly [string, string])[]) =>
           http

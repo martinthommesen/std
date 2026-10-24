@@ -29,6 +29,7 @@ import {
   API,
   withQuery,
 } from "./api-support.ts";
+import { linksOf } from "./paging.ts";
 import { readsTestLayer } from "./reads-support.ts";
 
 const ORIGIN = "http://localhost";
@@ -38,19 +39,23 @@ const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 const codeOf = (response: TestResponse): JsonValue | undefined =>
   asObject(response.json).code;
 
+const WORD_RELATION = /^\w+$/u;
+
 const linkRels = (response: TestResponse): string[] =>
-  [...(response.headers.get("link") ?? "").matchAll(/rel="(?<rel>\w+)"/gu)].map(
-    (match) => match.groups?.rel ?? ""
+  [...linksOf(response.headers.get("link")).keys()].filter((relation) =>
+    WORD_RELATION.test(relation)
   );
 
 const linkOf = (response: TestResponse, rel: string): string => {
-  const entry = (response.headers.get("link") ?? "")
-    .split(", ")
-    .find((part) => part.endsWith(`rel="${rel}"`));
+  const uri = linksOf(response.headers.get("link")).get(rel);
 
-  return (entry ?? "")
-    .replace(/^<http:\/\/localhost/u, "")
-    .replace(/>;.*$/u, "");
+  if (uri === undefined) {
+    return "";
+  }
+
+  const url = new URL(uri);
+
+  return `${url.pathname}${url.search}`;
 };
 
 const namesOf = (response: TestResponse): string[] =>

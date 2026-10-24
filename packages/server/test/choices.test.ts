@@ -253,25 +253,10 @@ describe("choice fields", () => {
           }
 
           const tighten: Operation = {
-            definition: {
+            ...addOverride(ACME.laptop, ids.tier, {
               choices: ["gold", "silver"],
-              classId: override.classId,
-              default: override.default,
-              fieldId: override.fieldId,
-              helpText: override.helpText,
-              id: override.id,
-              kind: "override",
-              label: override.label,
-              max: override.max,
-              maxLength: override.maxLength,
-              min: override.min,
-              numberPrefix: override.numberPrefix,
-              owner: override.owner,
-              protected: override.protected,
-              readOnly: override.readOnly,
-              required: override.required,
-            },
-            op: "setOverride",
+              id: ids.override,
+            }).op,
             version: override.version,
           };
 

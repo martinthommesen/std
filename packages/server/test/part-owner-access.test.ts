@@ -20,6 +20,7 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import type { Condition } from "@std/definitions/condition";
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import type { JsonObject } from "@std/values/json-value";
 import { Effect, Layer, Schema } from "effect";
 
@@ -198,19 +199,15 @@ const watchTicketsAndParts = Effect.gen(function* watch() {
 
 /**
  * A shipped field's ID by class and name.
+ * @param snapshot - The caller's current catalog snapshot.
  * @param table - The qualified class name.
  * @param name - The field name.
  * @returns The field ID.
  */
-const fieldIdOf = (table: string, name: string) =>
-  Effect.gen(function* findField() {
-    const snapshot = yield* (yield* Catalog).refresh;
-    const classId = snapshot.classByName(table)?.id ?? "";
-
-    return (
-      snapshot.fields(classId).find((field) => field.name === name)?.id ?? ""
-    );
-  });
+const fieldIdOf = (snapshot: ConfigSnapshot, table: string, name: string) =>
+  snapshot
+    .fields(snapshot.classByName(table)?.id ?? "")
+    .find((field) => field.name === name)?.id ?? "";
 
 /**
  * `number = value` on incidents.
@@ -239,10 +236,10 @@ const noteOn = (targetNumber: string, text: string) =>
       type: "createEach" as const,
       values: [
         {
-          fieldId: yield* fieldIdOf(NOTE, "ticket"),
+          fieldId: fieldIdOf(snapshot, NOTE, "ticket"),
           value: { copy: { fieldId: null, from: "source" as const } },
         },
-        { fieldId: yield* fieldIdOf(NOTE, "text"), value: { value: text } },
+        { fieldId: fieldIdOf(snapshot, NOTE, "text"), value: { value: text } },
       ],
     };
   });
@@ -618,11 +615,11 @@ describe("part-owner-access", () => {
                 type: "createEach",
                 values: [
                   {
-                    fieldId: yield* fieldIdOf(NOTE, "ticket"),
+                    fieldId: fieldIdOf(snapshot, NOTE, "ticket"),
                     value: { copy: { fieldId: null, from: "source" } },
                   },
                   {
-                    fieldId: yield* fieldIdOf(NOTE, "text"),
+                    fieldId: fieldIdOf(snapshot, NOTE, "text"),
                     value: { value: "After commit" },
                   },
                 ],

@@ -6,30 +6,20 @@
  * additions go only where 1.8 allows them.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { Definition } from "@std/definitions/definition";
 import { isLive } from "@std/definitions/definition";
-import type { Operation } from "@std/definitions/operation";
-import { RENAMABLE, RETIRABLE, UPDATABLE } from "@std/definitions/operation";
+import { UPDATABLE } from "@std/definitions/operation";
 import type { Requester } from "@std/definitions/requester";
-import {
-  BUILT_IN_ROLE_IDS,
-  CORE_NAMESPACE_ID,
-  PLATFORM_CLASS_IDS,
-  USER_CLASS_ID,
-  USER_ROLE_CLASS_ID,
-} from "@std/definitions/well-known";
-import type { JsonObject } from "@std/values/json-value";
+import { BUILT_IN_ROLE_IDS, USER_CLASS_ID } from "@std/definitions/well-known";
 import { Effect } from "effect";
 
 import { ACME } from "../../testing/src/acme-ids.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
+import { refusedOperations } from "./schema-paths-support.ts";
 import {
+  refusedLocalAdditions,
   addField,
-  addIndex,
-  addOverride,
   createClass,
-  createNamespace,
   currentRevision,
   freshId,
   loadCoreAndAcme,
@@ -61,46 +51,6 @@ const catalogFingerprint = values(
      UNION ALL SELECT nspname FROM pg_namespace
    ) AS f`
 ).pipe(Effect.map(([value]) => value));
-
-/**
- * Every operation on a protected definition other than a label or
- * help-text change: renames, lifecycle operations, and an update of each
- * other updatable property (to its current value, so only the guard can
- * refuse it).
- * @param definition - A protected definition.
- * @returns The operations, each tried as its own change set.
- */
-const refusedOperations = (definition: Definition): readonly Operation[] => {
-  const { id, version } = definition;
-  const current: JsonObject = definition;
-
-  const updates = UPDATABLE[definition.kind]
-    .filter((key) => key !== "label" && key !== "helpText")
-    .map((key): Operation => ({
-      changes: { [key]: current[key] ?? null },
-      id,
-      op: "update",
-      version,
-    }));
-
-  const lifecycle: Operation[] = [
-    { id, op: "delete", version },
-    { confirm: { id, version }, id, op: "purge", version },
-  ];
-
-  if (RENAMABLE.has(definition.kind)) {
-    lifecycle.push({ id, name: "renamed_by_admin", op: "rename", version });
-  }
-
-  if (RETIRABLE.has(definition.kind)) {
-    lifecycle.push(
-      { id, op: "retire", version },
-      { id, op: "reactivate", version }
-    );
-  }
-
-  return [...lifecycle, ...updates];
-};
 
 const REFUSALS: ReadonlySet<string> = new Set([
   "DefinitionProtected",
@@ -168,68 +118,15 @@ describe("protected-definitions", () => {
             const fingerprint = yield* catalogFingerprint;
             const snapshot = yield* (yield* Catalog).refresh;
 
-            const roleName =
-              snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name")?.id ?? "";
+            const additions = refusedLocalAdditions(snapshot);
 
-            const userRoleUser =
-              snapshot.fieldByName(USER_ROLE_CLASS_ID, "user")?.id ?? "";
-
-            const refused: readonly (readonly [string, Operation])[] = [
-              [
-                "notExtensible",
-                addField(USER_ROLE_CLASS_ID, "note", { kind: "text" }).op,
-              ],
-              [
-                "platform",
-                addField(PLATFORM_CLASS_IDS.role, "note", { kind: "text" }).op,
-              ],
-              [
-                "reserved",
-                createClass("intruder", { namespaceId: CORE_NAMESPACE_ID }).op,
-              ],
-              [
-                "reserved",
-                createClass("intruder", { namespaceId: ACME.namespace }).op,
-              ],
-              [
-                "platform",
-                createClass("role_child", { parentId: PLATFORM_CLASS_IDS.role })
-                  .op,
-              ],
-              [
-                "notExtensible",
-                createClass("user_role_child", { parentId: USER_ROLE_CLASS_ID })
-                  .op,
-              ],
-              [
-                "platform",
-                addIndex(PLATFORM_CLASS_IDS.role, [roleName], false).op,
-              ],
-              [
-                "notExtensible",
-                addIndex(USER_ROLE_CLASS_ID, [userRoleUser], false).op,
-              ],
-              [
-                "platform",
-                addOverride(PLATFORM_CLASS_IDS.role, roleName, { maxLength: 5 })
-                  .op,
-              ],
-              [
-                "notExtensible",
-                addOverride(USER_ROLE_CLASS_ID, userRoleUser, {
-                  required: true,
-                }).op,
-              ],
-              // Platform storage is for the core set only: nothing would
-              // create the table or schema (this was a 500).
-              [
-                "platform",
-                createClass("own_platform", { storage: "platform" }).op,
-              ],
-              ["platform", createNamespace("own_platform", "platform").op],
+            const refused = [
+              ...additions.slice(2, 4),
+              ...additions.slice(0, 2),
+              ...additions.slice(4),
             ];
 
-            for (const [reason, operation] of refused) {
+            for (const [reason, , { op: operation }] of refused) {
               const failure = yield* Effect.flip(
                 applyChangeSet({ operations: [operation], requester: ADMIN })
               );

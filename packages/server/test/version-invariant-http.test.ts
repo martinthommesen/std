@@ -32,7 +32,8 @@ import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { decodeRows } from "../src/sql/rows.ts";
-import { deliveriesOf, subscribe } from "./outbox-support.ts";
+import type { DeliveryRow } from "./outbox-support.ts";
+import { deliveriesWhere, subscribe } from "./outbox-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import {
   ASSET,
@@ -274,6 +275,7 @@ const EntryRowSchema = Schema.Struct({
   has_status: Schema.Boolean,
   kind: Schema.String,
   record_class_id: Schema.String,
+  record_id: Schema.String,
   record_version: Schema.String,
   status_after: Schema.NullOr(Schema.String),
 });
@@ -281,17 +283,17 @@ const EntryRowSchema = Schema.Struct({
 const decodeEntries = decodeRows(EntryRowSchema);
 
 // A record's change entries in version order, with its status change.
-const entriesOf = (id: string) =>
+const entriesOf = (ids: string) =>
   SqlClient.SqlClient.pipe(
     Effect.flatMap((sql) =>
       sql.unsafe(
-        `SELECT id::text AS change_id, record_version::text AS record_version,
+        `SELECT record_id::text AS record_id, id::text AS change_id, record_version::text AS record_version,
            kind, record_class_id::text AS record_class_id,
            (fields -> $2::text) IS NOT NULL AS has_status,
            fields -> $2::text ->> 'after' AS status_after
-         FROM core."change" WHERE record_id = $1::uuid
-         ORDER BY record_version`,
-        [id, ACME.status]
+         FROM core."change" WHERE record_id = ANY($1::uuid[])
+         ORDER BY record_id, record_version`,
+        [ids, ACME.status]
       )
     ),
     Effect.flatMap(decodeEntries)
@@ -322,59 +324,59 @@ const expectedFor = (
 const sequential = (count: number): readonly number[] =>
   Array.from({ length: count }, (_, index) => index + 1);
 
-const recordHolds = Effect.fn("HttpInvariant.recordHolds")(
-  function* recordHolds(world: World, item: Tracked) {
-    const entries = yield* entriesOf(item.id);
-    const deliveries = yield* deliveriesOf(item.id);
+const recordHolds = (
+  world: World,
+  item: Tracked,
+  entries: readonly (typeof EntryRowSchema.Type)[],
+  deliveries: readonly DeliveryRow[]
+) => {
+  const versions = entries.map((entry) => Number(entry.record_version));
+  const kinds = entries.map((entry) => entry.kind);
 
-    const versions = entries.map((entry) => Number(entry.record_version));
-    const kinds = entries.map((entry) => entry.kind);
+  const versionsHold =
+    JSON.stringify(versions) === JSON.stringify(sequential(item.version)) &&
+    kinds[0] === "create" &&
+    (kinds.at(-1) === "delete") === item.deleted &&
+    entries.every((entry) => entry.record_class_id === item.classId);
 
-    const versionsHold =
-      JSON.stringify(versions) === JSON.stringify(sequential(item.version)) &&
-      kinds[0] === "create" &&
-      (kinds.at(-1) === "delete") === item.deleted &&
-      entries.every((entry) => entry.record_class_id === item.classId);
+  // The image status of each version: after the save, before a delete.
+  let status: string | null = null;
+  const expected = new Map<string, readonly string[]>();
 
-    // The image status of each version: after the save, before a delete.
-    let status: string | null = null;
-    const expected = new Map<string, readonly string[]>();
-
-    for (const entry of entries) {
-      if (entry.kind !== "delete" && entry.has_status) {
-        status = entry.status_after;
-      }
-
-      expected.set(
-        entry.change_id,
-        expectedFor(entry.kind, item.classId, status).map(
-          (name) => `${entry.record_version}/${name}`
-        )
-      );
+  for (const entry of entries) {
+    if (entry.kind !== "delete" && entry.has_status) {
+      status = entry.status_after;
     }
 
-    const actual = new Map<string, string[]>();
-
-    for (const delivery of deliveries) {
-      const names = actual.get(delivery.change_id) ?? [];
-
-      names.push(
-        `${delivery.record_version}/${world.subscriptions[delivery.subscription_id] ?? "unknown"}`
-      );
-      actual.set(delivery.change_id, names);
-    }
-
-    const deliveriesHold =
-      [...actual.keys()].every((changeId) => expected.has(changeId)) &&
-      [...expected].every(
-        ([changeId, wanted]) =>
-          JSON.stringify((actual.get(changeId) ?? []).toSorted()) ===
-          JSON.stringify(wanted)
-      );
-
-    return versionsHold && deliveriesHold;
+    expected.set(
+      entry.change_id,
+      expectedFor(entry.kind, item.classId, status).map(
+        (name) => `${entry.record_version}/${name}`
+      )
+    );
   }
-);
+
+  const actual = new Map<string, string[]>();
+
+  for (const delivery of deliveries) {
+    const names = actual.get(delivery.change_id) ?? [];
+
+    names.push(
+      `${delivery.record_version}/${world.subscriptions[delivery.subscription_id] ?? "unknown"}`
+    );
+    actual.set(delivery.change_id, names);
+  }
+
+  const deliveriesHold =
+    [...actual.keys()].every((changeId) => expected.has(changeId)) &&
+    [...expected].every(
+      ([changeId, wanted]) =>
+        JSON.stringify((actual.get(changeId) ?? []).toSorted()) ===
+        JSON.stringify(wanted)
+    );
+
+  return versionsHold && deliveriesHold;
+};
 
 /**
  * Saves every run starts with, each of which must succeed, so that creates,
@@ -469,8 +471,27 @@ const runSequence = Effect.fn("HttpInvariant.sequence")(function* runSequence(
     }
   }
 
+  const ids = `{${tracked.map((item) => item.id).join(",")}}`;
+
+  const entries = Map.groupBy(
+    yield* entriesOf(ids),
+    (entry) => entry.record_id
+  );
+
+  const deliveries = Map.groupBy(
+    yield* deliveriesWhere("record_id = ANY($1::uuid[])", [ids]),
+    (delivery) => delivery.record_id
+  );
+
   for (const item of tracked) {
-    if (!(yield* recordHolds(world, item))) {
+    if (
+      !recordHolds(
+        world,
+        item,
+        entries.get(item.id) ?? [],
+        deliveries.get(item.id) ?? []
+      )
+    ) {
       return false;
     }
   }

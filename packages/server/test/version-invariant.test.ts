@@ -6,8 +6,8 @@
  * version, and a live record's root version is n.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Effect } from "effect";
-import type { SqlClient } from "effect/sql";
+import { Effect, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 import {
   array,
   asyncProperty,
@@ -30,12 +30,11 @@ import {
 } from "../src/records/save-pipeline.ts";
 import type { WriteAccess } from "../src/records/write-access.ts";
 import type { WriteOnlyValues } from "../src/records/write-only-values.ts";
+import { decodeRows } from "../src/sql/rows.ts";
 import type { Transactions } from "../src/sql/transactions.ts";
 import {
-  changeLog,
   asUser,
   recordsTestLayer,
-  rootVersion,
   setUpAcme,
   USERS,
 } from "./records-support.ts";
@@ -196,32 +195,58 @@ const runStep = Effect.fn("VersionInvariant.step")(function* runStep(
 const sequential = (count: number): readonly number[] =>
   Array.from({ length: count }, (_, index) => index + 1);
 
-const entryHolds = Effect.fn("VersionInvariant.entryHolds")(
-  function* entryHolds(item: Tracked) {
-    const log = yield* changeLog(item.id);
-    const versions = log.map((entry) => Number(entry.split(":")[0]));
-    const kinds = log.map((entry) => entry.split(":")[1]);
-    const root = yield* rootVersion(item.id);
+const entryHolds = (
+  item: Tracked,
+  entries: readonly { readonly version: string; readonly kind: string }[],
+  root: number | undefined
+) => {
+  const versions = entries.map((entry) => Number(entry.version));
+  const kinds = entries.map((entry) => entry.kind);
 
-    const exactVersions =
-      JSON.stringify(versions) === JSON.stringify(sequential(item.version));
+  const exactVersions =
+    JSON.stringify(versions) === JSON.stringify(sequential(item.version));
 
-    const deletedLast = kinds.at(-1) === "delete";
-    const createdFirst = kinds[0] === "create";
+  const deletedLast = kinds.at(-1) === "delete";
+  const createdFirst = kinds[0] === "create";
 
-    const liveState = item.deleted
-      ? deletedLast && root === undefined
-      : !deletedLast && root === item.version;
+  const liveState = item.deleted
+    ? deletedLast && root === undefined
+    : !deletedLast && root === item.version;
 
-    return exactVersions && createdFirst && liveState;
-  }
-);
+  return exactVersions && createdFirst && liveState;
+};
 
 const holds = Effect.fn("VersionInvariant.holds")(function* holds(
   tracked: readonly Tracked[]
 ) {
+  if (tracked.length === 0) {
+    return true;
+  }
+
+  const sql = yield* SqlClient.SqlClient;
+  const ids = `{${tracked.map((item) => item.id).join(",")}}`;
+
+  const entries = yield* decodeRows(
+    Schema.Struct({
+      id: Schema.String,
+      kind: Schema.String,
+      version: Schema.String,
+    })
+  )(
+    yield* sql`SELECT record_id::text AS id, record_version::text AS version, kind FROM core.change WHERE record_id = ANY(${ids}::uuid[]) ORDER BY record_id, record_version`
+  );
+
+  const roots = yield* decodeRows(
+    Schema.Struct({ id: Schema.String, version: Schema.FiniteFromString })
+  )(
+    yield* sql`SELECT id::text AS id, version::text AS version FROM acme.asset WHERE id = ANY(${ids}::uuid[])`
+  );
+
+  const byRecord = Map.groupBy(entries, (entry) => entry.id);
+  const versions = new Map(roots.map((root) => [root.id, root.version]));
+
   for (const item of tracked) {
-    if (!(yield* entryHolds(item))) {
+    if (!entryHolds(item, byRecord.get(item.id) ?? [], versions.get(item.id))) {
       return false;
     }
   }

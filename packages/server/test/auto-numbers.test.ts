@@ -9,7 +9,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { DefinitionInvalid } from "@std/definitions/problems";
 import type { JsonValue } from "@std/values/json-value";
-import { Deferred, Effect, Fiber, Ref, Schedule } from "effect";
+import { Deferred, Effect, Fiber, Ref } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
@@ -27,6 +27,7 @@ import {
   insertRecords,
   values,
 } from "./schema-support.ts";
+import { waitUntil } from "./support.ts";
 
 /** A hierarchy with an auto-numbered `number`: ticket, incident (INC), problem (inherits TKT). */
 const ticket = createClass("ticket");
@@ -70,18 +71,17 @@ const createIn = (classId: string, body: Readonly<Record<string, JsonValue>>) =>
 // Waits until a session of this database waits for a lock while running a
 // statement like the pattern.
 const waitingOn = (pattern: string) =>
-  values(
-    `SELECT count(*)::text AS value FROM pg_stat_activity
+  waitUntil(
+    values(
+      `SELECT count(*)::text AS value FROM pg_stat_activity
      WHERE datname = current_database() AND pid <> pg_backend_pid()
        AND wait_event_type = 'Lock' AND query LIKE $1`,
-    [pattern]
-  ).pipe(
-    Effect.repeat({
-      schedule: Schedule.spaced("20 millis"),
-      until: ([count]) => count !== "0",
-    }),
-    Effect.timeout("20 seconds"),
-    Effect.orDie
+      [pattern]
+    ).pipe(
+      Effect.map(([count]) => count !== "0"),
+      Effect.orDie
+    ),
+    "20 seconds"
   );
 
 // The numbers of every row of a table, sorted.

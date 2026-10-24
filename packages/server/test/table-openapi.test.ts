@@ -24,7 +24,8 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { statedRevision, stale } from "./api-support.ts";
 import { objectOf, signInAll } from "./authz-support.ts";
 import { codeOf, readsTestLayer, recordPath } from "./reads-support.ts";
-import { addChoice, addField, change, values } from "./schema-support.ts";
+import { rootVersion } from "./records-support.ts";
+import { addChoice, addField, change } from "./schema-support.ts";
 
 const TABLE = "acme.asset";
 const RECORDS = "/api/v1/acmeAsset";
@@ -94,16 +95,6 @@ const fetchDocument = (session: string) =>
     return { json: objectOf(doc.json), text: doc.text };
   });
 
-const versionOf = (id: string) =>
-  Effect.gen(function* readVersion() {
-    const [version] = yield* values(
-      "SELECT version::text AS value FROM acme.asset WHERE id = $1::uuid",
-      [id]
-    );
-
-    return version ?? "0";
-  });
-
 describe("per-table OpenAPI document", () => {
   it("escapes JSON Pointer tokens", () => {
     assert.strictEqual(
@@ -128,7 +119,7 @@ describe("per-table OpenAPI document", () => {
 
         const set = yield* http.request("PATCH", recordPath(TABLE, L), {
           body: { grade: "scrap" },
-          headers: { "if-match": `"${yield* versionOf(L)}"` },
+          headers: { "if-match": `"${(yield* rootVersion(L)) ?? 0}"` },
           token: tokens.admin,
         });
 
@@ -218,7 +209,7 @@ describe("per-table OpenAPI document", () => {
 
           const updated = yield* http.request("PATCH", recordPath(TABLE, L), {
             body: form,
-            headers: { "if-match": `"${yield* versionOf(L)}"` },
+            headers: { "if-match": `"${(yield* rootVersion(L)) ?? 0}"` },
             token: tokens[who],
           });
 
@@ -359,7 +350,7 @@ describe("per-table OpenAPI document", () => {
 
           const costWrite = yield* http.request("PATCH", recordPath(TABLE, L), {
             body: costBody,
-            headers: { "if-match": `"${yield* versionOf(L)}"` },
+            headers: { "if-match": `"${(yield* rootVersion(L)) ?? 0}"` },
             token: tokens.bob,
           });
 

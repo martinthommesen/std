@@ -194,21 +194,13 @@ export const operationIds = (ids: readonly string[]) =>
  * @param rewrite - The hook's value rewrite.
  * @returns A function providing the hook.
  */
-export const withHook =
-  (
-    rewrite: (
-      input: BeforeWriteInput
-    ) => ReadonlyMap<DefinitionId, DecodedInput>
-  ) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.gen(function* hooked() {
-      const hooks = yield* SaveHooks;
-
-      return yield* Effect.provideService(effect, SaveHooks, {
-        ...hooks,
-        beforeWrite: (input) => Effect.succeed(rewrite(input)),
-      });
-    });
+export const withHook = (
+  rewrite: (input: BeforeWriteInput) => ReadonlyMap<DefinitionId, DecodedInput>
+) =>
+  Effect.updateService(SaveHooks, (hooks) => ({
+    ...hooks,
+    beforeWrite: (input) => Effect.succeed(rewrite(input)),
+  }));
 
 /**
  * A forward history page with a count and no cursor or range.

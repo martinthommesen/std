@@ -33,6 +33,7 @@ import {
   textOf,
   API,
   apiCallers,
+  assetWithHistory,
   withQuery,
 } from "./api-support.ts";
 import { linksOf } from "./paging.ts";
@@ -56,7 +57,12 @@ describe("api-review-2", () => {
       () =>
         Effect.gen(function* concreteStale() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            admin: { token: yield* http.signIn("ada", "ada-password") },
+            bob: { token: yield* http.signIn("bob", "bob-password") },
+          };
+
           const { records } = yield* AcmeFixture;
 
           const childNote = addField(ACME.laptop, "child_note", {
@@ -338,7 +344,11 @@ describe("api-review-2", () => {
       () =>
         Effect.gen(function* byResourceRoute() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            bob: { token: yield* http.signIn("bob", "bob-password") },
+          };
+
           const { records } = yield* AcmeFixture;
 
           const options = yield* http.request(
@@ -454,7 +464,11 @@ describe("api-review-2", () => {
       () =>
         Effect.gen(function* authenticated() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            bob: { token: yield* http.signIn("bob", "bob-password") },
+          };
+
           const { bob } = yield* AcmeFixture;
           const sql = yield* SqlClient.SqlClient;
 
@@ -521,7 +535,11 @@ describe("api-review-2", () => {
       () =>
         Effect.gen(function* individualReadOnly() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+
+          const callers = {
+            admin: { token: yield* http.signIn("ada", "ada-password") },
+          };
+
           const { bob } = yield* AcmeFixture;
           const path = `${API.user}/${bob.id}`;
 
@@ -560,34 +578,12 @@ describe("api-review-2", () => {
       () =>
         Effect.gen(function* latestUnfiltered() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
 
-          const created = yield* http.request("POST", API.asset, {
-            ...callers.alice,
-            body: { name: "Latest", status: "spare" },
-          });
+          const callers = {
+            alice: { token: yield* http.signIn("alice", "alice-password") },
+          };
 
-          assert.strictEqual(created.status, 201, created.text);
-
-          const path = pathOf(textOf(asObject(created.json).href));
-
-          for (const [revision, status] of [
-            [1, "in_use"],
-            [2, "spare"],
-          ] as const) {
-            const patched = yield* http.request(
-              "PATCH",
-              path,
-              patchOptions(
-                callers.alice,
-                MERGE_PATCH,
-                { status },
-                `"${revision}"`
-              )
-            );
-
-            assert.strictEqual(patched.status, 200, patched.text);
-          }
+          const path = yield* assetWithHistory(callers.alice, "Latest");
 
           const full = yield* http.get(`${path}/history`, callers.alice);
           const latest = textOf(asObject(asArray(full.json).at(-1)).href);

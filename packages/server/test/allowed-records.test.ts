@@ -172,19 +172,24 @@ describe("allowed-records", () => {
                 const query =
                   condition === undefined ? base : { ...base, condition };
 
-                const picked = yield* http.get(listPath(table, query), {
-                  token,
-                });
+                const [picked, plain] = yield* Effect.all(
+                  [
+                    http.get(listPath(table, query), {
+                      token,
+                    }),
 
-                const plain = yield* http.get(
-                  listPath(table, {
-                    condition:
-                      condition === undefined
-                        ? 'status = "in_use"'
-                        : `(${condition}) and status = "in_use"`,
-                    sort: "name",
-                  }),
-                  { token }
+                    http.get(
+                      listPath(table, {
+                        condition:
+                          condition === undefined
+                            ? 'status = "in_use"'
+                            : `(${condition}) and status = "in_use"`,
+                        sort: "name",
+                      }),
+                      { token }
+                    ),
+                  ],
+                  { concurrency: "unbounded" }
                 );
 
                 assert.strictEqual(picked.status, 200, picked.text);

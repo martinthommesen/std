@@ -1,9 +1,9 @@
-import { PgClient } from "@effect/sql-pg";
 /**
  * Review round 2 reproductions: statements the allowlist refuses at run
  * time, a dying scope finalizer, detached fibers, the pre-COMMIT backstop,
  * a failed COMMIT, and `readOnly` on a write.
  */
+import { PgClient } from "@effect/sql-pg";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Deferred, Duration, Effect, Exit, Fiber, Schema } from "effect";
 import { SqlClient } from "effect/sql";
@@ -23,7 +23,7 @@ import {
   TransactionState,
 } from "../src/sql/transaction-state.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { errorOf, refusalOf } from "./support.ts";
+import { countRows, errorOf, refusalOf } from "./support.ts";
 
 const decodeCount = decodeRows(Schema.Struct({ n: Schema.Int }));
 
@@ -32,15 +32,6 @@ const decodePid = decodeRows(Schema.Struct({ pid: Schema.Int }));
 const decodeIsolation = decodeRows(
   Schema.Struct({ transaction_isolation: Schema.String })
 );
-
-const countRows = (table: string) =>
-  SqlClient.SqlClient.pipe(
-    Effect.flatMap((sql) =>
-      sql.unsafe(`SELECT count(*)::int AS n FROM ${table}`)
-    ),
-    Effect.flatMap(decodeCount),
-    Effect.map(([row]) => row?.n ?? -1)
-  );
 
 const backendPid = Transactions.pipe(
   Effect.flatMap(({ request }) =>

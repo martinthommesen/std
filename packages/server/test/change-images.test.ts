@@ -34,11 +34,7 @@ import { runDataMigrations } from "../src/platform/data-migrations.ts";
 import { DataMigrationFailed } from "../src/platform/migration.ts";
 import { PLATFORM_MIGRATIONS } from "../src/platform/migrations.ts";
 import { migration0028 } from "../src/platform/migrations/0028-change-image-backfill.ts";
-import {
-  createRecord,
-  deleteRecord,
-  updateRecord,
-} from "../src/records/save-pipeline.ts";
+import { createRecord, updateRecord } from "../src/records/save-pipeline.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
@@ -53,7 +49,12 @@ import {
   createClass,
   ensureSite,
 } from "./schema-support.ts";
-import { asLoadedUser } from "./worker-support.ts";
+import {
+  createAsset,
+  updateAsset,
+  deleteAsset,
+  asLoadedUser,
+} from "./worker-support.ts";
 
 const test = it.effect;
 
@@ -68,27 +69,20 @@ const imageRows = decodeRows(
 const asset = Effect.gen(function* asset() {
   const fixture = yield* AcmeFixture;
 
-  const saved = yield* createRecord({
-    body: { name: "one", status: "in_use" },
-    endpointClassId: ACME.asset,
-  }).pipe(asUser(fixture.admin.id));
+  const id = yield* createAsset(fixture.admin.id, {
+    name: "one",
+    status: "in_use",
+  });
 
   const update = (version: number) =>
-    updateRecord({
-      body: { name: `version-${version + 1}` },
-      endpointClassId: ACME.asset,
-      expectedVersion: version,
-      id: saved.id,
-    }).pipe(asUser(fixture.admin.id));
+    updateAsset(fixture.admin.id, id, version, {
+      name: `version-${version + 1}`,
+    });
 
   const remove = (version: number) =>
-    deleteRecord({
-      endpointClassId: ACME.asset,
-      expectedVersion: version,
-      id: saved.id,
-    }).pipe(asUser(fixture.admin.id));
+    deleteAsset(fixture.admin.id, id, version);
 
-  return { fixture, id: saved.id, remove, update };
+  return { fixture, id, remove, update };
 });
 
 describe("change images", () => {

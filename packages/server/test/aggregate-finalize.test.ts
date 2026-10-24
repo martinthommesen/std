@@ -311,7 +311,16 @@ describe("aggregate-finalize", () => {
   });
 
   layer(aggregatesTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect("sets up the fixture aggregates", () => setUpAggregates);
+    dbTest.effect("sets up the fixture aggregates", () =>
+      Effect.gen(function* setUp() {
+        yield* setUpAggregates;
+        yield* authority("normal", "ann");
+        yield* authority("normal", "bea");
+        yield* authority("normal", "cid");
+        yield* authority("emergency", "ann");
+        yield* authority("emergency", "bea");
+      })
+    );
 
     dbTest.effect(
       "a part-only change with no derived change still gives one aggregate version, its change entry and its deliveries",
@@ -427,12 +436,6 @@ describe("aggregate-finalize", () => {
       "settling creates a change's first round of approvals, persisted with one aggregate version",
       () =>
         Effect.gen(function* firstRound() {
-          yield* authority("normal", "ann");
-          yield* authority("normal", "bea");
-          yield* authority("normal", "cid");
-          yield* authority("emergency", "ann");
-          yield* authority("emergency", "bea");
-
           const id = yield* changeInAuthorize({
             change_type: "normal",
             name: "c-first",

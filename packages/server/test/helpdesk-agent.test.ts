@@ -47,20 +47,6 @@ const testLayer = () =>
 
 type MetaTable = typeof TableMetadata.Type;
 
-const metadataOf = Effect.fn("HelpdeskAgent.metadataOf")(function* metadataOf(
-  token: string,
-  table: string
-) {
-  const { body, response } = yield* fetchMetadata(token, table);
-
-  assert.strictEqual(response.status, 200, response.text);
-
-  return {
-    table: body,
-    text: response.text,
-  };
-});
-
 const fieldsOf = (table: MetaTable) => table.fields.map((field) => field.name);
 
 const layoutFields = (table: MetaTable, type: "form" | "list") =>
@@ -135,36 +121,36 @@ describe("helpdesk-agent", () => {
           const { admin, agent, fixture } = yield* signInBoth;
           const http = yield* TestHttpClient;
 
-          const agentMeta = yield* metadataOf(agent, INCIDENT);
-          const adminMeta = yield* metadataOf(admin, INCIDENT);
+          const agentMeta = yield* fetchMetadata(agent, INCIDENT);
+          const adminMeta = yield* fetchMetadata(admin, INCIDENT);
 
-          assert.notInclude(fieldsOf(agentMeta.table), "internal_cost");
-          assert.include(fieldsOf(adminMeta.table), "internal_cost");
-          assert.notInclude(agentMeta.text, "internal_cost");
-          assert.notInclude(agentMeta.text, "internalCost");
-          assert.notInclude(agentMeta.text, HELPDESK.fields.internalCost);
-          assert.notInclude(agentMeta.text, "Costly");
+          assert.notInclude(fieldsOf(agentMeta.body), "internal_cost");
+          assert.include(fieldsOf(adminMeta.body), "internal_cost");
+          assert.notInclude(agentMeta.response.text, "internal_cost");
+          assert.notInclude(agentMeta.response.text, "internalCost");
           assert.notInclude(
-            layoutFields(agentMeta.table, "form"),
+            agentMeta.response.text,
+            HELPDESK.fields.internalCost
+          );
+          assert.notInclude(agentMeta.response.text, "Costly");
+          assert.notInclude(
+            layoutFields(agentMeta.body, "form"),
             "internal_cost"
           );
-          assert.include(
-            layoutFields(adminMeta.table, "form"),
-            "internal_cost"
-          );
+          assert.include(layoutFields(adminMeta.body, "form"), "internal_cost");
 
           // The admin gets every saved filter, ticket's first; the agent
           // not `costly`, which names the hidden field.
           assert.deepStrictEqual(
-            adminMeta.table.savedFilters?.map((filter) => filter.name),
+            adminMeta.body.savedFilters?.map((filter) => filter.name),
             ["costly", "critical_open", "my_open", "unassigned"]
           );
           assert.deepStrictEqual(
-            agentMeta.table.savedFilters?.map((filter) => filter.name),
+            agentMeta.body.savedFilters?.map((filter) => filter.name),
             ["critical_open", "my_open", "unassigned"]
           );
 
-          const customerEmail = agentMeta.table.fields.find(
+          const customerEmail = agentMeta.body.fields.find(
             (field) => field.name === "customer_email"
           );
 
@@ -265,9 +251,9 @@ describe("helpdesk-agent", () => {
             ["admin", admin],
             ["agent", agent],
           ] as const) {
-            const meta = yield* metadataOf(token, INCIDENT);
+            const meta = yield* fetchMetadata(token, INCIDENT);
 
-            for (const filter of meta.table.savedFilters ?? []) {
+            for (const filter of meta.body.savedFilters ?? []) {
               const { resources } = yield* allPages({ token }, INCIDENT, {
                 condition: filter.filter,
               });
@@ -401,9 +387,9 @@ describe("helpdesk-agent", () => {
           }
 
           for (const token of [admin, agent]) {
-            const meta = yield* metadataOf(token, INCIDENT);
+            const meta = yield* fetchMetadata(token, INCIDENT);
 
-            const open = (meta.table.savedFilters ?? []).filter((filter) =>
+            const open = (meta.body.savedFilters ?? []).filter((filter) =>
               ["my_open", "unassigned", "critical_open"].includes(filter.name)
             );
 
@@ -428,10 +414,10 @@ describe("helpdesk-agent", () => {
 
           assert.strictEqual(reopened.status, 200, reopened.text);
 
-          const unassigned = (yield* metadataOf(
+          const unassigned = (yield* fetchMetadata(
             admin,
             INCIDENT
-          )).table.savedFilters?.find((filter) => filter.name === "unassigned");
+          )).body.savedFilters?.find((filter) => filter.name === "unassigned");
 
           const { resources } = yield* allPages({ token: admin }, INCIDENT, {
             condition: unassigned?.filter ?? "",

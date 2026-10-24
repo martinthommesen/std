@@ -13,17 +13,11 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Definition } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
-import {
-  CORE_NAMESPACE_ID,
-  PLATFORM_CLASS_IDS,
-  USER_CLASS_ID,
-  USER_ROLE_CLASS_ID,
-} from "@std/definitions/well-known";
+import { USER_CLASS_ID } from "@std/definitions/well-known";
 import { isJsonArray, isJsonObject } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
-import { ACME } from "../../testing/src/acme-ids.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -42,11 +36,11 @@ import {
   userWithRoles,
 } from "./schema-paths-support.ts";
 import {
+  refusedLocalAdditions,
   definitionVersion,
   addAccessRule,
   addField,
   addIndex,
-  addOverride,
   addRole,
   change,
   createClass,
@@ -55,7 +49,6 @@ import {
   insertRecords,
   values,
 } from "./schema-support.ts";
-import type { BuiltOperation } from "./schema-support.ts";
 import { create, patch } from "./writes-support.ts";
 
 /** The site tables' rows, as one digest. */
@@ -167,9 +160,14 @@ const detailOf = (json: JsonValue | undefined): JsonValue => {
  */
 const expectRefusals = Effect.fn("SchemaRefusals.expect")(
   function* expectRefusals(refusals: readonly Refusal[]) {
+    if (refusals.length === 0) {
+      return;
+    }
+
+    const state = yield* committedState;
+    const data = yield* siteData;
+
     for (const refusal of refusals) {
-      const state = yield* committedState;
-      const data = yield* siteData;
       const response = yield* refusal.send;
 
       assert.deepStrictEqual(
@@ -816,28 +814,17 @@ describe("schema-refusals-http", () => {
 
             const refusals: Refusal[] = [];
 
-            for (const [label, table, blocker] of cases) {
-              const version = yield* definitionVersion(table);
+            const namingSnapshot = yield* (yield* Catalog).refresh;
 
+            for (const [label, table, blocker] of cases) {
               refusals.push(
-                {
-                  detail: [blocker],
-                  label: `generic retire of ${label}`,
-                  send: patch(token, "core.class", table, version, {
-                    state: "retired",
-                  }),
-                  status: 409,
-                  tag: "DependencyConflict",
-                },
-                {
-                  detail: [blocker],
-                  label: `endpoint retire of ${label}`,
-                  send: postChangeSet(token, [
-                    { id: table, op: "retire", version },
-                  ]),
-                  status: 409,
-                  tag: "DependencyConflict",
-                }
+                ...refusalPair(
+                  token,
+                  namingSnapshot.get(table),
+                  "retire",
+                  [`generic retire of ${label}`, `endpoint retire of ${label}`],
+                  { detail: [blocker], status: 409, tag: "DependencyConflict" }
+                )
               );
             }
 
@@ -1090,90 +1077,7 @@ describe("schema-refusals-http", () => {
             const token = yield* userWithRoles("addition_admin", ["admin"]);
             const snapshot = yield* (yield* Catalog).refresh;
 
-            const roleName = idOf(
-              snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name")
-            );
-
-            const userRoleUser = idOf(
-              snapshot.fieldByName(USER_ROLE_CLASS_ID, "user")
-            );
-
-            const additions: readonly (readonly [
-              string,
-              string,
-              BuiltOperation,
-            ])[] = [
-              [
-                "reserved",
-                "a table in the core namespace",
-                createClass("intruder", { namespaceId: CORE_NAMESPACE_ID }),
-              ],
-              [
-                "reserved",
-                "a table in the acme app namespace",
-                createClass("intruder", { namespaceId: ACME.namespace }),
-              ],
-              [
-                "notExtensible",
-                "a field on the non-extensible core.user_role",
-                addField(USER_ROLE_CLASS_ID, "note", { kind: "text" }),
-              ],
-              [
-                "platform",
-                "a field on the platform table core.role",
-                addField(PLATFORM_CLASS_IDS.role, "note", { kind: "text" }),
-              ],
-              [
-                "platform",
-                "a child class of the platform table core.role",
-                createClass("role_child", {
-                  parentId: PLATFORM_CLASS_IDS.role,
-                }),
-              ],
-              [
-                "notExtensible",
-                "a child class of the non-extensible core.user_role",
-                createClass("user_role_child", {
-                  parentId: USER_ROLE_CLASS_ID,
-                }),
-              ],
-              [
-                "platform",
-                "an index on the platform table core.role",
-                addIndex(PLATFORM_CLASS_IDS.role, [roleName], false),
-              ],
-              [
-                "notExtensible",
-                "an index on the non-extensible core.user_role",
-                addIndex(USER_ROLE_CLASS_ID, [userRoleUser], false),
-              ],
-              [
-                "platform",
-                "an override on the platform table core.role",
-                addOverride(PLATFORM_CLASS_IDS.role, roleName, {
-                  maxLength: 5,
-                }),
-              ],
-              [
-                "notExtensible",
-                "an override on the non-extensible core.user_role",
-                addOverride(USER_ROLE_CLASS_ID, userRoleUser, {
-                  required: true,
-                }),
-              ],
-              // Platform storage belongs to the core set: nothing creates
-              // such a table or schema (before the fix, a 500).
-              [
-                "platform",
-                "a local table with platform storage",
-                createClass("own_platform", { storage: "platform" }),
-              ],
-              [
-                "platform",
-                "a local namespace with platform storage",
-                createNamespace("own_platform", "platform"),
-              ],
-            ];
+            const additions = refusedLocalAdditions(snapshot);
 
             const refusals: Refusal[] = [];
 

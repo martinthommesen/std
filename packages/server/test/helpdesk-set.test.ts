@@ -152,17 +152,6 @@ const decodeMe = Schema.decodeUnknownEffect(
   })
 );
 
-const metadataOf = Effect.fn("HelpdeskSet.metadataOf")(function* metadataOf(
-  token: string,
-  table: string
-) {
-  const { body, response } = yield* fetchMetadata(token, table);
-
-  assert.strictEqual(response.status, 200, response.text);
-
-  return body;
-});
-
 const metaField = (table: MetaTable, id: string): MetaField | undefined =>
   table.fields.find((field) => field.id === id);
 
@@ -308,8 +297,8 @@ const callersSeeTheSet = Effect.fn("HelpdeskSet.callers")(
       "agent"
     );
 
-    const adminTicket = yield* metadataOf(admin, TICKET);
-    const adminIncident = yield* metadataOf(admin, INCIDENT);
+    const { body: adminTicket } = yield* fetchMetadata(admin, TICKET);
+    const { body: adminIncident } = yield* fetchMetadata(admin, INCIDENT);
 
     assert.deepStrictEqual(adminTicket.ancestors, []);
     assert.deepStrictEqual(
@@ -342,7 +331,7 @@ const callersSeeTheSet = Effect.fn("HelpdeskSet.callers")(
       [TICKET, adminTicket],
       [INCIDENT, adminIncident],
     ] as const) {
-      const asAgent = yield* metadataOf(agent, table);
+      const { body: asAgent } = yield* fetchMetadata(agent, table);
 
       assert.isUndefined(
         metaField(asAgent, HELPDESK.fields.internalCost),

@@ -22,12 +22,12 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import type { Condition } from "@std/definitions/condition";
+import type { Operation } from "@std/definitions/operation";
 import type { RuleAction, RuleValue } from "@std/definitions/rule-definition";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect, Exit, Layer, Option, Schema } from "effect";
+import { Effect, Exit, Layer, Option } from "effect";
 import type { HttpClient } from "effect/http";
-import { SqlClient } from "effect/sql";
 
 import { Actor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -48,9 +48,9 @@ import { suppliedFieldsOf } from "../src/records/supplied-fields.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
-import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { committedState } from "./committed-state.ts";
 import { subscribe } from "./outbox-support.ts";
 import { actorOf, setUpAcme, USERS } from "./records-support.ts";
 import {
@@ -247,34 +247,6 @@ const settleOwner = Effect.fn("RecordRules.settleOwner")(function* settleOwner(
   ).pipe(Effect.flip);
 });
 
-const decodeCounts = decodeRows(
-  Schema.Struct({
-    changes: Schema.FiniteFromString,
-    deliveries: Schema.FiniteFromString,
-    logs: Schema.FiniteFromString,
-    parents: Schema.FiniteFromString,
-  })
-);
-
-const committedCounts = Effect.gen(function* committedCounts() {
-  const sql = yield* SqlClient.SqlClient;
-
-  const [counts] = yield* decodeCounts(
-    yield* sql.unsafe(`
-    SELECT (SELECT count(*)::text FROM core."change") AS changes,
-           (SELECT count(*)::text FROM core."delivery") AS deliveries,
-           (SELECT count(*)::text FROM ${TABLES.log}) AS logs,
-           (SELECT count(*)::text FROM ${TABLES.parent}) AS parents
-  `)
-  );
-
-  if (counts === undefined) {
-    throw new Error("Committed counts query returned no row");
-  }
-
-  return counts;
-});
-
 const createLog = addRecordRule(PARENT.id, {
   actions: [
     {
@@ -309,11 +281,12 @@ const setUpRules = Effect.gen(function* setUpRules() {
     operations: ["create"],
   });
 
+  const ruleOperations: Operation[] = [];
   {
     const scope = prefixed(P.name.id, "order-");
     const operations = ["create", "update"] as const;
 
-    yield* change([
+    ruleOperations.push(
       addRecordRule(PARENT.id, {
         actions: [set([P.status.id, literal("a1")])],
         condition: scope,
@@ -343,14 +316,14 @@ const setUpRules = Effect.gen(function* setUpRules() {
         operations: [...operations],
         order: 10,
         ruleKind: "derive",
-      }).op,
-    ]);
+      }).op
+    );
   }
 
   {
     const increment: RuleValue = { increment: P.score.id };
 
-    yield* change([
+    ruleOperations.push(
       addRecordRule(PARENT.id, {
         actions: [set([P.score.id, literal(5)])],
         condition: prefixed(P.name.id, "ro-"),
@@ -380,14 +353,14 @@ const setUpRules = Effect.gen(function* setUpRules() {
         condition: prefixed(P.name.id, "force-"),
         operations: ["create", "update"],
         ruleKind: "derive",
-      }).op,
-    ]);
+      }).op
+    );
   }
 
   {
     const scope = prefixed(P.name.id, "g-");
 
-    yield* change([
+    ruleOperations.push(
       addRecordRule(PARENT.id, {
         actions: [refuse("InvalidTransition", "Closed records stay closed.")],
         condition: all(
@@ -416,11 +389,12 @@ const setUpRules = Effect.gen(function* setUpRules() {
         condition: scope,
         operations: ["update"],
         ruleKind: "derive",
-      }).op,
-    ]);
+      }).op
+    );
   }
 
-  yield* change([createLog.op]);
+  ruleOperations.push(createLog.op);
+  yield* change(ruleOperations);
 });
 
 const rulesTestLayer = () =>
@@ -964,14 +938,14 @@ describe("record-rules", () => {
             }).op,
           ]);
 
-          const before = yield* committedCounts;
+          const before = yield* committedState;
 
           const refused = yield* createParent({ name: "log-loop-1" }).pipe(
             Effect.flip
           );
 
           assert.strictEqual(refused._tag, "RecordInSave");
-          assert.deepStrictEqual(yield* committedCounts, before);
+          assert.deepStrictEqual(yield* committedState, before);
 
           // Hook code that catches the failure of its nested save: the
           // nested save failed after writing, so the transaction is
@@ -994,7 +968,7 @@ describe("record-rules", () => {
 
           assert.isTrue(Exit.isFailure(caught));
           assert.strictEqual(refusalOf(caught)?.reason, "poisoned");
-          assert.deepStrictEqual(yield* committedCounts, before);
+          assert.deepStrictEqual(yield* committedState, before);
 
           // RecordInSave refuses before the refused save writes anything;
           // catching it right around that save still never commits.
@@ -1008,7 +982,7 @@ describe("record-rules", () => {
           );
 
           assert.strictEqual(refusalOf(caughtRightThere)?.reason, "poisoned");
-          assert.deepStrictEqual(yield* committedCounts, before);
+          assert.deepStrictEqual(yield* committedState, before);
         })
     );
 
@@ -1047,7 +1021,7 @@ describe("record-rules", () => {
           };
 
           for (const [label, nested] of Object.entries(rejected)) {
-            const before = yield* committedCounts;
+            const before = yield* committedState;
 
             // Hook code catches the nested failure right around the save.
             const catching = SaveHooks.of({
@@ -1068,7 +1042,7 @@ describe("record-rules", () => {
             );
 
             assert.strictEqual(refusalOf(outer)?.reason, "poisoned", label);
-            assert.deepStrictEqual(yield* committedCounts, before, label);
+            assert.deepStrictEqual(yield* committedState, before, label);
           }
         })
     );
@@ -1107,7 +1081,7 @@ describe("record-rules", () => {
             }).op,
           ]);
 
-          const before = yield* committedCounts;
+          const before = yield* committedState;
 
           const refused = yield* createRecord({
             body: { counter: 0, name: "deep" },
@@ -1115,7 +1089,7 @@ describe("record-rules", () => {
           }).pipe(Effect.flip);
 
           assert.strictEqual(refused._tag, "HookDepthExceeded");
-          assert.deepStrictEqual(yield* committedCounts, before);
+          assert.deepStrictEqual(yield* committedState, before);
 
           // Hook code that catches the refusal around the rejected save:
           // the transaction is poisoned all the same.
@@ -1132,7 +1106,7 @@ describe("record-rules", () => {
           );
 
           assert.strictEqual(refusalOf(caught)?.reason, "poisoned");
-          assert.deepStrictEqual(yield* committedCounts, before);
+          assert.deepStrictEqual(yield* committedState, before);
         })
     );
 

@@ -11,6 +11,7 @@ import { SqlClient } from "effect/sql";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { ACME } from "../../testing/src/acme-ids.ts";
+import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { eventIdOf, recordEventType } from "../src/events/event-id.ts";
@@ -29,9 +30,10 @@ const EVENTS = `${TMF688_PREFIX}/topic/record:acmeAsset/event`;
 const resourceOf = (event: JsonValue | undefined) =>
   asObject(asObject(asObject(event).event).acmeAsset);
 
-const createAsset = Effect.fn("EventTest.createAsset")(function* createAsset() {
+const createAsset = Effect.fn("EventTest.createAsset")(function* createAsset(
+  admin: TestRequestOptions
+) {
   const http = yield* TestHttpClient;
-  const { admin } = yield* apiCallers;
 
   const response = yield* http.request("POST", ASSET, {
     ...admin,
@@ -107,7 +109,7 @@ describe("event history and paging regressions", () => {
     Effect.gen(function* payloadBudget() {
       const http = yield* TestHttpClient;
       const { admin } = yield* apiCallers;
-      const id = yield* createAsset();
+      const id = yield* createAsset(admin);
       const snapshot = yield* (yield* Catalog).refresh;
       yield* history(
         id,
@@ -135,7 +137,7 @@ describe("event history and paging regressions", () => {
       const sql = yield* SqlClient.SqlClient;
       const log = yield* StatementLog;
       const { admin } = yield* apiCallers;
-      const id = yield* createAsset();
+      const id = yield* createAsset(admin);
       const snapshot = yield* (yield* Catalog).refresh;
       const name = snapshot.fieldByName(ACME.asset, "name")?.id ?? "";
       yield* history(id, 1005, name);
@@ -258,7 +260,7 @@ describe("event history and paging regressions", () => {
       const http = yield* TestHttpClient;
       const sql = yield* SqlClient.SqlClient;
       const { admin } = yield* apiCallers;
-      const id = yield* createAsset();
+      const id = yield* createAsset(admin);
       const snapshot = yield* (yield* Catalog).refresh;
       const name = snapshot.fieldByName(ACME.asset, "name")?.id ?? "";
       yield* history(id, 1005, name);

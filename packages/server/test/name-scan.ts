@@ -526,10 +526,14 @@ export const nameChecksIn = (
  * @returns Absolute paths.
  */
 export const sourceFiles = (directory: string): string[] =>
-  readdirSync(directory).flatMap((entry) => {
-    const full = path.join(directory, entry);
+  readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(directory, entry.name);
 
-    if (statSync(full).isDirectory()) {
+    if (
+      entry.isSymbolicLink()
+        ? statSync(full).isDirectory()
+        : entry.isDirectory()
+    ) {
       return sourceFiles(full);
     }
 
