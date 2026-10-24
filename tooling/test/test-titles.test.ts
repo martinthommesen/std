@@ -79,4 +79,135 @@ d("a", () => {});`
     ]);
     expect(result.titles).toStrictEqual(new Set(["a"]));
   });
+
+  const loopAssignments = ["of", "in"].flatMap((operator) =>
+    [
+      "dbTest",
+      "dbTest.effect",
+      'dbTest["effect"]',
+      "[dbTest]",
+      "{ test: dbTest }",
+      "{ test: dbTest.effect }",
+      "[dbTest = fake]",
+      "[...dbTest]",
+      "{ ...dbTest }",
+      "{ test: { nested: dbTest } }",
+      "(dbTest as unknown)",
+    ].map((target) => `for (${target} ${operator} values) {}`)
+  );
+
+  it.each(loopAssignments)(
+    "rejects a shared-layer title after %s",
+    (assignment) => {
+      const result = readTestTitles(
+        "loop.ts",
+        `import { it, layer } from "@effect/vitest";
+layer(fixture())((dbTest) => {
+  ${assignment}
+  dbTest.effect("phantom", () => Effect.void);
+});
+layer(fixture())((realTest) => {
+  realTest.effect("real shared behavior", () => Effect.void);
+});
+it.live("real live behavior", () => Effect.void);`
+      );
+
+      expect(result.errors).toStrictEqual([]);
+      expect([...result.titles]).toStrictEqual([
+        "real shared behavior",
+        "real live behavior",
+      ]);
+    }
+  );
+
+  it.each(["of", "in"])(
+    "refuses imported test names assigned by for-%s",
+    (operator) => {
+      for (const { name, target } of [
+        { name: "it", target: "it" },
+        { name: "it", target: "it.effect" },
+        { name: "it", target: "[it]" },
+        { name: "layer", target: "layer" },
+        { name: "describe", target: "describe" },
+      ]) {
+        const result = readTestTitles(
+          "import-loop.ts",
+          `import { describe, it, layer } from "@effect/vitest";
+for (${target} ${operator} values) {}`
+        );
+
+        expect(result.errors).toStrictEqual([
+          `declares its own ${name}, which shadows the imported ${name}`,
+        ]);
+      }
+    }
+  );
+
+  it("keeps unrelated loop bindings and property keys from invalidating real registrations", () => {
+    const result = readTestTitles(
+      "unrelated-loops.ts",
+      `import { it, layer } from "@effect/vitest";
+layer(fixture())((dbTest) => {
+  for (const value of values) {}
+  for (const key in values) {}
+  for (let [item] of values) {}
+  for (var { dbTest: other } of values) {}
+  for ({ dbTest: other } of values) {}
+  for ({ dbTest: other } in values) {}
+  dbTest.effect("real shared behavior", () => Effect.void);
+});
+it.live("real live behavior", () => Effect.void);`
+    );
+
+    expect(result.errors).toStrictEqual([]);
+    expect([...result.titles]).toStrictEqual([
+      "real shared behavior",
+      "real live behavior",
+    ]);
+  });
+
+  it.each(["of", "in"])(
+    "conservatively rejects a shared-layer parameter shadowed by a for-%s declaration",
+    (operator) => {
+      const result = readTestTitles(
+        "shadowed-loop.ts",
+        `import { layer } from "@effect/vitest";
+layer(fixture())((dbTest) => {
+  for (const dbTest ${operator} values) {}
+  dbTest.effect("shadowed binding", () => Effect.void);
+});`
+      );
+
+      expect(result.errors).toStrictEqual([]);
+      expect([...result.titles]).toStrictEqual([]);
+    }
+  );
+
+  it.each([
+    "{ effect: () => undefined }",
+    `new Proxy(dbTest, {
+      get: (target, key, receiver) => key === "effect"
+        ? target.effect.skip
+        : Reflect.get(target, key, receiver)
+    })`,
+  ])("rejects phantom or skipped titles after replacement with %s", (fake) => {
+    const result = readTestTitles(
+      "registration.test.ts",
+      `import { describe, it, layer, assert } from "@effect/vitest";
+import { Effect, Layer } from "effect";
+describe("mutation registration probe", () => {
+  layer(Layer.empty)((dbTest) => {
+    for (dbTest of [${fake}]) {}
+    dbTest.effect("phantom", () => Effect.void);
+  });
+  it("real sentinel", () => { assert.isTrue(true); });
+});`
+    );
+
+    expect(result.errors).toStrictEqual([]);
+    expect([...result.titles]).toStrictEqual([
+      "mutation registration probe",
+      "real sentinel",
+    ]);
+  });
 });

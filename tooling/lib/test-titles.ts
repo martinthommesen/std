@@ -35,6 +35,8 @@ import type {
   BindingRestElement,
   CallExpression,
   Expression,
+  ForInStatement,
+  ForOfStatement,
   Function as FunctionNode,
   ImportDeclaration,
   ParamPattern,
@@ -272,6 +274,13 @@ const collectFacts = (program: Program): FileFacts => {
     facts.declared.push(...patternNames(node.left));
   };
 
+  const onLoop = (node: ForInStatement | ForOfStatement): void => {
+    // Loop declarations are already collected by VariableDeclarator.
+    if (node.left.type !== "VariableDeclaration") {
+      facts.declared.push(...patternNames(node.left));
+    }
+  };
+
   const onUpdate = (node: UpdateExpression): void => {
     facts.declared.push(...patternNames(node.argument));
   };
@@ -283,6 +292,8 @@ const collectFacts = (program: Program): FileFacts => {
     CatchClause: onCatch,
     ClassDeclaration: declareId,
     ClassExpression: declareId,
+    ForInStatement: onLoop,
+    ForOfStatement: onLoop,
     FunctionDeclaration: declareFunction,
     FunctionExpression: declareFunction,
     ImportDeclaration: onImport,
