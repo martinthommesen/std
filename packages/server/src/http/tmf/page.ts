@@ -25,6 +25,9 @@ export const CONTROL: ReadonlySet<string> = new Set([
 const COMPARISONS = new Set(["eq", "gt", "gte", "lt", "lte"]);
 const HUB_IDENTITY = new Set([...IDENTITY_ATTRIBUTES, "callback"]);
 
+// Existing TMF688 bounded offset policy (decision 0032 J10); not a scan budget.
+const OFFSET_WINDOW_END = 1000;
+
 /** A validated scalar filter on a published resource attribute. */
 export interface ResourceFilter {
   readonly attribute: string;
@@ -105,10 +108,14 @@ const matches = (
 export const pageBounds = (params: URLSearchParams) => {
   const limit = Number(params.get("limit") ?? "100");
   const offset = Number(params.get("offset") ?? "0");
-  const validLimit = Number.isInteger(limit) && limit >= 1 && limit <= 1000;
+
+  const validLimit =
+    Number.isInteger(limit) && limit >= 1 && limit <= OFFSET_WINDOW_END;
 
   const validOffset =
-    Number.isInteger(offset) && offset >= 0 && offset + limit <= 1000;
+    Number.isInteger(offset) &&
+    offset >= 0 &&
+    offset + limit <= OFFSET_WINDOW_END;
 
   return validLimit && validOffset ? { limit, offset } : undefined;
 };
@@ -274,6 +281,7 @@ export const pageAnswer = Effect.fn("Tmf688.page")(function* pageAnswer(
       ...bounds,
       cursorPage: false,
       fromCursor: false,
+      offsetEnd: OFFSET_WINDOW_END,
       page: complete ? { ...paging, count: selected.length } : paging,
       previousOffset:
         bounds.offset > 0 && selected.length > 0
