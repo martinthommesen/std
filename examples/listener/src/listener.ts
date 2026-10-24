@@ -33,7 +33,7 @@ interface Receipt {
 
 /**
  * Starts the local TMF621 listener, closed with its scope. Its HTTP interface is
- * POST /listener (202, including duplicates) and GET /receipts (first bodies and
+ * POST /listener (empty 204, including duplicates) and GET /receipts (first bodies and
  * duplicate counts). Receipts live until the process stops; no eviction or TTL.
  * @param port - TCP port; zero lets the OS choose a free port.
  * @returns The loopback origin. No credentials are accepted or logged.
@@ -105,10 +105,7 @@ export const startListener = Effect.fn("Listener.start")(
           ticketId: notification.event.troubleTicket.id,
         });
 
-        return HttpServerResponse.jsonUnsafe(
-          { duplicate, eventId: notification.eventId },
-          { status: 202 }
-        );
+        return HttpServerResponse.empty({ status: 204 });
       }).pipe(
         Effect.catchTag(["SchemaError", "HttpServerError"], () =>
           Effect.succeed(

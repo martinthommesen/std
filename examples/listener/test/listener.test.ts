@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Logger } from "effect";
 import type { Schema } from "effect";
 
 import { startListener } from "../src/listener.ts";
@@ -26,6 +26,7 @@ const NOTIFICATION = {
   eventId: EVENT_ID,
   eventTime: "2026-10-24T12:00:00Z",
   eventType: "TroubleTicketAttributeValueChangeEvent",
+  extension: { preserved: [null, "unconsumed"] },
 };
 
 const post = (origin: string, body: Schema.Json, key: string = EVENT_ID) =>
@@ -46,47 +47,97 @@ const receipts = (origin: string) =>
     return await response.json();
   });
 
+const acknowledge = Effect.fn("ListenerTest.acknowledge")(function* acknowledge(
+  response: Response
+) {
+  assert.strictEqual(response.status, 204);
+  assert.isNull(response.headers.get("content-type"));
+  assert.strictEqual(
+    yield* Effect.promise(async () => await response.text()),
+    ""
+  );
+});
+
 describe("listener HTTP interface", () => {
-  test("retains one first body across concurrent duplicate deliveries with changed eventTime", () =>
-    Effect.gen(function* concurrentDuplicates() {
-      const origin = yield* startListener(0);
-      const accepted = yield* post(origin, NOTIFICATION);
-      assert.strictEqual(accepted.status, 202);
-      assert.deepStrictEqual(
-        yield* Effect.promise(async () => await accepted.json()),
-        { duplicate: false, eventId: EVENT_ID }
-      );
+  it.effect(
+    "acknowledges every supported ticket event type with empty 204 after recording its receipt",
+    () =>
+      Effect.gen(function* supportedEvents() {
+        const origin = yield* startListener(0);
 
-      const repeated = yield* Effect.all(
-        [
-          post(origin, {
-            ...NOTIFICATION,
-            eventTime: "2026-10-24T12:01:00Z",
-          }),
-          post(origin, {
-            ...NOTIFICATION,
-            eventTime: "2026-10-24T12:02:00Z",
-          }),
-        ],
-        { concurrency: "unbounded" }
-      );
+        const notifications = [
+          "TroubleTicketCreateEvent",
+          "TroubleTicketAttributeValueChangeEvent",
+          "TroubleTicketStatusChangeEvent",
+          "TroubleTicketResolvedEvent",
+          "TroubleTicketInformationRequiredEvent",
+          "TroubleTicketDeleteEvent",
+        ].map((eventType, index) => ({
+          ...NOTIFICATION,
+          "@type": eventType,
+          eventId: `f70a6ef7-83a0-5bc2-8885-26bb5277041${index}`,
+          eventType,
+        }));
 
-      for (const response of repeated) {
-        assert.strictEqual(response.status, 202);
+        for (const notification of notifications) {
+          yield* acknowledge(
+            yield* post(origin, notification, notification.eventId)
+          );
+        }
+
         assert.deepStrictEqual(
-          yield* Effect.promise(async () => await response.json()),
-          { duplicate: true, eventId: EVENT_ID }
+          yield* receipts(origin),
+          notifications.map((notification) => ({
+            duplicates: 0,
+            idempotencyKey: notification.eventId,
+            notification,
+          }))
         );
-      }
+      })
+  );
 
-      assert.deepStrictEqual(yield* receipts(origin), [
-        {
-          duplicates: 2,
-          idempotencyKey: EVENT_ID,
-          notification: NOTIFICATION,
-        },
-      ]);
-    }));
+  it.effect(
+    "retains one first body across concurrent duplicate deliveries with changed eventTime",
+    () =>
+      Effect.gen(function* concurrentDuplicates() {
+        const origin = yield* startListener(0);
+        const accepted = yield* post(origin, NOTIFICATION);
+        yield* acknowledge(accepted);
+        assert.deepStrictEqual(yield* receipts(origin), [
+          {
+            duplicates: 0,
+            idempotencyKey: EVENT_ID,
+            notification: NOTIFICATION,
+          },
+        ]);
+
+        const repeated = yield* Effect.all(
+          [
+            post(origin, {
+              ...NOTIFICATION,
+              eventTime: "2026-10-24T12:01:00Z",
+            }),
+            post(origin, {
+              ...NOTIFICATION,
+              eventTime: "2026-10-24T12:02:00Z",
+            }),
+          ],
+          { concurrency: "unbounded" }
+        );
+
+        for (const response of repeated) {
+          yield* acknowledge(response);
+        }
+
+        assert.deepStrictEqual(yield* receipts(origin), [
+          {
+            duplicates: 2,
+            idempotencyKey: EVENT_ID,
+            notification: NOTIFICATION,
+          },
+        ]);
+      })
+  );
 
   test("keeps distinct event IDs for different event types of the same ticket", () =>
     Effect.gen(function* distinctEventTypes() {
@@ -100,11 +151,8 @@ describe("listener HTTP interface", () => {
         eventType: "TroubleTicketResolvedEvent",
       };
 
-      assert.strictEqual((yield* post(origin, NOTIFICATION)).status, 202);
-      assert.strictEqual(
-        (yield* post(origin, resolved, resolvedId)).status,
-        202
-      );
+      yield* acknowledge(yield* post(origin, NOTIFICATION));
+      yield* acknowledge(yield* post(origin, resolved, resolvedId));
       assert.deepStrictEqual(yield* receipts(origin), [
         {
           duplicates: 0,
@@ -155,15 +203,59 @@ describe("listener HTTP interface", () => {
       yield* Effect.scoped(
         Effect.gen(function* previousListener() {
           const origin = yield* startListener(0);
-          assert.strictEqual((yield* post(origin, NOTIFICATION)).status, 202);
+          yield* acknowledge(yield* post(origin, NOTIFICATION));
         })
       );
       const origin = yield* startListener(0);
       assert.deepStrictEqual(yield* receipts(origin), []);
       const accepted = yield* post(origin, NOTIFICATION);
-      assert.deepStrictEqual(
-        yield* Effect.promise(async () => await accepted.json()),
-        { duplicate: false, eventId: EVENT_ID }
-      );
+      yield* acknowledge(accepted);
+      assert.deepStrictEqual(yield* receipts(origin), [
+        {
+          duplicates: 0,
+          idempotencyKey: EVENT_ID,
+          notification: NOTIFICATION,
+        },
+      ]);
+    }));
+
+  test("logs receipt metadata without credentials, headers or full notification bodies", () =>
+    Effect.gen(function* safeLogs() {
+      const messages: unknown[] = [];
+
+      const logger = Logger.make(({ message }) => {
+        messages.push(message);
+      });
+
+      yield* Effect.gen(function* receiveWithLogger() {
+        const origin = yield* startListener(0);
+
+        const response = yield* Effect.promise(
+          async () =>
+            await fetch(`${origin}/listener`, {
+              body: JSON.stringify(NOTIFICATION),
+              headers: {
+                authorization: "Bearer disposable-log-test-token",
+                "content-type": "application/json",
+                "idempotency-key": EVENT_ID,
+              },
+              method: "POST",
+            })
+        );
+
+        yield* acknowledge(response);
+      }).pipe(Effect.provide(Logger.layer([logger])));
+
+      assert.deepStrictEqual(messages, [
+        [
+          {
+            duplicate: false,
+            eventId: EVENT_ID,
+            eventType: NOTIFICATION.eventType,
+            status: "inProgress",
+            ticketId: TICKET_ID,
+          },
+        ],
+      ]);
     }));
 });

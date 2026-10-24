@@ -2254,8 +2254,11 @@ rows:
     source: TMF630 v5.0.0 P1 §11.5 p.195
     level: mandatory
     requirement: A listener that successfully receives a posted event must answer 201 Created or 204 No Content.
-    status: pending
-    note: "client-side: binds the subscriber's listener endpoint; STD offers no listener in v0.1 and, as publisher, treats any 2xx as delivered (hubs, C12.2)"
+    status: tested
+    tests:
+      - "examples/listener/test/listener.test.ts#acknowledges every supported ticket event type with empty 204 after recording its receipt"
+      - "examples/listener/test/listener.test.ts#retains one first body across concurrent duplicate deliveries with changed eventTime"
+    note: "Listener role only (C12.2): the local TMF621 example is STD's only owned subscriber endpoint and returns empty 204 after recording each first or duplicate receipt. Loopback tests cover all six supported ticket event types and concurrent duplicates, with first payload preservation. Production STD offers no subscriber listener; upstream OAS client-listener examples are not served routes. TMF688 client-topic event creation is a separate resource operation returning 201 (C12.3). The publisher still treats any 2xx as delivered; this row proves no broader consumer behavior."
   - id: TMF630@5.0.0/P1/11.6/specific-events-common-schema
     source: TMF630 v5.0.0 P1 §11.6 p.198
     level: mandatory

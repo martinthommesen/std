@@ -247,11 +247,12 @@ DUPLICATES=$(jq '.[0].duplicates' <<<"$RECEIPTS")
 printf 'idempotency-key: %s\n' "$EVENT_ID" >"$HEADER_FILE"
 STATUS=$(printf '%s' "$REPLAY" | curl -sS -o "$BODY_FILE" -w '%{http_code}' \
   -H "@$HEADER_FILE" -H 'content-type: application/json' --data-binary @- "$CALLBACK")
-[[ $STATUS == 202 ]] || fail "duplicate callback -> $STATUS (expected 202)"
-expect "$(cat "$BODY_FILE")" ".duplicate == true and .eventId == \"$EVENT_ID\"" "the same event ID acknowledged as a duplicate"
+[[ $STATUS == 204 ]] || fail "duplicate callback -> $STATUS (expected 204)"
+[[ ! -s $BODY_FILE ]] || fail "duplicate callback returned a body (expected no content)"
 TOKEN='' ok 200 GET "$LISTENER/receipts"
 expect "$BODY" "[.[] | select(.notification.event.troubleTicket.id == \"$ID\")] | length == 8" "still eight unique notifications after replay"
 expect "$BODY" ".[] | select(.notification.eventId == \"$EVENT_ID\") | .duplicates > $DUPLICATES" "a recorded duplicate"
+expect "$BODY" ".[] | select(.notification.eventId == \"$EVENT_ID\") | .notification == $REPLAY" "the first notification preserved after replay"
 echo "  duplicate $EVENT_ID acknowledged; still 8 unique notifications"
 
 heading "Done"
