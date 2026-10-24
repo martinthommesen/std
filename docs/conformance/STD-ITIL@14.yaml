@@ -25,11 +25,60 @@ rows:
     tests:
       - packages/server/test/itil-incident.test.ts#a local rule replaces one priority cell without changing the others
   - id: STD-ITIL@14/C14/14.1/every-surface
-    source: "Contracts 14.1 (shipped configuration and every-test bullet); plan Step 3 gate (ITIL)"
+    source: Contracts 14.1 (shipped configuration and every-test bullet); plan Step 3 gate (ITIL)
     level: mandatory
-    requirement: "Every incident and problem behavior below is tested through the generic API, TMF621 and, where a form exists, the browser, including the intentional form constraints and API permissiveness of Contracts 14.1."
-    status: pending
-    note: "Focused form edges and all nine browser priority cells have exact proofs. This universal row remains pending: exhaustive browser transition/refusal, reopen/date retention and cascade observations, plus explicit TMF621 cascade evidence, have not all been demonstrated. Per-row evidence is not a completeness signoff."
+    requirement: Every incident and problem behavior below is tested through the generic API, TMF621 and, where a form exists, the browser, including the intentional form constraints and API permissiveness of Contracts 14.1.
+    status: tested
+    note: STD Contracts 14 Step 3 profile only. docs/conformance/itil-surfaces.md maps every behavior to its generic API, TMF621 and browser assertions and records surface applicability, inherited ticket rules and remaining external/licensed facts. State-pair refusals, reopen/closed dates, exact cascade partitions and inherited defaults/derives are explicitly observed. This does not certify licensed ITIL guidance or the whole Step 3 release gate.
+    tests:
+      - packages/server/test/itil-incident.test.ts#a local rule replaces one priority cell without changing the others
+      - packages/server/test/itil-incident.test.ts#labels clear after derivation, supplied labels survive, and parent endpoints use incident rules
+      - packages/server/test/itil-incident.test.ts#TMF621 accepts a resolve without resolution code and notes and renders the major flag as a characteristic
+      - packages/server/test/itil-incident.test.ts#every TMF621 status write is an allowed incident transition or is refused with no write
+      - packages/server/test/itil-problem.test.ts#every TMF621 status write is an allowed problem transition or is refused with no write
+      - packages/server/test/itil-problem.test.ts#known errors work in every state without API-only workaround or root-cause restrictions
+      - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
+      - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through TMF621 severity and the urgency characteristic
+      - packages/server/test/itil-incident.test.ts#explicit priority wins even equal to the previous value and JSON Patch preserves supplied-field provenance
+      - packages/server/test/itil-incident.test.ts#an explicit TMF621 priority wins over the matrix, by merge-patch and JSON Patch, and a test of /priority supplies nothing
+      - apps/web/test/browser/incident-form.test.ts#creates an incident, shows derived read-only priority, requires resolution details, and clears a manager's major flag below priority 1
+      - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
+      - apps/web/test/browser/incident-form.test.ts#incident and problem forms default, require and retain hold reasons, then clear them on leaving hold
+      - packages/server/test/itil-incident.test.ts#hold defaults, writable resolution fields, and bounded Unicode titles are shipped derives
+      - packages/server/test/tmf621.test.ts#statuses follow TMF621's life cycle onto the incident state model, and stored states read back
+      - packages/server/test/tmf621.test.ts#held keeps a hold reason the holdReason characteristic names, and pending is awaiting the caller
+      - packages/server/test/itil-incident.test.ts#settled saves bypass incident transition guards
+      - packages/server/test/form-vs-api.test.ts#resolving without code/notes is accepted by the API while the form requires both
+      - packages/server/test/form-vs-api.test.ts#through TMF621, resolving without resolution code and notes is accepted while the form requires both
+      - packages/server/test/itil-incident.test.ts#major incident permission holds through the API while priority never clears the flag and children resolve together
+      - apps/web/test/browser/incident-form.test.ts#a local priority cell controls the manager form verdict and saved correction while the same API edit keeps the major flag
+      - apps/web/test/browser/incident-form.test.ts#an agent retains a major flag below priority 1 with a notice and can find it through the mismatch filter
+      - packages/server/test/form-vs-api.test.ts#through TMF621, form-locked priority, labels, dates, type and history stay writable, and the hidden major flag is written
+      - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
+      - packages/server/test/itil-problem.test.ts#settled saves bypass problem transition guards
+      - apps/web/test/browser/incident-form.test.ts#a problem follows Assess and requires a workaround for known error and root cause for a fix
+      - apps/web/test/browser/incident-form.test.ts#a problem form refuses empty workaround and resolved root cause without a write, then saves supplied details
+      - packages/server/test/itil-problem.test.ts#TMF621 creates and patches known errors without workaround and preserves fixing within inProgress without root cause
+      - packages/server/test/itil-problem.test.ts#an incident names its problem as the TMF621 relationship causedBy
+      - packages/server/test/itil-problem.test.ts#resolving a problem returns exactly its awaiting-problem incidents to work in one operation
+      - packages/server/test/record-rules.test.ts#guard and invariant refuse with the rule's fixed message; a settled save runs only invariants
+      - packages/server/test/aggregate-finalize.test.ts#no guard or derive rule runs on a persisted save, while guards still refuse users and derive values reach the settled image
+      - apps/web/test/browser/itil-lifecycle.test.ts#every incident browser state pair saves or refuses without changing the stored record, including reopen and closed dates
+      - apps/web/test/browser/itil-lifecycle.test.ts#every problem browser state pair respects Assess choices or saves or refuses without changing the stored record
+      - apps/web/test/browser/itil-lifecycle.test.ts#ticket forms and both subclasses inherit title derivation, defaults, locked fields and hold and resolution form rules
+      - apps/web/test/browser/itil-lifecycle.test.ts#an incident saved from the parent Ticket form keeps its concrete priority and derives its resolution date
+      - apps/web/test/browser/itil-cascades.test.ts#resolving a major in the browser resolves exactly its open children with the same resolution and leaves terminal and unrelated records unchanged
+      - apps/web/test/browser/itil-cascades.test.ts#resolving a problem in the browser resumes only its awaiting-problem incidents and never resolves an incident automatically
+      - apps/web/test/browser/itil-cascades.test.ts#browser incident links persist their parent and problem and the open-major filter lists exactly open major states
+      - apps/web/test/browser/itil-lifecycle.test.ts#a known error can be saved from every problem state while the browser requires its workaround
+      - apps/web/test/browser/itil-lifecycle.test.ts#development DevTools report the saved hold default and its removal after browser resume
+      - packages/server/test/itil-surfaces.test.ts#generic and TMF621 major resolution select every open child and preserve all terminal and unrelated records
+      - packages/server/test/itil-surfaces.test.ts#generic and TMF621 problem resolution resume exactly linked awaiting-problem incidents across every incident state and hold reason
+      - packages/server/test/itil-surfaces.test.ts#ticket derives and API-writable resolution dates hold for tickets, incidents and problems through both APIs
+      - packages/server/test/itil-surfaces.test.ts#TMF621 known-error writes preserve every concrete problem state without requiring a workaround
+      - packages/server/test/itil-surfaces.test.ts#TMF621 refuses an agent's major flag write without changing the record
+      - apps/web/test/browser/incident-form.test.ts#all nine priority cells agree between the browser verdict and independently read saved records
+      - packages/server/test/itil-surfaces.test.ts#a local priority replacement changes only its cell through both APIs and TMF621 retains the major flag
   - id: STD-ITIL@14/C14/14.1/concrete-class
     source: "Contracts 14.1; plan Step 3 gate (rules follow the concrete class)"
     level: mandatory
