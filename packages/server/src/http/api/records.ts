@@ -160,6 +160,8 @@ export interface PageLinks {
   readonly query: QueryParameters;
   readonly offset: number;
   readonly limit: number;
+  /** Known nonempty previous offset; null omits prev even without an exact count. */
+  readonly previousOffset?: number | null;
   readonly cursorPage: boolean;
   /** Whether the request uses a cursor; the page decides if `prev` exists. */
   readonly fromCursor: boolean;
@@ -200,8 +202,8 @@ export const linkHeader = (links: PageLinks): string => {
 
   entries.push(`${to({ offset: "0" })}; rel="first"`);
 
-  if (offset > 0 && page.count !== 0) {
-    const previousOffset = Math.max(0, offset - limit);
+  if (offset > 0 && page.count !== 0 && links.previousOffset !== null) {
+    const previousOffset = links.previousOffset ?? Math.max(0, offset - limit);
     entries.push(
       `${to({ offset: String(page.count === undefined ? previousOffset : Math.min(previousOffset, lastOffset)) })}; rel="prev"`
     );

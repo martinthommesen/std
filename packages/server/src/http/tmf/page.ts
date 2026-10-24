@@ -275,6 +275,13 @@ export const pageAnswer = Effect.fn("Tmf688.page")(function* pageAnswer(
       cursorPage: false,
       fromCursor: false,
       page: complete ? { ...paging, count: selected.length } : paging,
+      previousOffset:
+        bounds.offset > 0 && selected.length > 0
+          ? Math.min(
+              Math.max(0, bounds.offset - bounds.limit),
+              Math.floor((selected.length - 1) / bounds.limit) * bounds.limit
+            )
+          : null,
       query: [...params],
     }),
     "x-result-count": String(page.length),
