@@ -188,6 +188,7 @@ const afterCommitCarrierOf = Effect.fn("Finalize.afterCommitCarrier")(
             condition: null,
             deadLetter: "block",
             enabled: true,
+            hub: null,
             id: carrier,
             identityId: USERS.alice,
             kind: "subscription",

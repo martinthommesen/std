@@ -174,6 +174,7 @@ const carrier = (id: string, extra: Record<string, JsonValue> = {}) =>
       condition: null,
       deadLetter: "block",
       enabled: true,
+      hub: null,
       id,
       identityId: USERS.alice,
       kind: "subscription",

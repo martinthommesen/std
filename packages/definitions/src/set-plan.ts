@@ -17,8 +17,10 @@
 import type { JsonObject } from "@std/values/json-value";
 import { fail, succeed } from "effect/Result";
 import type { Result } from "effect/Result";
+import { decodeSync } from "effect/Schema";
 
 import type { Definition } from "./definition.ts";
+import { SubscriptionDraftSchema } from "./definition.ts";
 import { compareIds } from "./ids.ts";
 import type { DefinitionId } from "./ids.ts";
 import { sameJson } from "./layers.ts";
@@ -263,7 +265,10 @@ export const createOperation = (draft: Draft): Operation => {
 
   return draft.kind === "accessRule"
     ? { definition: draft, op: "createAccessRule" }
-    : { definition: draft, op: "createSubscription" };
+    : {
+        definition: decodeSync(SubscriptionDraftSchema)(draft),
+        op: "createSubscription",
+      };
 };
 
 const differingKeys = (

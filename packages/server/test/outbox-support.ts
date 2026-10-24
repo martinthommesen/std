@@ -66,6 +66,7 @@ export const subscribe = Effect.fn("OutboxSupport.subscribe")(
       condition: spec.condition ?? null,
       deadLetter: spec.deadLetter ?? "block",
       enabled: spec.enabled ?? true,
+      hub: null,
       id,
       identityId: spec.identityId ?? USERS.alice,
       kind: "subscription",

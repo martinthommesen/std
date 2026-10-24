@@ -29,6 +29,7 @@ const subscription = (
   condition: null,
   deadLetter: "block",
   enabled: true,
+  hub: null,
   id: freshId(),
   identityId: freshId(),
   kind: "subscription",
