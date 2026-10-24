@@ -51,6 +51,7 @@ import { InstanceSettings } from "../config/instance-settings.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import {
   cursorPredicate,
+  cursorRange,
   decodeCursor,
   finishPage,
   keyExpression,
@@ -745,7 +746,7 @@ export interface Page {
   readonly records: readonly DecodedRecord[];
   /** The cursor after the page's last record when more follow it. */
   readonly nextCursor: string | null;
-  /** The cursor at the page's first record (`before` it reads back). */
+  /** The first record's cursor, only when a previous matching page exists. */
   readonly firstCursor: string | null;
   /** Whether more records follow the page. */
   readonly hasMore: boolean;
@@ -787,7 +788,18 @@ export const readPage = Effect.fn("Records.readPage")(function* readPage(
     }));
 
   const flipped = compiled(spec.sortKeys.map(flip));
-  const keys = reversed ? flipped : compiled(spec.sortKeys);
+  const forward = compiled(spec.sortKeys);
+  const keys = reversed ? flipped : forward;
+
+  const range = cursorRange(spec.after, spec.before);
+
+  const bounds =
+    range === undefined
+      ? []
+      : [
+          cursorPredicate(forward, range.after, ID),
+          cursorPredicate(flipped, range.before, ID, true),
+        ];
 
   const positions = [
     ...(spec.after === undefined
@@ -806,7 +818,7 @@ export const readPage = Effect.fn("Records.readPage")(function* readPage(
     ...spec.filters.map((filterSpec) => filterSpec.predicate),
   ];
 
-  const projection = project(
+  const projected = project(
     scope,
     view,
     spec.selection,
@@ -814,9 +826,35 @@ export const readPage = Effect.fn("Records.readPage")(function* readPage(
     spec.withTargets
   );
 
+  // The opposite direction includes the requested cursor's position, but
+  // keeps the original interval. It shares the page statement's snapshot,
+  // visibility, filter joins and masked sort expressions.
+  const position = spec.after ?? spec.before;
+
+  const oppositeConditions =
+    position === null
+      ? []
+      : [
+          ...conditions,
+          ...bounds,
+          sql`NOT COALESCE(${cursorPredicate(keys, position, ID, reversed)}, false)`,
+        ];
+
+  const opposite =
+    position === null
+      ? rawSql("FALSE")
+      : sql`EXISTS (SELECT 1 FROM ${relation} AS ${identSql(BASE_ALIAS)}${optionalJoins(filterJoins)}
+WHERE ${whereAll(oppositeConditions)})`;
+
+  const projection = {
+    ...projected,
+    columns: [...projected.columns, asText(opposite, "opposite")],
+    names: [...projected.names, "opposite"],
+  };
+
   const parts: PageParts = {
     branches: spec.form === "plain" ? [] : view.visibilityBranches(BASE_ALIAS),
-    conditions: [...conditions, ...positions],
+    conditions: [...conditions, ...bounds, ...positions],
     joins: [...filterJoins, ...projection.joins],
     keys,
     limit: spec.limit + 1,
@@ -837,12 +875,14 @@ export const readPage = Effect.fn("Records.readPage")(function* readPage(
         )
       : yield* readRows(plainPage(parts));
 
-  const { rows, firstCursor, hasMore, nextCursor } = finishPage(
-    page,
-    spec.limit,
-    reversed,
-    spec.sortKeys
-  );
+  const finished = finishPage(page, spec.limit, reversed, spec.sortKeys, range);
+
+  const { rows } = finished;
+  const oppositeExists = page[0]?.opposite === "true";
+  const hasPrevious = reversed ? page.length > spec.limit : oppositeExists;
+  const hasMore = reversed ? oppositeExists : finished.hasMore;
+  const firstCursor = hasPrevious ? finished.firstCursor : null;
+  const nextCursor = hasMore ? finished.nextCursor : null;
 
   const records = rows.map(projection.decode);
 
