@@ -1,3 +1,4 @@
+import { API_PREFIX } from "@std/api/api";
 /**
  * The per-table OpenAPI 3.1 document (Contracts 6.1, 6.3): the record
  * routes of one table on `/api/v1` (list, create, get, patch, delete and
@@ -59,7 +60,6 @@ import {
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 
 import { apiOpenApi } from "./api/openapi.ts";
-import { API_PREFIX } from "./api/resource.ts";
 import { DEFINITION_KIND_OF_TABLE } from "./change-sets.ts";
 
 /** How the document describes the revision it was served at. */

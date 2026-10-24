@@ -47,6 +47,7 @@ import type { FieldError } from "@std/definitions/field-errors";
 import type { DefinitionId } from "@std/definitions/ids";
 import { OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
+import { createOperation as createDraftOperation } from "@std/definitions/set-plan";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { jsonbEquals } from "@std/values/jsonb";
@@ -99,24 +100,6 @@ const STORED_ONLY: ReadonlySet<string> = new Set([
   "enforcement",
   "enforcementNote",
 ]);
-
-const CREATE_OP: Readonly<Record<DefinitionKind, string>> = {
-  accessRule: "createAccessRule",
-  choice: "createChoice",
-  class: "createClass",
-  field: "addField",
-  formRule: "createFormRule",
-  grant: "createGrant",
-  index: "addIndex",
-  layout: "createLayout",
-  namespace: "createNamespace",
-  override: "setOverride",
-  permission: "createPermission",
-  recordRule: "createRecordRule",
-  role: "createRole",
-  savedFilter: "createSavedFilter",
-  subscription: "createSubscription",
-};
 
 /**
  * Defaults of draft properties a create body may leave out (Contracts
@@ -378,30 +361,16 @@ const draftFieldErrors = (
   );
 };
 
-/** A create's draft, for field errors when its operation does not decode. */
-interface DraftOf {
-  readonly kind: DefinitionKind;
-  readonly definition: JsonObject;
-}
-
 const decoded = (
-  candidate: JsonObject,
-  maybeDraft?: DraftOf
-): Effect.Effect<Operation, InvalidRequest | ValidationFailed> => {
+  candidate: JsonObject
+): Effect.Effect<Operation, InvalidRequest> => {
   const result = decodeOperation(candidate);
 
-  if (Result.isSuccess(result)) {
-    return Effect.succeed(result.success);
-  }
-
-  const errors =
-    maybeDraft === undefined
-      ? []
-      : draftFieldErrors(maybeDraft.kind, maybeDraft.definition);
-
-  return errors.length === 0
-    ? Effect.fail(invalidBody("The body does not describe a valid definition."))
-    : Effect.fail(new ValidationFailed({ errors: [...errors] }));
+  return Result.isSuccess(result)
+    ? Effect.succeed(result.success)
+    : Effect.fail(
+        invalidBody("The body does not describe a valid definition.")
+      );
 };
 
 const fromResult = <A, E>(result: Result.Result<A, E>): Effect.Effect<A, E> =>
@@ -453,12 +422,17 @@ export const createOperation = Effect.fn("Http.definitionCreate")(
       protected: false,
     };
 
-    return yield* decoded(
-      kind === "override"
-        ? { definition, op: "setOverride", version: null }
-        : { definition, op: CREATE_OP[kind] },
-      { definition, kind }
-    );
+    const result = Schema.decodeUnknownResult(DRAFT_SCHEMAS[kind])(definition);
+
+    if (Result.isFailure(result)) {
+      const errors = draftFieldErrors(kind, definition);
+
+      return yield* errors.length === 0
+        ? invalidBody("The body does not describe a valid definition.")
+        : new ValidationFailed({ errors: [...errors] });
+    }
+
+    return createDraftOperation(result.success);
   }
 );
 

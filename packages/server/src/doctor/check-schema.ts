@@ -376,8 +376,18 @@ export const checkConstraintsValid = (
 export const checkPurgedAbsent = (
   snapshot: ConfigSnapshot,
   catalog: CatalogFacts
-): readonly Finding[] =>
-  describedTables(snapshot).flatMap((described) => {
+): readonly Finding[] => {
+  const fields = Map.groupBy(
+    snapshot.all("field").filter((field) => field.state === "purged"),
+    (field) => field.classId
+  );
+
+  const indexesByClass = Map.groupBy(
+    snapshot.all("index").filter((index) => index.state === "purged"),
+    (index) => index.classId
+  );
+
+  return describedTables(snapshot).flatMap((described) => {
     const facts = catalog.get(described.key);
 
     if (described.definition.state === "purged") {
@@ -398,11 +408,8 @@ export const checkPurgedAbsent = (
       return [];
     }
 
-    const columns = snapshot
-      .all("field")
-      .flatMap((field) =>
-        field.classId === described.definition.id &&
-        field.state === "purged" &&
+    const columns = (fields.get(described.definition.id) ?? []).flatMap(
+      (field) =>
         facts.columns.some(
           (column) => column.name === field.name && !column.dropped
         )
@@ -416,28 +423,29 @@ export const checkPurgedAbsent = (
               ),
             ]
           : []
-      );
+    );
 
-    const indexes = snapshot.all("index").flatMap((index) => {
-      const name = generatedName("ix", index.id);
+    const indexes = (indexesByClass.get(described.definition.id) ?? []).flatMap(
+      (index) => {
+        const name = generatedName("ix", index.id);
 
-      return index.classId === described.definition.id &&
-        index.state === "purged" &&
-        facts.indexes.some((entry) => entry.name === name)
-        ? [
-            finding(
-              4,
-              "error",
-              "purgedPresent",
-              `Index ${name} belongs to a purged index but still exists.`,
-              index.id
-            ),
-          ]
-        : [];
-    });
+        return facts.indexes.some((entry) => entry.name === name)
+          ? [
+              finding(
+                4,
+                "error",
+                "purgedPresent",
+                `Index ${name} belongs to a purged index but still exists.`,
+                index.id
+              ),
+            ]
+          : [];
+      }
+    );
 
     return [...columns, ...indexes];
   });
+};
 
 const orphan = (
   code: string,

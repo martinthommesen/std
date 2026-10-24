@@ -282,18 +282,7 @@ const foreignKey = (
 export const tableKeyOf = (
   snapshot: ConfigSnapshot,
   classId: string
-): string | undefined => {
-  const definition = snapshot.class(classId);
-
-  const namespace =
-    definition === undefined
-      ? undefined
-      : snapshot.namespace(definition.namespaceId);
-
-  return definition === undefined || namespace === undefined
-    ? undefined
-    : tableKey(namespace.name, definition.name);
-};
+): string | undefined => snapshot.qualifiedNameOf(classId);
 
 const classConstraints = (
   snapshot: ConfigSnapshot,

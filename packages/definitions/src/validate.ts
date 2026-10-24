@@ -43,9 +43,9 @@ import type {
 } from "./definition.ts";
 import { isActive, isLive } from "./definition.ts";
 import {
+  effectiveChoices,
   compareBounds,
   effectiveField,
-  tightenType,
 } from "./effective-schema.ts";
 import type { EffectiveField } from "./effective-schema.ts";
 import { formRuleProblems } from "./form-rules.ts";
@@ -536,13 +536,9 @@ const choiceDefaultProblem = (
     return undefined;
   }
 
-  const found = snapshot
-    .choicesOf(effective.field.id)
-    .find((choice) => choice.key === value && !choice.hidden);
-
-  const allowed =
-    found !== undefined &&
-    (effective.choices === null || effective.choices.includes(value));
+  const allowed = effectiveChoices(snapshot, effective).some(
+    (choice) => choice.key === value && !choice.hidden
+  );
 
   return allowed ? undefined : "The default is not a choice this field offers.";
 };
@@ -749,8 +745,6 @@ const overrideBoundsProblem = (
     return problem("overrideInvalid", override.id, malformed);
   }
 
-  const tightened = tightenType(inherited, override);
-
   if (
     override.min !== null &&
     inherited.min !== undefined &&
@@ -775,12 +769,11 @@ const overrideBoundsProblem = (
     );
   }
 
-  const bounded = tightened.kind === kind ? tightened : undefined;
+  const min = override.min ?? inherited.min;
+  const max = override.max ?? inherited.max;
 
   const inverted =
-    bounded?.min !== undefined &&
-    bounded.max !== undefined &&
-    compareBounds(kind, bounded.min, bounded.max) > 0;
+    min !== undefined && max !== undefined && compareBounds(kind, min, max) > 0;
 
   return inverted
     ? problem(
@@ -1266,6 +1259,7 @@ const checkUniqueness = (
   problems: Problems,
   snapshot: ConfigSnapshot
 ): void => {
+  const roots = new Map<DefinitionId, DefinitionId | undefined>();
   duplicates(
     problems,
     snapshot.all("namespace").filter(isLive),
@@ -1282,9 +1276,13 @@ const checkUniqueness = (
     problems,
     snapshot.all("field").filter(isLive),
     (field) => {
-      const root = snapshot.root(field.classId);
+      if (!roots.has(field.classId)) {
+        roots.set(field.classId, snapshot.root(field.classId)?.id);
+      }
 
-      return root === undefined ? undefined : `${root.id}/${field.name}`;
+      const root = roots.get(field.classId);
+
+      return root === undefined ? undefined : `${root}/${field.name}`;
     },
     (field) => `The field name "${field.name}" in its hierarchy`
   );

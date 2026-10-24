@@ -23,6 +23,12 @@ export const formRulesFor = (
   caller: Caller,
   classId: string
 ): readonly MetaFormRule[] => {
+  const rules = formRulesOf(snapshot, classId);
+
+  if (rules.length === 0) {
+    return [];
+  }
+
   const visible = new Set(
     visibleSchema(snapshot, caller, classId).fields.map(
       (entry) => entry.field.id
@@ -47,7 +53,7 @@ export const formRulesFor = (
     );
   };
 
-  return formRulesOf(snapshot, classId).flatMap((rule) =>
+  return rules.flatMap((rule) =>
     visible.has(rule.fieldId)
       ? [
           {

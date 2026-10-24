@@ -10,6 +10,11 @@ import { problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
 
+const rulesBySnapshot = new WeakMap<
+  ConfigSnapshot,
+  Map<string, readonly FormRuleDefinition[]>
+>();
+
 /**
  * Rules inherited by a concrete class, ordered globally by order then ID.
  * @param snapshot - The effective configuration.
@@ -20,9 +25,22 @@ export const formRulesOf = (
   snapshot: ConfigSnapshot,
   classId: string
 ): readonly FormRuleDefinition[] => {
+  let byClass = rulesBySnapshot.get(snapshot);
+
+  if (byClass === undefined) {
+    byClass = new Map();
+    rulesBySnapshot.set(snapshot, byClass);
+  }
+
+  const known = byClass.get(classId);
+
+  if (known !== undefined) {
+    return known;
+  }
+
   const lineage = new Set(snapshot.lineage(classId).map((entry) => entry.id));
 
-  return snapshot
+  const rules = snapshot
     .all("formRule")
     .filter(
       (rule) =>
@@ -31,6 +49,10 @@ export const formRulesOf = (
     .toSorted(
       (left, right) => left.order - right.order || compareIds(left.id, right.id)
     );
+
+  byClass.set(classId, rules);
+
+  return rules;
 };
 
 const assignmentProblem = (

@@ -302,31 +302,10 @@ export const SchemaResumer: Layer.Layer<
   })
 );
 
-const decodePid = decodeRows(Schema.Struct({ pid: Schema.Int }));
-
-const HOLDER_QUERY = `SELECT l.pid FROM pg_locks l
-  WHERE l.locktype = 'advisory' AND l.granted
-    AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
-    AND l.classid = $1::oid AND l.objid = $2::oid AND l.objsubid = 1`;
-
 const schemaKeyParams = [
   String(advisoryClassId(SCHEMA_KEY)),
   String(advisoryObjectId(SCHEMA_KEY)),
 ];
-
-/**
- * The backends holding `SCHEMA_KEY`.
- *
- * @param execute - Runs one statement.
- * @returns Their PIDs.
- */
-export const schemaKeyHolders = (
-  execute: Execute
-): Effect.Effect<readonly number[], DatabaseError> =>
-  execute(HOLDER_QUERY, schemaKeyParams).pipe(
-    Effect.flatMap(decodePid),
-    Effect.map((rows) => rows.map((row) => row.pid))
-  );
 
 const ABANDON_LOCK_WAIT = Duration.seconds(60);
 

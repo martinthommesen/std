@@ -5,6 +5,7 @@
  */
 import {
   comparisonClass,
+  ConditionProfileSchema,
   FIELD_KINDS,
   isOrdered,
   isTextKind,
@@ -14,13 +15,8 @@ import type { ConditionProfile, FieldKind } from "@std/values/field-type";
 import type { AtomOperator } from "./ast.ts";
 
 /** Every profile. */
-export const PROFILES: readonly ConditionProfile[] = [
-  "filter",
-  "accessRule",
-  "formRule",
-  "recordRule",
-  "subscription",
-];
+export const PROFILES: readonly ConditionProfile[] =
+  ConditionProfileSchema.literals;
 
 /** A context value a profile may use. */
 export type ContextName = "me" | "now" | "myGroups";

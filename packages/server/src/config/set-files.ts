@@ -8,10 +8,10 @@ import path from "node:path";
 
 import { DefinitionInvalid, problem } from "@std/definitions/problems";
 import type { NamedSetFile } from "@std/definitions/set-file";
-import { SetFileSchema } from "@std/definitions/set-file";
+import { decodeSetFile } from "@std/definitions/set-resolve";
 import { isJsonValue } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
-import { Effect, Schema } from "effect";
+import { Effect, Result } from "effect";
 import { parse } from "yaml";
 
 const SET_FILE = /\.ya?ml$/u;
@@ -51,10 +51,6 @@ const parseYaml = (text: string): JsonValue | undefined => {
   return isJsonValue(document) ? document : undefined;
 };
 
-const decodeSetFile = Schema.decodeUnknownEffect(SetFileSchema, {
-  onExcessProperty: "error",
-});
-
 /**
  * Parses and decodes one set file at the server's YAML boundary. Unknown
  * keys are refused, so a typo cannot be ignored silently.
@@ -76,13 +72,13 @@ const parseFile = Effect.fn("Config.parseSetFile")(function* parseFile(
     return yield* refuse(`${file} holds values that are not JSON`);
   }
 
-  const content = yield* decodeSetFile(document).pipe(
-    Effect.mapError((issue) =>
-      refuse(`${file} is not a valid set file: ${issue.message}`)
-    )
-  );
+  const decoded = decodeSetFile(file, document);
 
-  return { content, path: file };
+  if (Result.isFailure(decoded)) {
+    return yield* decoded.failure;
+  }
+
+  return decoded.success;
 });
 
 /**

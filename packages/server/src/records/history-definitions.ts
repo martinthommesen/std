@@ -184,6 +184,11 @@ export const entryDefinitions = Effect.fn("History.entryDefinitions")(
 
     const atRevision = new Map<number, ConfigSnapshot>();
 
+    const descriptors = new Map<
+      number,
+      Map<DefinitionId, JsonObject | undefined>
+    >();
+
     const definitionsAt = (revision: number): ConfigSnapshot => {
       let found = atRevision.get(revision);
 
@@ -198,33 +203,49 @@ export const entryDefinitions = Effect.fn("History.entryDefinitions")(
     return entries.map((entry): JsonObject => {
       const then = definitionsAt(entry.schemaRevision);
       const described: Record<string, JsonObject> = {};
+      let byField = descriptors.get(entry.schemaRevision);
+
+      if (byField === undefined) {
+        byField = new Map();
+        descriptors.set(entry.schemaRevision, byField);
+      }
 
       for (const fieldId of Object.keys(entry.fields)) {
-        // A field with no revision at R (none is expected) is shown as it
-        // is now.
-        const field =
-          then.getKind("field", fieldId) ?? snapshot.getKind("field", fieldId);
+        if (!byField.has(fieldId)) {
+          // A field without a revision at R is shown as it is now.
+          const field =
+            then.getKind("field", fieldId) ??
+            snapshot.getKind("field", fieldId);
 
-        if (field !== undefined) {
-          const effective = effectiveField(
-            then.class(classId) === undefined ? snapshot : then,
-            classId,
-            field
-          );
+          if (field === undefined) {
+            byField.set(fieldId, undefined);
+          } else {
+            const effective = effectiveField(
+              then.class(classId) === undefined ? snapshot : then,
+              classId,
+              field
+            );
 
-          const choices =
-            effective.type.kind === "choice"
-              ? then.choicesOf(fieldId).map((choice) => ({
-                  key: choice.key,
-                  label: choice.label,
-                }))
-              : null;
+            const choices =
+              effective.type.kind === "choice"
+                ? then
+                    .choicesOf(fieldId)
+                    .map((choice) => ({ key: choice.key, label: choice.label }))
+                : null;
 
-          described[snapshot.getKind("field", fieldId)?.name ?? fieldId] = {
-            choices,
-            label: effective.label,
-            type: metaTypeOf(snapshot, scope.caller, effective.type),
-          };
+            byField.set(fieldId, {
+              choices,
+              label: effective.label,
+              type: metaTypeOf(snapshot, scope.caller, effective.type),
+            });
+          }
+        }
+
+        const descriptor = byField.get(fieldId);
+
+        if (descriptor !== undefined) {
+          described[snapshot.getKind("field", fieldId)?.name ?? fieldId] =
+            descriptor;
         }
       }
 

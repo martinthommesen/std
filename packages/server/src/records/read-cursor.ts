@@ -35,6 +35,7 @@ import {
 import type { SqlFragment } from "@std/conditions/sql-fragment";
 import { isCaseSensitive, parameterCast } from "@std/values/field-type";
 import type { FieldType } from "@std/values/field-type";
+import { checkInteger } from "@std/values/integer";
 import {
   parseDateText,
   parseInt8Text,
@@ -213,16 +214,49 @@ export const encodeCursor = (
     "utf-8"
   ).toString("base64url");
 
+/**
+ * Trims a fetched cursor page and builds its navigation cursors.
+ * @param fetched - Text rows in the SQL query's order, including any lookahead row.
+ * @param limit - The validated positive page limit.
+ * @param reversed - Whether SQL read a before page in reverse order.
+ * @param keys - Original sort keys, before reversal.
+ * @returns Rows in display order and opaque navigation cursors.
+ */
+export const finishPage = <Row extends Readonly<Record<string, string | null>>>(
+  fetched: readonly Row[],
+  limit: number,
+  reversed: boolean,
+  keys: readonly SortKey[]
+) => {
+  const read = fetched.slice(0, limit);
+  const rows = reversed ? read.toReversed() : read;
+  const first = rows.at(0);
+  const last = rows.at(-1);
+
+  const hasMore = reversed
+    ? last !== undefined
+    : fetched.length > limit && last !== undefined;
+
+  const cursorOf = (row: Row) =>
+    encodeCursor(keys, {
+      id: row.id ?? "",
+      values: keys.map((_, index) => row[`k${index}`] ?? null),
+    });
+
+  return {
+    firstCursor: first === undefined ? null : cursorOf(first),
+    hasMore,
+    nextCursor: last !== undefined && hasMore ? cursorOf(last) : null,
+    rows,
+  };
+};
+
 const INTEGER_TEXT = /^-?\d{1,10}$/u;
-const INT4_MAX = 2_147_483_647;
-const INT4_MIN = -2_147_483_648;
 
 const validKeyText = (type: FieldType, text: string): boolean => {
   switch (type.kind) {
     case "integer": {
-      const value = Number(text);
-
-      return INTEGER_TEXT.test(text) && value >= INT4_MIN && value <= INT4_MAX;
+      return INTEGER_TEXT.test(text) && checkInteger(Number(text)).ok;
     }
 
     case "bigInteger": {

@@ -53,11 +53,9 @@ import { storedTargetId } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
 import { DefinitionInvalid, problem } from "@std/definitions/problems";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
-import type { PlatformTable } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
 import { jsonbEquals } from "@std/values/jsonb";
-import { Effect, Option, Schema } from "effect";
+import { Effect, HashMap, Option, Schema } from "effect";
 import type { Redacted } from "effect";
 
 import type { ActingUser } from "../auth/actor.ts";
@@ -84,30 +82,10 @@ import {
   unknownRevision,
 } from "./stale-request.ts";
 
-/** The platform table of each definition kind. */
-export const DEFINITION_TABLE: Readonly<Record<DefinitionKind, PlatformTable>> =
-  {
-    accessRule: "access_rule",
-    choice: "choice",
-    class: "class",
-    field: "field",
-    formRule: "form_rule",
-    grant: "role_permission",
-    index: "index",
-    layout: "layout",
-    namespace: "namespace",
-    override: "field_override",
-    permission: "permission",
-    recordRule: "record_rule",
-    role: "role",
-    savedFilter: "saved_filter",
-    subscription: "subscription",
-  };
-
 /** The definition kind of each definition table, by qualified name. */
 export const DEFINITION_KIND_OF_TABLE: ReadonlyMap<string, DefinitionKind> =
   new Map(
-    DEFINITION_KINDS.map((kind) => [`core.${DEFINITION_TABLE[kind]}`, kind])
+    DEFINITION_KINDS.map((kind) => [`core.${tableOf(kind).table}`, kind])
   );
 
 const actionOf = (operation: Operation): AccessAction => {
@@ -144,7 +122,7 @@ const targetIdOf = (operation: Operation): DefinitionId =>
 interface BatchView {
   readonly snapshot: ConfigSnapshot;
   /** Payloads of definitions earlier operations of the batch create. */
-  readonly created: ReadonlyMap<DefinitionId, Referencing>;
+  readonly created: HashMap.HashMap<DefinitionId, Referencing>;
 }
 
 /**
@@ -157,17 +135,21 @@ interface BatchView {
 const batchViews = (
   snapshot: ConfigSnapshot,
   operations: readonly Operation[]
-): readonly BatchView[] => {
-  const created = new Map<DefinitionId, Referencing>();
+): readonly { readonly operation: Operation; readonly view: BatchView }[] => {
+  let created = HashMap.empty<DefinitionId, Referencing>();
 
   return operations.map((operation) => {
-    const view: BatchView = { created: new Map(created), snapshot };
+    const view: BatchView = { created, snapshot };
 
     if ("definition" in operation) {
-      created.set(operation.definition.id, operation.definition);
+      created = HashMap.set(
+        created,
+        operation.definition.id,
+        operation.definition
+      );
     }
 
-    return view;
+    return { operation, view };
   });
 };
 
@@ -180,7 +162,7 @@ const batchViews = (
  * @returns The payload or the stored definition, if any.
  */
 const lookup = (view: BatchView, id: DefinitionId): Referencing | undefined =>
-  view.created.get(id) ?? view.snapshot.get(id);
+  Option.getOrUndefined(HashMap.get(view.created, id)) ?? view.snapshot.get(id);
 
 const kindOf = (
   view: BatchView,
@@ -361,7 +343,7 @@ const visibleDefinitions = Effect.fn("Http.visibleDefinitions")(
         continue;
       }
 
-      const classId = PLATFORM_CLASS_IDS[DEFINITION_TABLE[stored.kind]];
+      const { classId } = tableOf(stored.kind);
       const group = groups.get(classId) ?? [];
       group.push(id);
       groups.set(classId, group);
@@ -416,11 +398,11 @@ const hiddenTargets = Effect.fn("Http.hiddenTargets")(function* hiddenTargets(
   const views = batchViews(scope.snapshot, operations);
 
   const targets = new Set(
-    operations.flatMap((operation, index) => {
+    views.flatMap(({ operation, view }) => {
       const target = storedTargetId(operation);
 
       return target === undefined ||
-        views[index]?.created.has(target) === true ||
+        HashMap.has(view.created, target) ||
         knownVisible.has(target)
         ? []
         : [target];
@@ -433,27 +415,25 @@ const hiddenTargets = Effect.fn("Http.hiddenTargets")(function* hiddenTargets(
     ...(yield* visibleDefinitions(scope, targets)),
   ]);
 
-  const needed = operations.map((operation, index) => {
-    const view = views[index] ?? {
-      created: new Map(),
-      snapshot: scope.snapshot,
-    };
-
+  const needed = views.map(({ operation, view }) => {
     const target = storedTargetId(operation);
 
-    return target !== undefined &&
-      !view.created.has(target) &&
+    const ids =
+      target !== undefined &&
+      !HashMap.has(view.created, target) &&
       !visible.has(target)
-      ? [target]
-      : neededIds(view, operation);
+        ? [target]
+        : neededIds(view, operation);
+
+    return { ids, view };
   });
 
   const references = new Set<DefinitionId>();
 
-  for (const [index, ids] of needed.entries()) {
+  for (const { ids, view } of needed) {
     for (const id of ids) {
       if (
-        views[index]?.created.has(id) !== true &&
+        !HashMap.has(view.created, id) &&
         !visible.has(id) &&
         !targets.has(id)
       ) {
@@ -466,9 +446,9 @@ const hiddenTargets = Effect.fn("Http.hiddenTargets")(function* hiddenTargets(
     visible.add(id);
   }
 
-  for (const [index, ids] of needed.entries()) {
+  for (const { ids, view } of needed) {
     for (const id of ids) {
-      if (views[index]?.created.has(id) !== true && !visible.has(id)) {
+      if (!HashMap.has(view.created, id) && !visible.has(id)) {
         hidden.push(id);
       }
     }
@@ -528,7 +508,7 @@ const operationScopeCheck = (
     return Effect.void;
   }
 
-  const table = `core.${DEFINITION_TABLE[kind]}`;
+  const table = `core.${tableOf(kind).table}`;
   const action = actionOf(operation);
 
   return action === "delete"
@@ -561,12 +541,8 @@ export const checkChangeSetRevision = Effect.fn("Http.checkChangeSetRevision")(
   ) {
     const views = batchViews(yield* (yield* Catalog).current, operations);
 
-    for (const [index, operation] of operations.entries()) {
-      const view = views[index];
-
-      if (view !== undefined) {
-        yield* operationScopeCheck(stated, view, operation, new Set());
-      }
+    for (const { operation, view } of views) {
+      yield* operationScopeCheck(stated, view, operation, new Set());
     }
 
     return yield* Effect.void;
@@ -593,13 +569,12 @@ const refuseUnknownRevision = Effect.fn("Http.refuseUnknownRevision")(
     const views = batchViews(yield* (yield* Catalog).current, operations);
     const changes = new Map<string, SchemaChange>();
 
-    for (const [index, operation] of operations.entries()) {
-      const view = views[index];
-
-      const found = yield* (
-        view === undefined
-          ? Effect.void
-          : operationScopeCheck(Option.some(stated), view, operation, hidden)
+    for (const { operation, view } of views) {
+      const found = yield* operationScopeCheck(
+        Option.some(stated),
+        view,
+        operation,
+        hidden
       ).pipe(
         Effect.as([]),
         Effect.catchTag("SchemaChanged", (failure) =>
@@ -639,7 +614,7 @@ const mayWrite = (
   kind: DefinitionKind
 ): boolean => {
   const { snapshot } = view;
-  const classId = PLATFORM_CLASS_IDS[DEFINITION_TABLE[kind]];
+  const { classId } = tableOf(kind);
   const action = actionOf(operation);
 
   if (recordDecision(snapshot, actor, action, classId).kind !== "always") {
@@ -680,9 +655,7 @@ export const authorizeOperations = Effect.fn("Http.authorizeOperations")(
   ) {
     const views = batchViews(snapshot, operations);
 
-    for (const [index, operation] of operations.entries()) {
-      const view = views[index] ?? { created: new Map(), snapshot };
-
+    for (const { operation, view } of views) {
       // A target the caller cannot see is treated like a missing one.
       const kind = hidden.has(targetIdOf(operation))
         ? undefined

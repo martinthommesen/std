@@ -16,7 +16,7 @@ import type { PgClient } from "@effect/sql-pg";
 import { parseJson, stringifyJson } from "@std/values/json";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject } from "@std/values/json-value";
-import { Effect, Schedule, Schema } from "effect";
+import { Effect, Result, Schedule, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -54,23 +54,29 @@ const decodePids = decodeRows(Schema.Struct({ pid: Schema.Int }));
 
 const decodeChangeIds = decodeRows(Schema.Struct({ id: Schema.String }));
 
+/**
+ * The backends holding SCHEMA_KEY in the current database.
+ * @param execute - Runs one statement on the inspected connection.
+ * @returns Holder PIDs, without changing lock state.
+ */
+export const schemaKeyHolders = (
+  execute: DedicatedConnection["execute"]
+): Effect.Effect<readonly number[], DatabaseError> =>
+  execute(
+    `SELECT pid FROM pg_locks
+   WHERE locktype = 'advisory' AND granted
+     AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+     AND classid = $1::oid AND objid = $2::oid AND objsubid = 1`,
+    [String(advisoryClassId(SCHEMA_KEY)), String(advisoryObjectId(SCHEMA_KEY))]
+  ).pipe(
+    Effect.flatMap(decodePids),
+    Effect.map((rows) => rows.map((row) => row.pid))
+  );
+
 const schemaBusy = Effect.fn("Schema.schemaBusy")(function* schemaBusy(
   connection: DedicatedConnection
 ): Effect.fn.Return<SchemaBusy, DatabaseError> {
-  const pids = yield* connection
-    .execute(
-      `SELECT pid FROM pg_locks
-         WHERE locktype = 'advisory' AND granted
-           AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-           AND classid = $1::oid AND objid = $2::oid AND objsubid = 1`,
-      [
-        String(advisoryClassId(SCHEMA_KEY)),
-        String(advisoryObjectId(SCHEMA_KEY)),
-      ]
-    )
-    .pipe(Effect.flatMap(decodePids));
-
-  const holderPids = pids.map((row) => row.pid);
+  const holderPids = yield* schemaKeyHolders(connection.execute);
 
   const [change] = yield* connection
     .execute(
@@ -222,11 +228,6 @@ export interface FollowUpOutcome {
   readonly error: string | null;
 }
 
-/** How the attempts of one step ended. */
-type StepAttempts =
-  | { readonly _tag: "Done"; readonly details: JsonObject }
-  | { readonly _tag: "Failed"; readonly error: DatabaseError };
-
 /**
  * Runs one step: records it `done` at once when its probe finds it done,
  * otherwise runs its action up to `STEP_ATTEMPTS` times. Only typed
@@ -269,19 +270,17 @@ const runStep = Effect.fn("Schema.runStep")(function* runStep(
   );
 
   const attempts = yield* attempt.pipe(
-    Effect.map((details): StepAttempts => ({ _tag: "Done", details })),
-    Effect.retryOrElse(Schedule.recurs(STEP_ATTEMPTS - 1), (failure) =>
-      Effect.succeed<StepAttempts>({ _tag: "Failed", error: failure })
-    )
+    Effect.retry(Schedule.recurs(STEP_ATTEMPTS - 1)),
+    Effect.result
   );
 
-  if (attempts._tag === "Done") {
-    yield* markDone(connection, step, attempts.details);
+  if (Result.isSuccess(attempts)) {
+    yield* markDone(connection, step, attempts.success);
 
     return null;
   }
 
-  const report = `Step ${step.ordinal} (${step.kind}) failed ${STEP_ATTEMPTS} times: ${attempts.error.message}`;
+  const report = `Step ${step.ordinal} (${step.kind}) failed ${STEP_ATTEMPTS} times: ${attempts.failure.message}`;
 
   yield* markFailedAttempt(connection, step, report, true);
 

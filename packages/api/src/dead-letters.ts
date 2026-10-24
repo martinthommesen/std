@@ -54,9 +54,6 @@ export const DeadDeliveryTaskCreate = Schema.Struct({
 /** Standard collection directives and named filters; further attributes are open-ended. */
 export const DeadDeliveryQuery = {
   ...ListQuery,
-  fields: Schema.optionalKey(Schema.String),
-  limit: Schema.optionalKey(Schema.String),
-  offset: Schema.optionalKey(Schema.String),
   status: Schema.optionalKey(Schema.String),
   subscriptionId: Schema.optionalKey(Schema.String),
 } as const;

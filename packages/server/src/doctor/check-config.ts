@@ -10,7 +10,6 @@ import {
 } from "@std/definitions/dependencies";
 import { effectiveJson } from "@std/definitions/effective-json";
 import { effectiveField } from "@std/definitions/effective-schema";
-import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
 import {
   applyOverrides,
@@ -25,7 +24,6 @@ import type { Draft } from "@std/definitions/set-resolve";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { displayName } from "@std/definitions/upgrade-report";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
-import { maxLengthOf } from "@std/values/field-type";
 import { stringifyJson } from "@std/values/json";
 import type { JsonObject } from "@std/values/json-value";
 import { Effect, Result, Schema } from "effect";
@@ -42,8 +40,7 @@ import {
 } from "../config/layer-store.ts";
 import { readSetDirectory, CORE_SET_DIRECTORY } from "../config/set-files.ts";
 import {
-  choicePredicates,
-  defaultLiteral,
+  violationPredicates,
   quoteIdent,
   tableName,
 } from "../schema/sql-text.ts";
@@ -435,41 +432,6 @@ const decodeViolations = decodeRows(
 const VIOLATION_SAMPLES = 20;
 
 /**
- * The predicate of rows that break a field's effective rules at a class:
- * required, maximum length, numeric bounds, choice subset.
- *
- * @param field - The effective field at the override's class.
- * @returns SQL conditions over the field's column, ORed.
- */
-const violationPredicates = (field: EffectiveField): readonly string[] => {
-  const column = quoteIdent(field.field.name);
-  const { type } = field;
-  const predicates = field.required ? [`${column} IS NULL`] : [];
-
-  if (type.kind === "text" || type.kind === "longText") {
-    predicates.push(`char_length(${column}) > ${maxLengthOf(type)}`);
-  }
-
-  if (
-    type.kind === "integer" ||
-    type.kind === "bigInteger" ||
-    type.kind === "decimal"
-  ) {
-    if (type.min !== undefined) {
-      predicates.push(`${column} < ${defaultLiteral(type, type.min)}`);
-    }
-
-    if (type.max !== undefined) {
-      predicates.push(`${column} > ${defaultLiteral(type, type.max)}`);
-    }
-  }
-
-  predicates.push(...choicePredicates(column, field.choices, null));
-
-  return predicates;
-};
-
-/**
  * Check 8, data part: records of a class's subtree that break a child-class
  * override (Contracts 2.5) — counted from the records themselves, whatever
  * the override's enforcement state says.
@@ -497,6 +459,7 @@ const overrideViolations = Effect.fn("Doctor.overrideViolations")(
         owner?.storage === "standard"
       ) {
         const predicates = violationPredicates(
+          quoteIdent(field.name),
           effectiveField(snapshot, override.classId, field)
         );
 

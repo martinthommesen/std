@@ -7,10 +7,11 @@
  * `@std/definitions` before they get here, so every literal is a constant
  * of the column's type (Contracts 1.4: constant defaults only).
  */
+import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { decodeIn } from "@std/values/codec";
-import { postgresColumn } from "@std/values/field-type";
+import { maxLengthOf, postgresColumn } from "@std/values/field-type";
 import type { FieldType } from "@std/values/field-type";
 import { stringifyJson } from "@std/values/json";
 import { isJsonString } from "@std/values/json-value";
@@ -124,4 +125,95 @@ export const choicePredicates = (
     : [
         `(${column} IS NOT NULL AND ${column} NOT IN (${tightened.map(quoteLiteral).join(", ")}))`,
       ];
+};
+
+const boundPredicates = (
+  column: string,
+  tightened: FieldType,
+  previous: FieldType
+): readonly string[] => {
+  if (
+    (tightened.kind === "integer" ||
+      tightened.kind === "bigInteger" ||
+      tightened.kind === "decimal") &&
+    tightened.kind === previous.kind
+  ) {
+    return [
+      ...(tightened.min !== undefined && tightened.min !== previous.min
+        ? [`${column} < ${defaultLiteral(tightened, tightened.min)}`]
+        : []),
+      ...(tightened.max !== undefined && tightened.max !== previous.max
+        ? [`${column} > ${defaultLiteral(tightened, tightened.max)}`]
+        : []),
+    ];
+  }
+
+  return [];
+};
+
+const isTextType = (
+  type: FieldType
+): type is Extract<FieldType, { readonly kind: "text" | "longText" }> =>
+  type.kind === "text" || type.kind === "longText";
+
+const lengthPredicates = (
+  column: string,
+  tightened: FieldType,
+  previous: FieldType
+): readonly string[] => {
+  if (!(isTextType(tightened) && isTextType(previous))) {
+    return [];
+  }
+
+  return maxLengthOf(tightened) < maxLengthOf(previous)
+    ? [`char_length(${column}) > ${maxLengthOf(tightened)}`]
+    : [];
+};
+
+/**
+ * Rows that violate effective field constraints, or constraints tightened
+ * from a previous field when one is supplied.
+ * @param column - The column expression.
+ * @param field - Current effective rules.
+ * @param previous - Previous rules; absent to check every constraint.
+ * @returns SQL predicates in required, length, bound and choice order.
+ */
+export const violationPredicates = (
+  column: string,
+  field: EffectiveField,
+  previous?: EffectiveField
+): readonly string[] => {
+  if (previous !== undefined) {
+    return [
+      ...(field.required && !previous.required ? [`${column} IS NULL`] : []),
+      ...lengthPredicates(column, field.type, previous.type),
+      ...boundPredicates(column, field.type, previous.type),
+      ...choicePredicates(column, field.choices, previous.choices),
+    ];
+  }
+
+  const { type } = field;
+  const predicates = field.required ? [`${column} IS NULL`] : [];
+
+  if (isTextType(type)) {
+    predicates.push(`char_length(${column}) > ${maxLengthOf(type)}`);
+  }
+
+  if (
+    type.kind === "integer" ||
+    type.kind === "bigInteger" ||
+    type.kind === "decimal"
+  ) {
+    if (type.min !== undefined) {
+      predicates.push(`${column} < ${defaultLiteral(type, type.min)}`);
+    }
+
+    if (type.max !== undefined) {
+      predicates.push(`${column} > ${defaultLiteral(type, type.max)}`);
+    }
+  }
+
+  predicates.push(...choicePredicates(column, field.choices, null));
+
+  return predicates;
 };

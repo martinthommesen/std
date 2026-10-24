@@ -71,25 +71,32 @@ export const staticClassView = (
 ): ClassView => {
   const byId = new Map(classes.map((entry) => [entry.id, entry]));
 
-  const lineage = (classId: string): FieldInfo[] => {
-    const fields: FieldInfo[] = [];
+  const lookup = (
+    classId: string,
+    matches: (field: FieldInfo) => boolean
+  ): FieldInfo | undefined => {
     let current = byId.get(classId);
     const seen = new Set<string>();
 
     while (current !== undefined && !seen.has(current.id)) {
       seen.add(current.id);
-      fields.push(...current.fields);
+      const found = current.fields.find(matches);
+
+      if (found !== undefined) {
+        return found;
+      }
+
       current =
         current.parentId === null ? undefined : byId.get(current.parentId);
     }
 
-    return fields;
+    return undefined;
   };
 
   return {
     field: (classId, fieldId) =>
-      lineage(classId).find((field) => field.id === fieldId),
+      lookup(classId, (field) => field.id === fieldId),
     fieldByName: (classId, name) =>
-      lineage(classId).find((field) => field.name === name),
+      lookup(classId, (field) => field.name === name),
   };
 };

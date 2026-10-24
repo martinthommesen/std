@@ -691,20 +691,6 @@ const withWrites = (tokens: readonly LexedToken[]): boolean => {
 };
 
 /**
- * See `LexedStatement.writeClause`.
- * @param tokens - The text's tokens, comments and whitespace skipped.
- * @returns Whether the text holds a clause that writes.
- */
-const hasWriteClause = (tokens: readonly LexedToken[]): boolean =>
-  tokens.some(
-    (token, index) =>
-      isWord(token, "into") &&
-      !isWord(tokens[index - 1], "as") &&
-      !isPunctuation(tokens[index - 1], ".")
-  ) ||
-  (isWord(tokens[0], "with") && withWrites(tokens));
-
-/**
  * Lexes a SQL text into its shape.
  * @param sql - The text sent to the driver.
  * @returns How many statements it holds and the leading tokens.
@@ -714,6 +700,8 @@ export const analyzeStatement = (sql: string): LexedStatement => {
   let separators = 0;
   let inStatement = false;
   const tokens: LexedToken[] = [];
+  let previous: LexedToken | undefined;
+  let into = false;
   let index = 0;
 
   while (index < sql.length) {
@@ -734,7 +722,19 @@ export const analyzeStatement = (sql: string): LexedStatement => {
         text: token.name ?? sql.slice(start, token.end),
       };
 
-      tokens.push(lexed);
+      if (
+        isWord(lexed, "into") &&
+        !isWord(previous, "as") &&
+        !isPunctuation(previous, ".")
+      ) {
+        into = true;
+      }
+
+      if (tokens.length < MAX_LEADING_TOKENS || isWord(tokens[0], "with")) {
+        tokens.push(lexed);
+      }
+
+      previous = lexed;
 
       inStatement = true;
     }
@@ -744,6 +744,6 @@ export const analyzeStatement = (sql: string): LexedStatement => {
     leadingTokens: tokens.slice(0, MAX_LEADING_TOKENS),
     separators,
     statements: inStatement ? statements + 1 : statements,
-    writeClause: hasWriteClause(tokens),
+    writeClause: into || (isWord(tokens[0], "with") && withWrites(tokens)),
   };
 };

@@ -1,4 +1,5 @@
 import { tableList, tableMetadata } from "@std/access/table-metadata";
+import { API_PREFIX } from "@std/api/api";
 /**
  * The fixed resources of `/api/v1` (Contracts 10.1):
  *
@@ -72,13 +73,7 @@ import {
   readAuthenticatedBody,
   declaresBody,
 } from "./request.ts";
-import {
-  entityRef,
-  originOf,
-  refTypeOf,
-  schemaLocation,
-  API_PREFIX,
-} from "./resource.ts";
+import { entityRef, originOf, refTypeOf, schemaLocation } from "./resource.ts";
 import {
   collectionNameOf,
   tableOfCollection,

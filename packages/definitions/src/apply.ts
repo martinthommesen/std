@@ -310,20 +310,25 @@ const update = (
   // label and help text, whatever the change is (Contracts 1.8).
   // A name changed through `update` (set loads do this for roles and
   // permissions) follows the ownership rule of `rename`.
-  const renamed =
-    "name" in operation.changes
-      ? guardChange(work, current, "rename")
-      : { localOverride: false };
+  if (
+    "name" in operation.changes &&
+    guardChange(work, current, "rename") === undefined
+  ) {
+    return;
+  }
 
-  const allowed =
-    renamed === undefined
-      ? undefined
-      : guardChange(work, current, "update", Object.keys(operation.changes));
+  const allowed = guardChange(
+    work,
+    current,
+    "update",
+    Object.keys(operation.changes)
+  );
 
-  const found =
-    allowed === undefined
-      ? undefined
-      : firstChangeProblem(current, operation.changes);
+  if (allowed === undefined) {
+    return;
+  }
+
+  const found = firstChangeProblem(current, operation.changes);
 
   if (found !== undefined) {
     work.problems.push(problem("unsupportedChange", current.id, found));
@@ -331,16 +336,13 @@ const update = (
     return;
   }
 
-  const next =
-    allowed === undefined
-      ? undefined
-      : decodeAs(work, current.id, {
-          ...current,
-          ...operation.changes,
-          version: nextVersion(work, current.id),
-        });
+  const next = decodeAs(work, current.id, {
+    ...current,
+    ...operation.changes,
+    version: nextVersion(work, current.id),
+  });
 
-  if (allowed !== undefined && next !== undefined) {
+  if (next !== undefined) {
     record(work, operation, next, {
       ...PLAIN_NOTE,
       localOverride: allowed.localOverride,
@@ -420,7 +422,7 @@ const setOverride = (
 
   const allowed = guardChange(work, current, "setOverride");
 
-  const next =
+  if (
     allowed === undefined ||
     !overrideKeepsRetiredOptional(
       work,
@@ -428,14 +430,17 @@ const setOverride = (
       definition.fieldId,
       definition.required
     )
-      ? undefined
-      : decodeAs(work, definition.id, {
-          ...current,
-          ...definition,
-          version: nextVersion(work, definition.id),
-        });
+  ) {
+    return;
+  }
 
-  if (allowed !== undefined && next !== undefined) {
+  const next = decodeAs(work, definition.id, {
+    ...current,
+    ...definition,
+    version: nextVersion(work, definition.id),
+  });
+
+  if (next !== undefined) {
     record(work, operation, next, {
       ...PLAIN_NOTE,
       localOverride: allowed.localOverride,

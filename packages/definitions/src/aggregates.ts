@@ -39,6 +39,7 @@ export const MAX_AGGREGATE_LEVELS = 3;
 interface OwnerIndex {
   /** Every live owner reference, sorted by ID. */
   readonly all: readonly FieldDefinition[];
+  readonly byOwnerClass: Map<DefinitionId, readonly FieldDefinition[]>;
   readonly byClass: ReadonlyMap<DefinitionId, readonly FieldDefinition[]>;
 }
 
@@ -68,7 +69,7 @@ const ownerIndex = (snapshot: ConfigSnapshot): OwnerIndex => {
     byClass.set(field.classId, [...(byClass.get(field.classId) ?? []), field]);
   }
 
-  const index: OwnerIndex = { all, byClass };
+  const index: OwnerIndex = { all, byClass, byOwnerClass: new Map() };
 
   indexes.set(snapshot, index);
 
@@ -129,13 +130,24 @@ export const partReferencesOf = (
   snapshot: ConfigSnapshot,
   ownerClassId: DefinitionId
 ): readonly FieldDefinition[] => {
+  const index = ownerIndex(snapshot);
+  const known = index.byOwnerClass.get(ownerClassId);
+
+  if (known !== undefined) {
+    return known;
+  }
+
   const lineage = new Set(
     snapshot.lineage(ownerClassId).map((level) => level.id)
   );
 
-  return ownerIndex(snapshot).all.filter((field) =>
+  const references = index.all.filter((field) =>
     lineage.has(ownerTargetOf(field))
   );
+
+  index.byOwnerClass.set(ownerClassId, references);
+
+  return references;
 };
 
 /**

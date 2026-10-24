@@ -253,23 +253,27 @@ export const spelled = (name: string, naming: Naming): string =>
   naming === "api" ? apiAttributeNameOf(name) : name;
 
 const fieldByNameAt = (
-  definitions: DefinitionsAtR,
+  collector: Collector,
   classId: DefinitionId,
-  name: string,
-  naming: Naming
+  name: string
 ): FieldAtR | undefined => {
-  const lineage = new Set(lineageAt(definitions, classId));
+  let names = collector.fieldNames.get(classId);
 
-  const matches = [...definitions.fields.values()].filter(
-    (field) =>
-      field.live &&
-      lineage.has(field.classId) &&
-      spelled(field.name, naming) === name
-  );
+  if (names === undefined) {
+    names = new Map();
+    const lineage = new Set(lineageAt(collector.definitions, classId));
 
-  // Two fields sharing an API name (a clash older than the rule) resolve
-  // to neither, as at C (`ReadView.byApiName`).
-  return matches.length === 1 ? matches[0] : undefined;
+    for (const field of collector.definitions.fields.values()) {
+      if (field.live && lineage.has(field.classId)) {
+        const key = spelled(field.name, collector.naming);
+        names.set(key, names.has(key) ? undefined : field);
+      }
+    }
+
+    collector.fieldNames.set(classId, names);
+  }
+
+  return names.get(name);
 };
 
 /**
@@ -301,6 +305,7 @@ const targetOf = (field: FieldAtR | undefined): DefinitionId | undefined =>
 
 /** Collects scope entries while names are resolved. */
 interface Collector {
+  readonly fieldNames: Map<DefinitionId, Map<string, FieldAtR | undefined>>;
   readonly naming: Naming;
   readonly definitions: DefinitionsAtR;
   readonly endpoint: DefinitionId;
@@ -337,12 +342,7 @@ const resolvePath = (
   const [name = "", targetName] = path;
   named(collector, collector.endpoint, name);
 
-  const field = fieldByNameAt(
-    collector.definitions,
-    collector.endpoint,
-    name,
-    collector.naming
-  );
+  const field = fieldByNameAt(collector, collector.endpoint, name);
 
   const target = isAuditReference(name, collector.naming)
     ? USER_CLASS_ID
@@ -357,12 +357,7 @@ const resolvePath = (
     // on the target is relevant even though it did not resolve at R.
     named(collector, target, targetName);
 
-    const targetField = fieldByNameAt(
-      collector.definitions,
-      target,
-      targetName,
-      collector.naming
-    );
+    const targetField = fieldByNameAt(collector, target, targetName);
 
     if (targetField !== undefined) {
       add(collector, targetField.id, target);
@@ -414,12 +409,7 @@ const addFilter = (collector: Collector, filter: string): void => {
         return fieldInfoOf(systemField(system, classId));
       }
 
-      const field = fieldByNameAt(
-        collector.definitions,
-        classId,
-        name,
-        collector.naming
-      );
+      const field = fieldByNameAt(collector, classId, name);
 
       return field === undefined ? undefined : infoOf(field);
     },
@@ -528,12 +518,7 @@ const addAllowedFor = (
   const name = allowedFor.slice(slash + 1);
   named(collector, source, name);
 
-  const field = fieldByNameAt(
-    collector.definitions,
-    source,
-    name,
-    collector.naming
-  );
+  const field = fieldByNameAt(collector, source, name);
 
   if (field !== undefined) {
     add(collector, field.id, source);
@@ -561,6 +546,7 @@ export const staleScope = (
     definitions,
     endpoint,
     entries: [],
+    fieldNames: new Map(),
     names: [],
     naming: parameters.naming ?? "definition",
   };

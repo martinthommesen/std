@@ -7,13 +7,13 @@
  * operators, literals and profiles are checked by `@std/conditions`
  * (`condition-view.ts`) when a condition is stored.
  */
+import { PathSchema, ValueSchema } from "@std/conditions/ast";
 import {
   Array as SchemaArray,
   Int,
   Json,
   Literal,
   Literals,
-  optionalKey,
   String as SchemaString,
   Struct,
   suspend,
@@ -25,15 +25,7 @@ import { compareIds, DefinitionIdSchema } from "./ids.ts";
 import type { DefinitionId } from "./ids.ts";
 
 /** A field path: one ID, or several following references. */
-export const ConditionPathSchema = Struct({
-  image: optionalKey(Literal("previous")),
-  path: SchemaArray(DefinitionIdSchema),
-  /**
-   * `record`: the rule's own record (record-rule actions, Contracts 4.10);
-   * `owner`: the owner, in the part conditions of aggregate rules (5.10).
-   */
-  scope: optionalKey(Literals(["record", "owner"])),
-});
+export const ConditionPathSchema = PathSchema;
 
 /** A field path. */
 export type ConditionPath = typeof ConditionPathSchema.Type;
@@ -41,20 +33,7 @@ export type ConditionPath = typeof ConditionPathSchema.Type;
 const LiteralValueSchema = Struct({ value: Json });
 
 /** A right-hand value: a literal, a context value or a relative date. */
-export const ConditionValueSchema = Union([
-  LiteralValueSchema,
-  Struct({ ctx: Literals(["me", "now"]) }),
-  Struct({
-    offset: Int,
-    rel: Literal("now"),
-    unit: Literals(["minute", "hour", "day", "week", "month", "year"]),
-  }),
-  Struct({
-    offset: Int,
-    rel: Literal("today"),
-    unit: Literals(["day", "week", "month", "year"]),
-  }),
-]);
+export const ConditionValueSchema = ValueSchema;
 
 /** A right-hand value. */
 export type ConditionValue = typeof ConditionValueSchema.Type;

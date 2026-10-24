@@ -105,6 +105,7 @@ import {
   readEntries,
   readFieldOrigins,
 } from "./delivery-payload.ts";
+import type { FieldOrigin } from "./delivery-payload.ts";
 import {
   deliveriesDead,
   deliveriesDone,
@@ -359,7 +360,14 @@ const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare<
     });
   }
 
-  const origins = yield* readFieldOrigins(snapshot, entry.recordClassId);
+  const needsOrigins =
+    entry.image === undefined ||
+    entry.kind === "delete" ||
+    (served.effect.kind === "external" && served.effect.render !== undefined);
+
+  const origins = needsOrigins
+    ? yield* readFieldOrigins(snapshot, entry.recordClassId)
+    : new Map<string, FieldOrigin>();
 
   const payload = payloadOf(
     snapshot,

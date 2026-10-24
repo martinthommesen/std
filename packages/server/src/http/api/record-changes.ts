@@ -57,6 +57,7 @@ import {
   savedAnswer,
   tableOf,
   writeFailures,
+  withoutTypeMembers,
 } from "./records.ts";
 import type { RouteInput } from "./records.ts";
 import { checkedJsonPatch, checkedMergePatch } from "./request-schemas.ts";
@@ -519,13 +520,7 @@ export const patchIn = Effect.fn("Api.patch")(function* patchIn(
 
   const plan = isJsonPatch
     ? yield* planJsonPatch(scope, view, nameable, operations, input.origin)
-    : yield* planMergePatch(
-        scope,
-        nameable,
-        Object.fromEntries(
-          Object.entries(merge).filter(([key]) => !TYPE_MEMBERS.has(key))
-        )
-      );
+    : yield* planMergePatch(scope, nameable, withoutTypeMembers(merge));
 
   const saved = yield* updateRecord({
     body: Object.fromEntries(plan.written.map((field) => [field.name, null])),

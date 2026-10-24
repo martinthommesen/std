@@ -28,7 +28,7 @@ import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Result } from "effect";
 
-import { changedAny, standardEvents } from "./events.ts";
+import { standardEvents } from "./events.ts";
 import {
   HELPDESK_CLASS_IDS,
   INCIDENT_FIELD_IDS,
@@ -38,6 +38,7 @@ import {
   TICKET_FIELD_IDS,
 } from "./helpdesk-ids.ts";
 import {
+  ALL_OPERATIONS,
   derivedAttribute,
   fieldAttribute,
   jsonAttribute,
@@ -105,14 +106,6 @@ const DECLARED_STATUSES: Readonly<Record<TmfOperation, readonly number[]>> = {
   patch: [200, 202, 400, 401, 403, 404, 405, 409, 500, 501, 503],
   retrieve: [200, 400, 401, 403, 404, 405, 500, 501, 503],
 };
-
-const OPERATIONS: readonly TmfOperation[] = [
-  "list",
-  "retrieve",
-  "create",
-  "patch",
-  "delete",
-];
 
 // ticketType (Contracts 11.2; decision 0021, decision 40).
 
@@ -597,12 +590,7 @@ const TICKET_EVENTS: readonly EventRule[] = [
       const before = statusOfImage(change.before);
       const after = statusOfImage(change.after);
 
-      return (
-        before !== undefined &&
-        after !== undefined &&
-        before !== after &&
-        changedAny(change, STATUS_SOURCES)
-      );
+      return before !== undefined && after !== undefined && before !== after;
     },
   },
   {
@@ -681,7 +669,7 @@ export const TROUBLE_TICKET_RESOURCE: TmfResourceMapping = {
   declaredStatuses: DECLARED_STATUSES,
   events: TICKET_EVENTS,
   name: "troubleTicket",
-  operations: OPERATIONS,
+  operations: ALL_OPERATIONS,
   type: TROUBLE_TICKET,
   types: [
     { classId: C.ticket, createTarget: true, type: TROUBLE_TICKET },
@@ -719,7 +707,7 @@ export const TROUBLE_TICKET_SPECIFICATION_RESOURCE: TmfResourceMapping = {
     type: TROUBLE_TICKET_SPECIFICATION,
   }),
   name: "troubleTicketSpecification",
-  operations: OPERATIONS,
+  operations: ALL_OPERATIONS,
   type: TROUBLE_TICKET_SPECIFICATION,
   types: [
     {

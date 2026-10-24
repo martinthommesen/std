@@ -53,7 +53,12 @@ import type { CursorPosition } from "../../records/read-cursor.ts";
 import { parseLimit } from "../../records/read-query.ts";
 import type { SortKey } from "../../records/read-query.ts";
 import type { ReadScope, ReadView } from "../../records/read-view.ts";
-import { alternativesOf, atomOf, splitParameter } from "../api/query.ts";
+import {
+  alternativesOf,
+  atomOf,
+  single,
+  splitParameter,
+} from "../api/query.ts";
 import type { Comparison } from "../api/query.ts";
 import type { QueryParameters } from "../api/request.ts";
 import type { MappedResource } from "./context.ts";
@@ -113,17 +118,6 @@ const queryIssueError = (issue: QueryIssue) => {
     `${issue.parameter} lists attribute names.`
   );
 };
-
-const single = Effect.fn("TmfQuery.single")(function* single(
-  query: QueryParameters,
-  name: string
-) {
-  const values = query.flatMap(([key, value]) => (key === name ? [value] : []));
-
-  return values.length > 1
-    ? yield* invalidParameter(name, `${name} may be given once.`)
-    : values[0];
-});
 
 /**
  * The attributes the caller knows on the class a request reads through.

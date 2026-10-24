@@ -16,6 +16,7 @@ import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { parseJson } from "@std/values/json";
 import { isJsonArray } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
+import { isUuid } from "@std/values/uuid";
 import { Effect, Schema } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 import { SqlClient } from "effect/sql";
@@ -36,8 +37,6 @@ import { recordServedRevision } from "./schema-revision-header.ts";
 import type { parseRequestRevision } from "./stale-request.ts";
 
 type StatedRevision = Effect.Success<ReturnType<typeof parseRequestRevision>>;
-
-const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/u;
 
 const decodeChangeSet = decodeRows(
   Schema.Struct({
@@ -102,7 +101,7 @@ export const readJournal = Effect.fn("Http.readChangeSet")(
       PLATFORM_CLASS_IDS.schema_change
     );
 
-    if (readable.kind !== "always" || !UUID.test(id)) {
+    if (readable.kind !== "always" || !isUuid(id)) {
       return yield* new NotFound();
     }
 

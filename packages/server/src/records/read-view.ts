@@ -34,6 +34,7 @@ import { branchesSql, classIn, groupsSql, TRUE_SQL } from "./access-sql.ts";
 import type { AccessContext } from "./access-sql.ts";
 import { apiNameIndex, SYSTEM_FIELDS, systemField } from "./read-field.ts";
 import type { ReadField } from "./read-field.ts";
+import { isWriteOnly } from "./stored-values.ts";
 
 /** What one caller can read of one class, as SQL over any alias. */
 export interface ReadView {
@@ -89,9 +90,6 @@ export interface ReadScope {
    */
   readonly view: (classId: DefinitionId, exact?: boolean) => ReadView;
 }
-
-const isWriteOnly = (field: ReadField): boolean =>
-  field.type.kind === "password" || field.type.kind === "secret";
 
 const classNameExpression = (
   snapshot: ConfigSnapshot,
@@ -199,7 +197,7 @@ const makeView = (
       masked(
         alias,
         field,
-        isWriteOnly(field)
+        isWriteOnly(field.type.kind)
           ? sql`(${column(alias, field)} IS NOT NULL)`
           : column(alias, field)
       ),

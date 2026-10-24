@@ -1,3 +1,5 @@
+import { knowsTable } from "@std/access/rules";
+import type { Caller } from "@std/access/rules";
 /**
  * Records as `/api/v1` resources (Contracts 10.2): one flat JSON object,
  *
@@ -24,8 +26,7 @@
  *   label under exactly the 3.6 rule. A selected one-hop path
  *   (`fields=assignedTo.email`) adds its value to the EntityRef.
  */
-import { knowsTable } from "@std/access/rules";
-import type { Caller } from "@std/access/rules";
+import { API_PREFIX } from "@std/api/api";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { isJsonString } from "@std/values/json-value";
@@ -41,9 +42,6 @@ import type {
 import type { ReadScope } from "../../records/read-view.ts";
 import { isLoopbackHost } from "../session-cookie.ts";
 import { collectionNameOf, typeNameOf } from "./table-names.ts";
-
-/** Where `/api/v1` lives. */
-export const API_PREFIX = "/api/v1";
 
 /**
  * The origin `href`s start with: `STD_PUBLIC_URL` when set (its origin),
@@ -164,6 +162,14 @@ export const refTypeOf = (
     ? `${typeNameOf(snapshot, declared)}Ref`
     : "EntityRef";
 
+const referenceTypes = new WeakMap<
+  ReadScope,
+  Map<
+    DefinitionId,
+    { readonly known: DefinitionId | null; readonly type: string }
+  >
+>();
+
 /**
  * An EntityRef (Contracts 10.2).
  *
@@ -179,14 +185,29 @@ export const entityRef = (
 ): JsonObject => {
   const { snapshot, caller } = scope;
   const declared = reference.declaredClassId;
-  const known = knowsTable(snapshot, caller, declared) ? declared : null;
-  const referredId = reference.targetClassId ?? known;
+  let byClass = referenceTypes.get(scope);
 
-  const refType =
-    known === null ? "EntityRef" : `${typeNameOf(snapshot, declared)}Ref`;
+  if (byClass === undefined) {
+    byClass = new Map();
+    referenceTypes.set(scope, byClass);
+  }
+
+  let descriptor = byClass.get(declared);
+
+  if (descriptor === undefined) {
+    const known = knowsTable(snapshot, caller, declared) ? declared : null;
+    descriptor = {
+      known,
+      type:
+        known === null ? "EntityRef" : `${typeNameOf(snapshot, declared)}Ref`,
+    };
+    byClass.set(declared, descriptor);
+  }
+
+  const referredId = reference.targetClassId ?? descriptor.known;
 
   const ref = new Map<string, JsonValue>([
-    ["@type", refType],
+    ["@type", descriptor.type],
     ["id", reference.id],
   ]);
 

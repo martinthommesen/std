@@ -312,7 +312,7 @@ const typeAggregate = (
     );
 
     return args.every((arg) => arg !== undefined)
-      ? { args: args.filter((arg) => arg !== undefined), op: expr.op }
+      ? { args, op: expr.op }
       : undefined;
   }
 

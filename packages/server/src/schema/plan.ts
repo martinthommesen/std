@@ -42,8 +42,6 @@ import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { defaultProblem } from "@std/definitions/validate";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
-import { maxLengthOf } from "@std/values/field-type";
-import type { FieldType } from "@std/values/field-type";
 import type { JsonObject } from "@std/values/json-value";
 import { Schema } from "effect";
 
@@ -75,12 +73,7 @@ import {
   planLifecycle,
 } from "./plan-lifecycle.ts";
 import type { RowCheck } from "./plan-lifecycle.ts";
-import {
-  choicePredicates,
-  defaultLiteral,
-  quoteIdent,
-  tableName,
-} from "./sql-text.ts";
+import { violationPredicates, quoteIdent, tableName } from "./sql-text.ts";
 
 /**
  * Follow-up step kinds (Contracts 1.5); `backfill` numbers the existing
@@ -420,29 +413,6 @@ const hasColumnDefault = (field: FieldDefinition): boolean =>
   field.default !== null || field.type.kind === "boolean";
 
 /**
- * The details of a planned backfill step.
- *
- * @param input - The field, its table and column as Postgres names them
- *   after the main transaction, and the effective prefix of each class of
- *   the field's subtree.
- * @returns The step details.
- */
-const backfillDetails = (input: {
-  readonly definitionId: string;
-  readonly table: string;
-  readonly column: string;
-  readonly prefix: string;
-  readonly prefixes: Readonly<Record<string, string>>;
-}): JsonObject => ({
-  column: input.column,
-  cursor: null,
-  definitionId: input.definitionId,
-  prefix: input.prefix,
-  prefixes: { ...input.prefixes },
-  table: input.table,
-});
-
-/**
  * Plans the `backfill` step of an auto-numbered field added to an existing
  * table: always, not only when the preflight saw rows, because a row
  * created between the preflight and the main commit predates the column
@@ -472,13 +442,14 @@ const planBackfill = (
   }
 
   planning.steps.push({
-    details: backfillDetails({
+    details: {
       column: quoteIdent(field.name),
+      cursor: null,
       definitionId: field.id,
       prefix: field.numberPrefix,
-      prefixes,
+      prefixes: { ...prefixes },
       table,
-    }),
+    },
     kind: "backfill",
     sql: null,
     targetId: field.id,
@@ -709,49 +680,6 @@ const planIndexes = (planning: Planning, applied: AppliedChangeSet): void => {
   }
 };
 
-const boundPredicates = (
-  column: string,
-  tightened: FieldType,
-  previous: FieldType
-): readonly string[] => {
-  if (
-    (tightened.kind === "integer" ||
-      tightened.kind === "bigInteger" ||
-      tightened.kind === "decimal") &&
-    tightened.kind === previous.kind
-  ) {
-    return [
-      ...(tightened.min !== undefined && tightened.min !== previous.min
-        ? [`${column} < ${defaultLiteral(tightened, tightened.min)}`]
-        : []),
-      ...(tightened.max !== undefined && tightened.max !== previous.max
-        ? [`${column} > ${defaultLiteral(tightened, tightened.max)}`]
-        : []),
-    ];
-  }
-
-  return [];
-};
-
-const isTextType = (
-  type: FieldType
-): type is Extract<FieldType, { readonly kind: "text" | "longText" }> =>
-  type.kind === "text" || type.kind === "longText";
-
-const lengthPredicates = (
-  column: string,
-  tightened: FieldType,
-  previous: FieldType
-): readonly string[] => {
-  if (!(isTextType(tightened) && isTextType(previous))) {
-    return [];
-  }
-
-  return maxLengthOf(tightened) < maxLengthOf(previous)
-    ? [`char_length(${column}) > ${maxLengthOf(tightened)}`]
-    : [];
-};
-
 /**
  * The predicate of rows in `subtree(C)` that a new or tightened override on
  * C would reject, or undefined when it tightens nothing.
@@ -775,12 +703,7 @@ const overridePredicate = (
   const now = effectiveField(planning.after, override.classId, field);
   const was = effectiveField(planning.before, override.classId, field);
 
-  const predicates = [
-    ...(now.required && !was.required ? [`${column} IS NULL`] : []),
-    ...lengthPredicates(column, now.type, was.type),
-    ...boundPredicates(column, now.type, was.type),
-    ...choicePredicates(column, now.choices, was.choices),
-  ];
+  const predicates = violationPredicates(column, now, was);
 
   return predicates.length === 0
     ? undefined

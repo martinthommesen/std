@@ -1,3 +1,4 @@
+import { API_PREFIX } from "@std/api/api";
 /**
  * The resource shapes of `/api/v1` and the methods each offers (Contracts
  * 10.5). A method a shape does not offer is `405` with an accurate `Allow`
@@ -10,8 +11,6 @@
 import { Effect } from "effect";
 import { HttpBody, HttpRouter, HttpServerResponse } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
-
-import { API_PREFIX } from "./resource.ts";
 
 /** One resource shape: its route path and the methods it offers. */
 export interface ResourceRoute {

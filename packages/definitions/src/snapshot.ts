@@ -534,7 +534,17 @@ export class ConfigSnapshot implements SnapshotKey {
     classId: DefinitionId,
     name: string
   ): FieldDefinition | undefined {
-    return this.fields(classId).find((field) => field.name === name);
+    for (const level of this.lineage(classId)) {
+      const found = this.ownFields(level.id).find(
+        (field) => field.name === name
+      );
+
+      if (found !== undefined) {
+        return found;
+      }
+    }
+
+    return undefined;
   }
 
   /**

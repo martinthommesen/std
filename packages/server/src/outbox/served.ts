@@ -1,7 +1,7 @@
+import type { DeadDelivery } from "@std/api/dead-letters";
 /** Shared subscription resolution for worker claims and operator retries. */
 import type { SubscriptionDefinition } from "@std/definitions/definition";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { Schema } from "effect";
 
 import { effectFor } from "./delivery-effects.ts";
 import type {
@@ -15,14 +15,9 @@ export interface Served {
   readonly effect: DeliveryEffect;
 }
 
-const SubscriptionState = Schema.Literals([
-  "served",
-  "disabled",
-  "retired",
-  "purged",
-  "deleted",
-  "noHandler",
-]);
+type SubscriptionState = NonNullable<
+  (typeof DeadDelivery.Type)["subscriptionState"]
+>;
 
 const classifySubscription = (
   snapshot: ConfigSnapshot,
@@ -30,7 +25,7 @@ const classifySubscription = (
   subscription: SubscriptionDefinition | undefined
 ):
   | ({ readonly state: "served" } & Served)
-  | { readonly state: Exclude<typeof SubscriptionState.Type, "served"> } => {
+  | { readonly state: Exclude<SubscriptionState, "served"> } => {
   if (subscription === undefined) {
     return { state: "deleted" };
   }
@@ -60,7 +55,7 @@ export const subscriptionState = (
   snapshot: ConfigSnapshot,
   handlers: DeliveryHandlersApi,
   subscription: SubscriptionDefinition | undefined
-): typeof SubscriptionState.Type =>
+): SubscriptionState =>
   classifySubscription(snapshot, handlers, subscription).state;
 
 /** Active, enabled and claimed by a configured handler, exactly as the worker requires.

@@ -148,9 +148,7 @@ const literalIssue = (error: InvalidValue, at: Segments): ConditionIssue => {
     return issue("emptyNeedle", at, error.message);
   }
 
-  return error.hint === undefined
-    ? issue("invalidLiteral", at, error.message)
-    : issue("invalidLiteral", at, error.message, error.hint);
+  return issue("invalidLiteral", at, error.message, error.hint);
 };
 
 const checkPathLimits = (
@@ -366,14 +364,12 @@ const requireKind = (
   }
 
   checker.issues.push(
-    hint === undefined
-      ? issue("contextNotForType", at, `${what} does not fit this field type.`)
-      : issue(
-          "contextNotForType",
-          at,
-          `${what} does not fit this field type.`,
-          hint
-        )
+    issue(
+      "contextNotForType",
+      at,
+      `${what} does not fit this field type.`,
+      hint
+    )
   );
 
   return false;
@@ -517,18 +513,14 @@ const checkOperator = (
     const writeOnly = kind === "password" || kind === "secret";
 
     checker.issues.push(
-      writeOnly
-        ? issue(
-            "operatorNotForType",
-            [...at, "op"],
-            `${operator} does not apply to this field type.`,
-            "Password and secret fields allow only empty and notEmpty."
-          )
-        : issue(
-            "operatorNotForType",
-            [...at, "op"],
-            `${operator} does not apply to this field type.`
-          )
+      issue(
+        "operatorNotForType",
+        [...at, "op"],
+        `${operator} does not apply to this field type.`,
+        writeOnly
+          ? "Password and secret fields allow only empty and notEmpty."
+          : undefined
+      )
     );
 
     return false;
@@ -722,7 +714,7 @@ const typeIn = (
     );
 
     right = operands.every((operand) => operand !== undefined)
-      ? operands.filter((operand) => operand !== undefined)
+      ? operands
       : undefined;
   }
 
@@ -878,7 +870,7 @@ const typeExpr = (
     );
 
     return args.every((arg) => arg !== undefined)
-      ? { args: args.filter((arg) => arg !== undefined), op: expr.op }
+      ? { args, op: expr.op }
       : undefined;
   }
 
@@ -893,6 +885,29 @@ const typeExpr = (
   }
 
   return typeAtom(checker, expr, at);
+};
+
+const checkExpr = (
+  expr: Expr,
+  options: CheckOptions
+): ConditionResult<CheckedCondition> => {
+  const checker: Checker = {
+    issues: [],
+    options,
+    rules: profileRules(options.profile, options.profileOptions),
+  };
+
+  const root = typeExpr(checker, expr, []);
+
+  if (root === undefined || checker.issues.length > 0) {
+    return invalid(
+      checker.issues.length > 0
+        ? checker.issues
+        : [issue("malformed", [], "The condition does not check.")]
+    );
+  }
+
+  return valid(makeChecked(options.classId, root));
 };
 
 /**
@@ -917,23 +932,7 @@ export const checkCondition = (
     return invalid([notAnAst]);
   }
 
-  const checker: Checker = {
-    issues: [],
-    options,
-    rules: profileRules(options.profile, options.profileOptions),
-  };
-
-  const root = typeExpr(checker, expr, []);
-
-  if (root === undefined || checker.issues.length > 0) {
-    return invalid(
-      checker.issues.length > 0
-        ? checker.issues
-        : [issue("malformed", [], "The condition does not check.")]
-    );
-  }
-
-  return valid(makeChecked(options.classId, root));
+  return checkExpr(expr, options);
 };
 
 /**
@@ -954,5 +953,5 @@ export const checkConditionJson = (
     return invalid([decoded.failure === "tooDeep" ? tooDeep : notAnAst]);
   }
 
-  return checkCondition(decoded.success, options);
+  return checkExpr(decoded.success, options);
 };

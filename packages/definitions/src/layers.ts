@@ -1,3 +1,4 @@
+import type { JsonObject, JsonValue } from "@std/values/json-value";
 /**
  * The config layer model (Contracts 8.1, 8.2): installed sets, the shipped
  * base of every record a set ships, and local overrides of single
@@ -8,8 +9,7 @@
  * The effective record (the definition row the runtime reads) is the
  * shipped base with the overrides applied.
  */
-import { stringifyJson } from "@std/values/json";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
+import { jsonbEquals } from "@std/values/jsonb";
 
 import type { Definition, DefinitionKind } from "./definition.ts";
 import { effectiveJson } from "./effective-json.ts";
@@ -66,7 +66,7 @@ export const EMPTY_LAYERS: LayerState = {
 };
 
 /**
- * Whether two JSON values are equal, by canonical text.
+ * Whether two JSON values are equal under jsonb semantics.
  *
  * @param left - A value (undefined counts as null).
  * @param right - Another value.
@@ -75,7 +75,7 @@ export const EMPTY_LAYERS: LayerState = {
 export const sameJson = (
   left: JsonValue | undefined,
   right: JsonValue | undefined
-): boolean => stringifyJson(left ?? null) === stringifyJson(right ?? null);
+): boolean => jsonbEquals(left ?? null, right ?? null);
 
 /**
  * The overrides of each record, by property.

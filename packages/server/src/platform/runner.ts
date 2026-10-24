@@ -19,7 +19,7 @@ import { Effect, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { schemaKeyHolders } from "../schema/recovery.ts";
+import { schemaKeyHolders } from "../schema/coordinator.ts";
 import { quoteIdent } from "../schema/sql-text.ts";
 import { UPGRADE_BLOCKING_APPLICATION_PREFIXES } from "../sql/database-config.ts";
 import type { DatabaseConfig } from "../sql/database-config.ts";

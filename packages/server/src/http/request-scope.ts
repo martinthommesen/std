@@ -7,10 +7,7 @@
  * Write routes reuse `inRequestTransaction` and `asActor` the same way.
  */
 import { SessionToken } from "@std/api/session-token";
-import { stringifyJson } from "@std/values/json";
-import type { JsonValue } from "@std/values/json-value";
 import { Effect, Schedule } from "effect";
-import { HttpServerResponse } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import { Actor } from "../auth/actor.ts";
@@ -98,17 +95,3 @@ export const asActor = Effect.fn("Http.asActor")(function* asActor<A, E, R>(
 
   return yield* Effect.provideService(effect, Actor, actor);
 });
-
-/**
- * A JSON response written with `stringifyJson`, so json values keep
- * jsonb's key order (Contracts 6.5).
- *
- * @param body - The body.
- * @returns The response.
- */
-export const jsonResponse = (
-  body: JsonValue
-): HttpServerResponse.HttpServerResponse =>
-  HttpServerResponse.text(stringifyJson(body), {
-    contentType: "application/json",
-  });
