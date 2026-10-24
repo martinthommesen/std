@@ -1,7 +1,7 @@
 /**
  * No API response may be stored by a cache (decision 0018): a cookie
  * session gets no shared-cache protection from an `Authorization` header
- * (RFC 9111 §3.5), so every response under `/api/v1`, success or error,
+ * (RFC 9111 §3.5), so every response under `/api/` or `/tmf-api/`, success or error,
  * authenticated or not, carries `Cache-Control: no-store`. The web app's
  * files keep their own cache headers (`web-app.test.ts`).
  */
@@ -35,6 +35,8 @@ import {
 import { WEB_APP_HEADERS } from "../src/http/web-app.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { listPath, readsTestLayer } from "./reads-support.ts";
+
+const API_PREFIXES = ["/api", "/tmf-api"] as const;
 
 const WEB = { "std-client": "web" };
 
@@ -134,13 +136,16 @@ const GRACE = "50 millis";
 
 /**
  * Serves, on a free port, with `std serve`'s middleware, revision header
- * and no-store hooks, and a revision lookup that fails: `/api/ok`, `/page`
- * and `/api/slow`, which never answers (`answerNever`); the two API handlers
+ * and no-store hooks, and a revision lookup that fails: `${prefix}/ok`, `/page`
+ * and `${prefix}/slow`, which never answers (`answerNever`); the two API handlers
  * hand the test their request fiber. It records severe logs and
  * reported errors, and closes with `close` or the test's scope, interrupting
  * requests still in flight after `GRACE`.
+ * @param prefix - The API family under test.
  */
-const observedServer = Effect.gen(function* serveObserved() {
+const observedServer = Effect.fn("Test.observedServer")(function* serveObserved(
+  prefix: "/api" | "/tmf-api"
+) {
   const errorLogs: string[] = [];
   const reported: string[] = [];
   const okEntered = yield* Deferred.make<RequestFiber>();
@@ -160,10 +165,10 @@ const observedServer = Effect.gen(function* serveObserved() {
   const app = Layer.mergeAll(
     HttpRouter.add(
       "GET",
-      "/api/ok",
+      `${prefix}/ok`,
       Effect.as(enter(okEntered), HttpServerResponse.text("ok"))
     ),
-    HttpRouter.add("GET", "/api/slow", answerNever(slowEntered)),
+    HttpRouter.add("GET", `${prefix}/slow`, answerNever(slowEntered)),
     HttpRouter.add(
       "GET",
       "/page",
@@ -216,16 +221,16 @@ const observedServer = Effect.gen(function* serveObserved() {
 const SERVER_ABORT = 503;
 
 describe("api-cache", () => {
-  it.live(
-    "a 500 written after a response hook fails still says no-store; a page keeps its headers",
-    () =>
+  it.live.each(API_PREFIXES)(
+    "%s: a 500 written after a response hook fails still says no-store; a page keeps its headers",
+    (prefix) =>
       Effect.gen(function* failedHook() {
-        const { origin } = yield* observedServer;
+        const { origin } = yield* observedServer(prefix);
 
         const [api, page] = yield* Effect.promise(
           async () =>
             await Promise.all([
-              fetch(`${origin}/api/ok`),
+              fetch(`${origin}${prefix}/ok`),
               fetch(`${origin}/page`),
             ])
         );
@@ -244,14 +249,14 @@ describe("api-cache", () => {
       }).pipe(Effect.scoped)
   );
 
-  it.live(
-    "the hook's defect reaches the error reporters exactly once, and the 500 is empty and says no-store",
-    () =>
+  it.live.each(API_PREFIXES)(
+    "%s: the hook's defect reaches the error reporters exactly once, and the 500 is empty and says no-store",
+    (prefix) =>
       Effect.gen(function* reportedOnce() {
-        const server = yield* observedServer;
+        const server = yield* observedServer(prefix);
 
         const answer = yield* Effect.promise(async () => {
-          const response = await fetch(`${server.origin}/api/ok`);
+          const response = await fetch(`${server.origin}${prefix}/ok`);
 
           return {
             body: await response.text(),
@@ -271,16 +276,16 @@ describe("api-cache", () => {
       }).pipe(Effect.scoped)
   );
 
-  it.live(
-    "a client that disconnects mid-request is cancellation, not an error",
-    () =>
+  it.live.each(API_PREFIXES)(
+    "%s: a client that disconnects mid-request is cancellation, not an error",
+    (prefix) =>
       Effect.gen(function* clientDisconnect() {
-        const server = yield* observedServer;
+        const server = yield* observedServer(prefix);
 
         const request = yield* Effect.forkChild(
           Effect.tryPromise(
             async (signal) =>
-              await fetch(`${server.origin}/api/slow`, { signal })
+              await fetch(`${server.origin}${prefix}/slow`, { signal })
           )
         );
 
@@ -294,15 +299,15 @@ describe("api-cache", () => {
       }).pipe(Effect.scoped)
   );
 
-  it.live(
-    "shutting down with a request in flight is cancellation, not an error",
-    () =>
+  it.live.each(API_PREFIXES)(
+    "%s: shutting down with a request in flight is cancellation, not an error",
+    (prefix) =>
       Effect.gen(function* shutdown() {
-        const server = yield* observedServer;
+        const server = yield* observedServer(prefix);
 
         const pending = yield* Effect.forkChild(
           Effect.tryPromise(
-            async () => await fetch(`${server.origin}/api/slow`)
+            async () => await fetch(`${server.origin}${prefix}/slow`)
           ).pipe(
             Effect.map(({ status }) => status),
             Effect.option
@@ -321,14 +326,14 @@ describe("api-cache", () => {
       }).pipe(Effect.scoped)
   );
 
-  it.effect(
-    "the middleware passes a pure interruption on as one, under /api/ too",
-    () =>
+  it.effect.each(API_PREFIXES)(
+    "%s: the middleware preserves pure interruption",
+    (prefix) =>
       Effect.gen(function* interruption() {
         const exit = yield* answerApiFailures(Effect.interrupt).pipe(
           Effect.provideService(
             HttpServerRequest,
-            fromWeb(new Request("http://std.test/api/v1/x"))
+            fromWeb(new Request(`http://std.test${prefix}/v1/x`))
           ),
           Effect.exit
         );
@@ -339,7 +344,62 @@ describe("api-cache", () => {
       })
   );
 
-  it("sets no-store under /api/ only, leaving other responses' cache headers alone", async () => {
+  it.effect.each(API_PREFIXES)(
+    "%s: the middleware preserves an already answered cause",
+    (prefix) =>
+      Effect.gen(function* alreadyAnswered() {
+        const cause = Cause.combine(
+          Cause.die(new Error("already reported")),
+          Cause.die(
+            HttpServerResponse.empty({
+              headers: { "cache-control": "no-store" },
+              status: 500,
+            })
+          )
+        );
+
+        const exit = yield* answerApiFailures(Effect.failCause(cause)).pipe(
+          Effect.provideService(
+            HttpServerRequest,
+            fromWeb(new Request(`http://std.test${prefix}/v1/x`))
+          ),
+          Effect.exit
+        );
+
+        assert.isTrue(Exit.isFailure(exit));
+
+        if (Exit.isFailure(exit)) {
+          assert.strictEqual(exit.cause, cause);
+        }
+      })
+  );
+
+  it.effect.each([
+    "/index.html",
+    "/assets/app.js",
+    "/apiary/x",
+    "/tmf-apiary/x",
+  ])("%s: the middleware preserves non-API failures", (path) =>
+    Effect.gen(function* nonApiFailure() {
+      const cause = Cause.die(new Error("non-API failure"));
+
+      const exit = yield* answerApiFailures(Effect.failCause(cause)).pipe(
+        Effect.provideService(
+          HttpServerRequest,
+          fromWeb(new Request(`http://std.test${path}`))
+        ),
+        Effect.exit
+      );
+
+      assert.isTrue(Exit.isFailure(exit));
+
+      if (Exit.isFailure(exit)) {
+        assert.strictEqual(exit.cause, cause);
+      }
+    })
+  );
+
+  it("sets no-store on both API families, leaving other cache headers alone", async () => {
     const { dispose, handler } = HttpRouter.toWebHandler(
       Layer.mergeAll(
         HttpRouter.add(
@@ -350,6 +410,18 @@ describe("api-cache", () => {
           })
         ),
         HttpRouter.add("GET", "/api/v1/thing", HttpServerResponse.text("api")),
+        HttpRouter.add(
+          "GET",
+          "/tmf-api/event/v4/thing",
+          HttpServerResponse.text("tmf")
+        ),
+        HttpRouter.add(
+          "GET",
+          "/tmf-apiary/thing",
+          HttpServerResponse.text("page", {
+            headers: { "cache-control": "public, max-age=60" },
+          })
+        ),
         ApiNoStoreLayer
       ),
       { disableLogger: true }
@@ -359,10 +431,29 @@ describe("api-cache", () => {
     const api = await handler(new Request("http://std.test/api/v1/thing"));
     const missing = await handler(new Request("http://std.test/api/v1/none"));
 
+    const tmf = await handler(
+      new Request("http://std.test/tmf-api/event/v4/thing")
+    );
+
+    const tmfMissing = await handler(
+      new Request("http://std.test/tmf-api/event/v4/none")
+    );
+
+    const similarPrefix = await handler(
+      new Request("http://std.test/tmf-apiary/thing")
+    );
+
     await dispose();
 
     assert.strictEqual(page.headers.get("cache-control"), "no-cache");
     assert.strictEqual(api.headers.get("cache-control"), "no-store");
+    assert.strictEqual(tmf.headers.get("cache-control"), "no-store");
+    assert.strictEqual(tmfMissing.status, 404);
+    assert.strictEqual(tmfMissing.headers.get("cache-control"), "no-store");
+    assert.strictEqual(
+      similarPrefix.headers.get("cache-control"),
+      "public, max-age=60"
+    );
     assert.strictEqual(missing.status, 404);
     assert.strictEqual(missing.headers.get("cache-control"), "no-store");
   });

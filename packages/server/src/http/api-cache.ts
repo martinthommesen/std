@@ -3,8 +3,9 @@
  * authenticated by the web app's session cookie carries no
  * `Authorization` header, so a shared cache gets none of the restriction
  * RFC 9111 §3.5 ties to it and could, with heuristic freshness, hand one
- * user's records to another. Every response under `/api/`, success and
- * error, authenticated or not, therefore carries `Cache-Control: no-store`.
+ * user's records to another. Every response under `/api/` or `/tmf-api/`,
+ * success and error, authenticated or not, therefore carries
+ * `Cache-Control: no-store`.
  *
  * No endpoint is exempt: the one public read, the OpenAPI document,
  * describes the current schema revision and is small, so caching it would
@@ -24,9 +25,9 @@ import { apiKindOf } from "./api-path.ts";
 
 /**
  * The server middleware `std serve` passes to `HttpRouter.serve`: the last
- * word on a failed request under `/api/`. A response hook (the revision
- * header, `schema-revision-header.ts`) can fail while the response is being
- * written; the hooks run as one chain, so the no-store hook below never
+ * word on a failed request under `/api/` or `/tmf-api/`. A response hook
+ * (the revision header, `schema-revision-header.ts`) can fail while writing
+ * the response; the hooks run as one chain, so the no-store hook below never
  * runs, and the server boundary would write a 500 without it.
  *
  * The middleware does not answer or log anything itself. It fails again
@@ -37,7 +38,7 @@ import { apiKindOf } from "./api-path.ts";
  * a pure interruption (the client went away or the server is shutting
  * down), which stays a cancellation and gets the boundary's empty 499 or
  * 503; a cause that already holds a response, which the server answered and
- * reported through the hooks; and any failure outside `/api/`.
+ * reported through the hooks; and any failure outside those API paths.
  *
  * @param httpApp - The server chain, response writing included.
  * @returns The chain, with API failures answered with `no-store`.
@@ -62,7 +63,7 @@ export const answerApiFailures = <R>(
       if (
         Cause.hasInterruptsOnly(cause) ||
         answered ||
-        apiKindOf(yield* HttpRouter.RouterConfig)(request.url) !== "std"
+        apiKindOf(yield* HttpRouter.RouterConfig)(request.url) === undefined
       ) {
         return yield* Effect.failCause(cause);
       }
@@ -85,17 +86,15 @@ export const ApiNoStoreLayer = HttpRouter.middleware(
     const classify = apiKindOf(yield* HttpRouter.RouterConfig);
 
     return (httpEffect) =>
-      HttpEffect.withPreResponseHandler(httpEffect, (request, response) =>
-        Effect.succeed(
-          classify(request.url) === "std"
-            ? HttpServerResponse.setHeader(
-                response,
-                "cache-control",
-                "no-store"
-              )
-            : response
-        )
-      );
+      HttpEffect.withPreResponseHandler(httpEffect, (request, response) => {
+        if (classify(request.url) === undefined) {
+          return Effect.succeed(response);
+        }
+
+        return Effect.succeed(
+          HttpServerResponse.setHeader(response, "cache-control", "no-store")
+        );
+      });
   }),
   { global: true }
 );
