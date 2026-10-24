@@ -77,6 +77,50 @@ const codes = (errors: readonly FieldError[]): string[] =>
   );
 
 describe(recordSchema, () => {
+  it("validates the complete JSON body before returning field errors", () => {
+    for (const body of [
+      null,
+      [1],
+      Object.fromEntries<string | undefined>([
+        ["nope", undefined],
+        ["title", "too long"],
+      ]),
+      { nope: { nested: () => 1 }, title: "too long" },
+    ]) {
+      assert.deepStrictEqual(validateRecord(table, "create", body), {
+        errors: [],
+        invalidBody: true,
+        unknownFields: [],
+      });
+      assert.isTrue(
+        isFailure(decodeUnknownResult(recordSchema(table, "create"))(body))
+      );
+    }
+  });
+
+  it("checks update metadata before a malformed body", () => {
+    assert.throws(() => {
+      validateRecord(table, "update", null);
+    }, /an update needs the stored record/u);
+    assert.throws(() => {
+      validateRecord(table, "update", null, {
+        class: "site.other",
+        values: {},
+      });
+    }, /metadata of site.other/u);
+    assert.throws(() => {
+      validateRecord(
+        table,
+        "update",
+        null,
+        { class: table.name, values: {} },
+        {
+          through: { ...table, name: "site.other" },
+        }
+      );
+    }, /cannot be updated through site.other/u);
+  });
+
   it("reports each failing field at its name", () => {
     const schema = recordSchema(table, "create");
 

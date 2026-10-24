@@ -57,7 +57,6 @@ import {
 } from "effect/Schema";
 import type { FilterIssue } from "effect/Schema";
 import { InvalidValue as InvalidValueIssue } from "effect/SchemaIssue";
-import type { Issue } from "effect/SchemaIssue";
 import { decodeUnknownResult } from "effect/SchemaParser";
 
 import { invalidValue } from "./field-errors.ts";
@@ -541,32 +540,21 @@ const verdictOf = (
   return { errors: readErrors(fields, resolved.entries), unknownFields: [] };
 };
 
-// Each issue the Schema reports maps back to its field error or unknown
-// name, so `validateRecord` reads them without parsing messages.
-const fieldErrorOfIssue = new WeakMap<Issue, FieldError>();
-const unknownOfIssue = new WeakMap<Issue, string>();
-
 const issuesOf = (
   verdict: Omit<RecordVerdict, "invalidBody">
 ): FilterIssue[] => [
-  ...verdict.unknownFields.map((name) => {
-    const issue = new InvalidValueIssue({
+  ...verdict.unknownFields.map((name) => ({
+    issue: new InvalidValueIssue({
       message: "This table has no field of this name.",
-    });
-
-    unknownOfIssue.set(issue, name);
-
-    return { issue, path: [name] };
-  }),
-  ...verdict.errors.map((error) => {
-    const issue = new InvalidValueIssue({
+    }),
+    path: [name],
+  })),
+  ...verdict.errors.map((error) => ({
+    issue: new InvalidValueIssue({
       message: error._tag === "InvalidValue" ? error.message : error._tag,
-    });
-
-    fieldErrorOfIssue.set(issue, error);
-
-    return { issue, path: [error.field] };
-  }),
+    }),
+    path: [error.field],
+  })),
 ];
 
 const BodySchema = SchemaRecord(SchemaString, Json);
@@ -610,6 +598,23 @@ const updateValues = (
   return stored.values;
 };
 
+const preparationOf = (
+  table: MetaTable,
+  mode: RecordMode,
+  stored: StoredRecord | undefined,
+  options: UpdateOptions
+) => {
+  const values =
+    mode === "update" ? updateValues(table, stored, options) : NO_VALUES;
+
+  return {
+    nameable: new Set(
+      (options.through ?? table).fields.map((field) => field.name)
+    ),
+    values,
+  };
+};
+
 /**
  * The Schema of a record's values for one table and mode: it decodes a
  * body object and fails with one issue per failing field, at the field's
@@ -637,12 +642,7 @@ export const recordSchema = (
   stored?: StoredRecord,
   options: UpdateOptions = {}
 ) => {
-  const values =
-    mode === "update" ? updateValues(table, stored, options) : NO_VALUES;
-
-  const nameable = new Set(
-    (options.through ?? table).fields.map((field) => field.name)
-  );
+  const { values, nameable } = preparationOf(table, mode, stored, options);
 
   return BodySchema.check(
     makeFilter((body) => {
@@ -653,35 +653,8 @@ export const recordSchema = (
   );
 };
 
-const collect = (
-  issue: Issue,
-  errors: FieldError[],
-  unknown: string[]
-): void => {
-  const error = fieldErrorOfIssue.get(issue);
-  const name = unknownOfIssue.get(issue);
-
-  if (error !== undefined) {
-    errors.push(error);
-  }
-
-  if (name !== undefined) {
-    unknown.push(name);
-  }
-
-  if ("issue" in issue) {
-    collect(issue.issue, errors, unknown);
-  }
-
-  if ("issues" in issue) {
-    for (const nested of issue.issues) {
-      collect(nested, errors, unknown);
-    }
-  }
-};
-
 /**
- * Validates a body with `recordSchema` and returns the verdict per field.
+ * Validates a body with the shared record rules and returns the verdict per field.
  *
  * @param table - The table's metadata.
  * @param mode - `create`, `update` or `read`.
@@ -698,21 +671,18 @@ export const validateRecord = (
   stored?: StoredRecord,
   options: UpdateOptions = {}
 ): RecordVerdict => {
-  const result = decodeUnknownResult(
-    recordSchema(table, mode, stored, options)
-  )(body);
+  const { values, nameable } = preparationOf(table, mode, stored, options);
+  const result = decodeUnknownResult(BodySchema)(body);
 
-  if (!isFailure(result)) {
-    return { errors: [], invalidBody: false, unknownFields: [] };
+  if (isFailure(result)) {
+    return { errors: [], invalidBody: true, unknownFields: [] };
   }
 
-  const errors: FieldError[] = [];
-  const unknown: string[] = [];
+  const verdict = verdictOf(table, mode, result.success, values, nameable);
 
-  collect(result.failure, errors, unknown);
-
-  // A failure no field accounts for is the body itself: not a JSON object.
-  const invalidBody = errors.length === 0 && unknown.length === 0;
-
-  return { errors, invalidBody, unknownFields: unknown };
+  return {
+    errors: verdict.errors,
+    invalidBody: false,
+    unknownFields: verdict.unknownFields,
+  };
 };
