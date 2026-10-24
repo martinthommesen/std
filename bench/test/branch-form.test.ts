@@ -26,7 +26,12 @@ import { makeRng } from "../src/random.ts";
 import type { ModelContext, StorageModel } from "../src/storage-model.ts";
 import { modelIds } from "../src/storage-model.ts";
 import { sampleValue } from "../src/values.ts";
-import type { CompiledRequest, ReadDef, Samples } from "../src/workload.ts";
+import type {
+  CompiledRequest,
+  ReadDef,
+  ReadInstance,
+  Samples,
+} from "../src/workload.ts";
 import { executeSteps } from "../src/writes.ts";
 
 const records = 2000;
@@ -393,6 +398,8 @@ describe("branch-form", () => {
             ],
           });
 
+          const compiledInstances: ReadInstance[] = [];
+
           const measured = yield* measureRead(
             {
               ctx: contextFor("unused"),
@@ -401,9 +408,16 @@ describe("branch-form", () => {
             },
             def,
             { runs: 2, seed: 1, setupConcurrency: 2, warmup: 1 },
-            { compile: () => Effect.succeed(request) }
+            {
+              compile: (instance) => {
+                compiledInstances.push(instance);
+
+                return Effect.succeed(request);
+              },
+            }
           );
 
+          assert.strictEqual(compiledInstances.length, 3);
           assert.strictEqual(measured.meanRows, 3);
           assert.strictEqual(measured.runs, 2);
           assert.deepStrictEqual(

@@ -6,7 +6,7 @@
  * the run closest to the median.
  */
 import { PgClient } from "@effect/sql-pg/PgClient";
-import { Effect, Schema } from "effect";
+import { Array as EffectArray, Effect, Schema } from "effect";
 import type { Connection } from "effect/sql/SqlConnection";
 import type { SqlError } from "effect/sql/SqlError";
 
@@ -303,10 +303,26 @@ export const measureRead = Effect.fn("bench.measureRead")(
       warmup + runs
     );
 
+    const groups = EffectArray.groupBy(
+      instances.map((instance, index) => ({ index, instance })),
+      ({ index, instance }) =>
+        variant.compile === undefined ? JSON.stringify(instance) : String(index)
+    );
+
     // Setup probes use only the pool capacity already budgeted by the caller.
-    const requests = yield* Effect.all(instances.map(compile), {
-      concurrency: config.setupConcurrency,
-    });
+    const compiled = yield* Effect.all(
+      Object.values(groups).map((group) =>
+        Effect.map(compile(group[0].instance), (request) =>
+          group.map(({ index }) => ({ index, request }))
+        )
+      ),
+      { concurrency: config.setupConcurrency }
+    );
+
+    const requests = compiled
+      .flat()
+      .toSorted((left, right) => left.index - right.index)
+      .map(({ request }) => request);
 
     sessionCounter += 1;
 
