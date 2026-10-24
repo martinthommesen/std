@@ -49,20 +49,6 @@ const isKind = <K extends DefinitionKind>(
   kind: K
 ): definition is DefinitionOf<K> => definition.kind === kind;
 
-const groupByKind = (
-  definitions: readonly Definition[]
-): ReadonlyMap<DefinitionKind, readonly Definition[]> => {
-  const groups = new Map<DefinitionKind, Definition[]>(
-    DEFINITION_KINDS.map((kind) => [kind, []])
-  );
-
-  for (const definition of definitions) {
-    groups.get(definition.kind)?.push(definition);
-  }
-
-  return groups;
-};
-
 const byId = (left: Definition, right: Definition): number =>
   compareIds(left.id, right.id);
 
@@ -81,6 +67,7 @@ export class ConfigSnapshot implements SnapshotKey {
   readonly revision: number;
   readonly changeSetId: string;
 
+  readonly #lineages = new Map<DefinitionId, readonly ClassDefinition[]>();
   readonly #definitions: ReadonlyMap<DefinitionId, Definition>;
   readonly #byKind: ReadonlyMap<DefinitionKind, readonly Definition[]>;
   readonly #recordRules: readonly RecordRuleDefinition[];
@@ -114,7 +101,10 @@ export class ConfigSnapshot implements SnapshotKey {
     this.revision = key.revision;
     this.changeSetId = key.changeSetId;
     this.#definitions = definitions;
-    this.#byKind = groupByKind([...definitions.values()].toSorted(byId));
+    this.#byKind = Map.groupBy(
+      [...definitions.values()].toSorted(byId),
+      (definition) => definition.kind
+    );
     this.#recordRules = this.all("recordRule").filter(isLive);
     this.#grants = this.all("grant").filter(isLive);
     this.#accessRules = this.all("accessRule").filter(isLive);
@@ -427,11 +417,22 @@ export class ConfigSnapshot implements SnapshotKey {
    * @returns The lineage; empty for an unknown class.
    */
   lineage(classId: DefinitionId): readonly ClassDefinition[] {
+    const cached = this.#lineages.get(classId);
+
+    if (cached !== undefined) {
+      return cached;
+    }
+
     const definition = this.class(classId);
 
-    return definition === undefined
-      ? []
-      : [...this.ancestors(classId), definition];
+    if (definition === undefined) {
+      return [];
+    }
+
+    const lineage = [...this.ancestors(classId), definition];
+    this.#lineages.set(classId, lineage);
+
+    return lineage;
   }
 
   /**

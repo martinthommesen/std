@@ -154,12 +154,18 @@ layer(PostgresTest)("postgres-text", (pg) => {
     Effect.gen(function* body() {
       const sql = yield* SqlClient.SqlClient;
 
-      for (const value of INT8_EDGES) {
-        const [row] = yield* sql<{ readonly value: string }>`
-          SELECT ${int8Parameter(value)}::int8 AS value
-        `;
+      const rows = yield* sql<{ readonly value: string }>`
+        SELECT text::int8 AS value FROM unnest(${INT8_EDGES.map(int8Parameter)}::text[])
+        WITH ORDINALITY AS inputs(text, ordinal) ORDER BY ordinal
+      `;
 
-        assert.strictEqual(getOrThrow(parseInt8Text(row?.value ?? "")), value);
+      assert.lengthOf(rows, INT8_EDGES.length);
+
+      for (const [index, value] of INT8_EDGES.entries()) {
+        assert.strictEqual(
+          getOrThrow(parseInt8Text(rows[index]?.value ?? "")),
+          value
+        );
       }
     })
   );
@@ -168,14 +174,15 @@ layer(PostgresTest)("postgres-text", (pg) => {
     Effect.gen(function* body() {
       const sql = yield* SqlClient.SqlClient;
 
-      for (const text of NUMERIC_EDGES) {
-        const decimal = getOrThrow(parseDecimal(text));
+      const rows = yield* sql<{ readonly value: string }>`
+        SELECT text::numeric AS value FROM unnest(${NUMERIC_EDGES.map((text) => numericParameter(getOrThrow(parseDecimal(text))))}::text[])
+        WITH ORDINALITY AS inputs(text, ordinal) ORDER BY ordinal
+      `;
 
-        const [row] = yield* sql<{ readonly value: string }>`
-          SELECT ${numericParameter(decimal)}::numeric AS value
-        `;
+      assert.lengthOf(rows, NUMERIC_EDGES.length);
 
-        const back = getOrThrow(parseNumericText(row?.value ?? ""));
+      for (const [index, text] of NUMERIC_EDGES.entries()) {
+        const back = getOrThrow(parseNumericText(rows[index]?.value ?? ""));
         assert.strictEqual(formatDecimal(back), text);
       }
 
@@ -192,17 +199,21 @@ layer(PostgresTest)("postgres-text", (pg) => {
       const sql = yield* SqlClient.SqlClient;
 
       for (const zone of TIME_ZONES) {
-        for (const text of DATE_EDGES) {
-          const date = getOrThrow(parseDate(text));
+        const rows = yield* withTimeZone(
+          zone,
+          sql<{ readonly value: string }>`
+          SELECT text::date AS value FROM unnest(${DATE_EDGES.map((text) => dateParameter(getOrThrow(parseDate(text))))}::text[])
+          WITH ORDINALITY AS inputs(text, ordinal) ORDER BY ordinal
+        `
+        );
 
-          const [row] = yield* withTimeZone(
-            zone,
-            sql<{ readonly value: string }>`
-              SELECT ${dateParameter(date)}::date AS value
-            `
+        assert.lengthOf(rows, DATE_EDGES.length);
+
+        for (const [index, text] of DATE_EDGES.entries()) {
+          assert.strictEqual(
+            getOrThrow(parseDateText(rows[index]?.value ?? "")),
+            text
           );
-
-          assert.strictEqual(getOrThrow(parseDateText(row?.value ?? "")), text);
         }
       }
     })
@@ -213,17 +224,20 @@ layer(PostgresTest)("postgres-text", (pg) => {
       const sql = yield* SqlClient.SqlClient;
 
       for (const zone of TIME_ZONES) {
-        for (const text of DATE_TIME_EDGES) {
-          const millis = getOrThrow(parseDateTime(text));
+        const rows = yield* withTimeZone(
+          zone,
+          sql<{ readonly value: string }>`
+          SELECT text::timestamptz(3) AS value FROM unnest(${DATE_TIME_EDGES.map((text) => timestamptzParameter(getOrThrow(parseDateTime(text))))}::text[])
+          WITH ORDINALITY AS inputs(text, ordinal) ORDER BY ordinal
+        `
+        );
 
-          const [row] = yield* withTimeZone(
-            zone,
-            sql<{ readonly value: string }>`
-              SELECT ${timestamptzParameter(millis)}::timestamptz(3) AS value
-            `
+        assert.lengthOf(rows, DATE_TIME_EDGES.length);
+
+        for (const [index, text] of DATE_TIME_EDGES.entries()) {
+          const back = getOrThrow(
+            parseTimestamptzText(rows[index]?.value ?? "")
           );
-
-          const back = getOrThrow(parseTimestamptzText(row?.value ?? ""));
 
           assert.strictEqual(formatDateTime(back), text);
         }

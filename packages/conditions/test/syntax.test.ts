@@ -1,8 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   assert as check,
+  array,
   constantFrom,
-  integer,
   property,
   string,
   tuple,
@@ -255,9 +255,7 @@ ${String.fromCodePoint(0x20_28)}`,
     ];
 
     const fuzz = tuple(
-      integer({ max: 12, min: 0 }).chain((size) =>
-        tuple(...Array.from({ length: size }, () => constantFrom(...fragments)))
-      ),
+      array(constantFrom(...fragments), { maxLength: 12, size: "max" }),
       string({ maxLength: 20, unit: "binary" })
     );
 

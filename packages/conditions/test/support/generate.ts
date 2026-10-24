@@ -722,6 +722,18 @@ export const atomArb = (
     : atomFor(generator, operator, candidates);
 };
 
+const coverageKindsByClass = new Map(
+  [ASSET, LAPTOP, PERSON].map((classId) => [
+    classId,
+    new Map(
+      pathsFrom(classId, 3).map((candidate) => [
+        candidate.ids.join("/"),
+        kindKey(candidate.field),
+      ])
+    ),
+  ])
+);
+
 /**
  * The coverage keys an expression exercises.
  *
@@ -730,15 +742,10 @@ export const atomArb = (
  * @returns Keys such as `eq|text:ci`, one per atom.
  */
 export const coverageKeys = (expr: Expr, classId: string): string[] => {
-  const kindsByPath = new Map(
-    pathsFrom(classId, 3).map((candidate) => [
-      candidate.ids.join("/"),
-      kindKey(candidate.field),
-    ])
-  );
+  const kindsByPath = coverageKindsByClass.get(classId);
 
   const keyOf = (path: Path): string =>
-    kindsByPath.get(path.path.join("/")) ?? "?";
+    kindsByPath?.get(path.path.join("/")) ?? "?";
 
   const walk = (node: Expr): string[] => {
     if (isJunction(node)) {

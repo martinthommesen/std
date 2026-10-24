@@ -360,12 +360,6 @@ const naiveIn = (expr: In, images: Images): boolean => {
   return expr.op === "in" ? holds : !holds;
 };
 
-interface NaiveSource {
-  readonly scenario: Scenario;
-  readonly owner: RecordImage;
-  readonly ownerPrevious: RecordImage;
-}
-
 const subtreeOf = (classId: string): readonly string[] =>
   classId === PART ? [PART, SUB_PART] : [classId];
 
@@ -382,11 +376,7 @@ const partImage = (part: GeneratedPart): RecordImage => {
     : image;
 };
 
-const naiveAtom = (
-  expr: Expr,
-  images: Images,
-  source: NaiveSource
-): boolean => {
+const naiveAtom = (expr: Expr, images: Images, source: Scenario): boolean => {
   if (isCompare(expr)) {
     return naiveCompare(expr, images);
   }
@@ -408,7 +398,7 @@ const naiveAtom = (
   }
 
   if (expr.op === "partsChanged") {
-    return source.scenario.changed.some((classId) =>
+    return source.changed.some((classId) =>
       subtreeOf(expr.class).includes(classId)
     );
   }
@@ -416,7 +406,7 @@ const naiveAtom = (
   throw new Error(`The generator made no ${expr.op}.`);
 };
 
-const naive = (expr: Expr, images: Images, source: NaiveSource): boolean => {
+const naive = (expr: Expr, images: Images, source: Scenario): boolean => {
   if (isJunction(expr)) {
     return expr.op === "and"
       ? expr.args.every((arg) => naive(arg, images, source))
@@ -435,14 +425,14 @@ const naive = (expr: Expr, images: Images, source: NaiveSource): boolean => {
     return naiveAtom(expr, images, source);
   }
 
-  const matches = source.scenario.parts
+  const matches = source.parts
     .filter((part) => subtreeOf(expr.class).includes(part.classId))
     .map((part) =>
       naive(
         expr.where,
         {
-          owner: source.owner,
-          ownerPrevious: source.ownerPrevious,
+          owner: images.owner,
+          ownerPrevious: images.ownerPrevious,
           previous: null,
           self: partImage(part),
         },
@@ -509,7 +499,7 @@ const evaluateNaively = (expr: Expr, scenario: Scenario): boolean => {
       previous: ownerPrevious,
       self: owner,
     },
-    { owner, ownerPrevious, scenario }
+    scenario
   );
 };
 
@@ -554,6 +544,47 @@ describe("aggregate-quantifiers", () => {
     assert.isFalse(
       evaluateWithEngine({ class: PART, op: "anyPart", where }, empty)
     );
+  });
+
+  it("validates the resolver context only when an owner or part leaf needs it", () => {
+    const cases: readonly {
+      readonly expr: Expr;
+      readonly expected: readonly string[];
+    }[] = [
+      { expected: [], expr: { class: PART, op: "partsChanged" } },
+      { expected: [], expr: { args: [], op: "and" } },
+      { expected: [], expr: { args: [], op: "or" } },
+      { expected: ["invalidTimeZone"], expr: { arg: at(O.num), op: "empty" } },
+      {
+        expected: ["invalidTimeZone"],
+        expr: {
+          class: PART,
+          op: "anyPart",
+          where: { arg: at(P.num), op: "empty" },
+        },
+      },
+    ];
+
+    for (const { expr, expected } of cases) {
+      const checked = checkAggregateCondition(expr, {
+        classId: OWNER,
+        isPartClass: (classId) => PART_CLASSES.has(classId),
+        purpose: "evaluate",
+        view,
+      });
+
+      if (!checked.ok) {
+        throw checked.error;
+      }
+
+      const resolved = resolveAggregate(checked.value, {
+        now: 0,
+        timeZone: "invalid",
+      });
+
+      assert.strictEqual(resolved.ok, expected.length === 0);
+      assert.deepStrictEqual(issueReasons(resolved), expected);
+    }
   });
 
   it("a class that is no part class is refused", () => {

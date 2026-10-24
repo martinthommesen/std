@@ -9,6 +9,7 @@
  */
 import { stringifyJson } from "@std/values/json";
 import type { JsonObject } from "@std/values/json-value";
+import { jsonbEquals } from "@std/values/jsonb";
 
 import type { Definition } from "./definition.ts";
 
@@ -51,4 +52,4 @@ export const effectiveText = (definition: Definition): string =>
  * @returns True when no configured property differs.
  */
 export const sameEffective = (left: Definition, right: Definition): boolean =>
-  effectiveText(left) === effectiveText(right);
+  jsonbEquals(effectiveJson(left), effectiveJson(right));

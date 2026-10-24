@@ -18,6 +18,7 @@ import type {
 import { dependenciesOf } from "../src/dependencies.ts";
 import {
   effectiveChoices,
+  effectiveField,
   effectiveFields,
   effectiveLayout,
 } from "../src/effective-schema.ts";
@@ -151,18 +152,9 @@ const codes = (definitions: readonly Definition[]): readonly ProblemCode[] =>
 const rulesFor = (
   snapshot: ConfigSnapshot,
   classId: string,
-  fieldId: string
-): FieldRules => {
-  const found = effectiveFields(snapshot, classId).find(
-    (entry) => entry.field.id === fieldId
-  );
-
-  if (found === undefined) {
-    throw new Error(`no field ${fieldId} on ${classId}`);
-  }
-
-  return fieldRulesOf(snapshot, found);
-};
+  target: FieldDefinition
+): FieldRules =>
+  fieldRulesOf(snapshot, effectiveField(snapshot, classId, target));
 
 describe("choices", () => {
   it("validates choices: a choice field, the key format and unique live keys", () => {
@@ -207,7 +199,7 @@ describe("choices", () => {
       );
     }
 
-    const rules = rulesFor(w.snapshot, w.ticket.id, w.status.id);
+    const rules = rulesFor(w.snapshot, w.ticket.id, w.status);
 
     assert.deepStrictEqual(
       [...(rules.choices?.active ?? [])],
@@ -327,8 +319,8 @@ describe("choice-subset overrides", () => {
       override(w.incident, w.status, { choices: ["open", "legacy"] }),
     ]);
 
-    const parent = rulesFor(snapshot, w.ticket.id, w.status.id);
-    const child = rulesFor(snapshot, w.incident.id, w.status.id);
+    const parent = rulesFor(snapshot, w.ticket.id, w.status);
+    const child = rulesFor(snapshot, w.incident.id, w.status);
 
     assert.isTrue(convertCreate(parent, "pending").ok);
 
@@ -651,7 +643,7 @@ describe("auto-number prefixes", () => {
       )?.numberPrefix
     );
 
-    const rules = rulesFor(snapshot, w.incident.id, w.number.id);
+    const rules = rulesFor(snapshot, w.incident.id, w.number);
 
     assert.isTrue(rules.autoNumber);
     assert.isNull(absentCreateValue(rules));

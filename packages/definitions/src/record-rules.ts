@@ -204,11 +204,7 @@ export const convertCreate = (
   rules: FieldRules,
   json: JsonValue
 ): Decoded<DecodedInput> => {
-  const planned = planCreate(
-    rules.type,
-    { json, present: true },
-    defaultInput(rules)
-  );
+  const planned = planCreate(rules.type, { json, present: true });
 
   if (!planned.ok) {
     return planned;

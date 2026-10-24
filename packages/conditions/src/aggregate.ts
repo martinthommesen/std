@@ -41,9 +41,8 @@ import type {
   ConditionIssue,
   ConditionResult,
 } from "./issue.ts";
-import { resolveCondition } from "./resolve.ts";
+import { prepareResolver, resolveCondition } from "./resolve.ts";
 import type { ConditionContext, ResolveOptions } from "./resolve.ts";
-import { makeChecked } from "./typed.ts";
 import type { CheckedNode, ResolvedNode, TypedPath } from "./typed.ts";
 
 /** A node of an aggregate condition; `Leaf` is a checked or resolved tree. */
@@ -412,14 +411,10 @@ export const checkAggregateCondition = (
   return valid({ classId: options.classId, root, stage: "checked" });
 };
 
-type Resolve = (
-  classId: string,
-  node: CheckedNode
-) => ConditionResult<ResolvedNode>;
+type Resolve = (node: CheckedNode) => ConditionResult<ResolvedNode>;
 
 const resolveTree = (
   node: AggregateNode<CheckedNode>,
-  ownerClassId: string,
   resolve: Resolve
 ): ConditionResult<AggregateNode<ResolvedNode>> => {
   switch (node.op) {
@@ -428,7 +423,7 @@ const resolveTree = (
       const args: AggregateNode<ResolvedNode>[] = [];
 
       for (const arg of node.args) {
-        const resolved = resolveTree(arg, ownerClassId, resolve);
+        const resolved = resolveTree(arg, resolve);
 
         if (!resolved.ok) {
           return resolved;
@@ -441,13 +436,13 @@ const resolveTree = (
     }
 
     case "not": {
-      const arg = resolveTree(node.arg, ownerClassId, resolve);
+      const arg = resolveTree(node.arg, resolve);
 
       return arg.ok ? valid({ arg: arg.value, op: "not" }) : arg;
     }
 
     case "owner": {
-      const resolved = resolve(ownerClassId, node.node);
+      const resolved = resolve(node.node);
 
       return resolved.ok
         ? valid({ node: resolved.value, op: "owner" })
@@ -455,7 +450,7 @@ const resolveTree = (
     }
 
     case "parts": {
-      const where = resolve(node.classId, node.where);
+      const where = resolve(node.where);
 
       return where.ok ? valid({ ...node, where: where.value }) : where;
     }
@@ -483,19 +478,13 @@ export const resolveAggregate = (
   context: ConditionContext,
   options: ResolveOptions = {}
 ): ConditionResult<ResolvedAggregate> => {
-  const root = resolveTree(
-    condition.root,
-    condition.classId,
-    (classId, node) => {
-      const resolved = resolveCondition(
-        makeChecked(classId, node),
-        context,
-        options
-      );
+  let prepared: ReturnType<typeof prepareResolver> | undefined;
 
-      return resolved.ok ? valid(resolved.value.root) : resolved;
-    }
-  );
+  const root = resolveTree(condition.root, (node) => {
+    prepared ??= prepareResolver(context, options);
+
+    return prepared.ok ? valid(prepared.value(node)) : prepared;
+  });
 
   return root.ok
     ? valid({ classId: condition.classId, root: root.value, stage: "resolved" })

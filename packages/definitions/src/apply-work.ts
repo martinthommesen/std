@@ -69,9 +69,8 @@ export interface Work {
   readonly refusals: ChangeSetRefusal[];
   readonly applied: Operation[];
   readonly notes: OperationNote[];
-  /** The last view built by `viewOf`, and how many changes it includes. */
-  view: { readonly changes: number; readonly snapshot: ConfigSnapshot };
-  changeCount: number;
+  /** The last view built by `viewOf`, invalidated by a changed definition. */
+  view?: ConfigSnapshot;
 }
 
 /**
@@ -90,7 +89,6 @@ export const startWork = (
   operations: readonly Operation[] = []
 ): Work => ({
   applied: [],
-  changeCount: 0,
   context,
   current: new Map(),
   key,
@@ -103,7 +101,7 @@ export const startWork = (
     )
   ),
   snapshot,
-  view: { changes: 0, snapshot },
+  view: snapshot,
 });
 
 /**
@@ -126,14 +124,9 @@ export const currentOf = (
  * @returns The snapshot.
  */
 export const viewOf = (work: Work): ConfigSnapshot => {
-  if (work.view.changes !== work.changeCount) {
-    work.view = {
-      changes: work.changeCount,
-      snapshot: work.snapshot.with(work.key, work.current.values()),
-    };
-  }
+  work.view ??= work.snapshot.with(work.key, work.current.values());
 
-  return work.view.snapshot;
+  return work.view;
 };
 
 /**
@@ -182,9 +175,30 @@ export const decodeAs = (
   return undefined;
 };
 
+/**
+ * Reconstructs and validates a changed definition with its change-set version.
+ * @param work - The application.
+ * @param current - The definition before the change.
+ * @param changes - The changed properties.
+ * @returns The resulting definition, or undefined after recording a problem.
+ */
+export const withChanges = (
+  work: Work,
+  current: Definition,
+  changes: JsonObject
+): Definition | undefined => {
+  const json: JsonObject = current;
+
+  return decodeAs(work, current.id, {
+    ...json,
+    ...changes,
+    version: nextVersion(work, current.id),
+  });
+};
+
 const put = (work: Work, next: Definition): void => {
   work.current.set(next.id, next);
-  work.changeCount += 1;
+  delete work.view;
 };
 
 /**
