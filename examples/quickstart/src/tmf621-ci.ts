@@ -6,8 +6,9 @@
  * On a disposable empty database from `@std/testing`'s harness it runs
  * `std upgrade --set examples/helpdesk/v3` and `std bootstrap-admin` (a
  * random login and password), starts `std serve` on a port the system
- * picks, and runs the script twice (the rerun must succeed too). The
- * server's log is printed only when a step fails.
+ * picks, a production worker and the local listener, and runs the script twice
+ * (the rerun must succeed too). Each run verifies callback receipts and a replay
+ * deduplicated by eventId. Server/worker logs are printed only on failure.
  *
  * Credentials: each script run runs under `strace -f -e trace=execve,execveat`
  * as in `pnpm quickstart:ci` (`exec-trace.ts`): the run fails if any
@@ -21,12 +22,14 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { NodeRuntime } from "@effect/platform-node";
+import { startListener } from "@std/example-listener/listener";
 import { testDatabaseService } from "@std/testing/test-database";
 import { Console, Effect } from "effect";
 
 import { findStrace, program } from "./exec-trace.ts";
 import type { ExpectedProgram } from "./exec-trace.ts";
-import { startHelpdeskServer } from "./helpdesk-server.ts";
+import { CLI, startHelpdeskServer } from "./helpdesk-server.ts";
+import { spawnGroup } from "./process-group.ts";
 import { runTraced } from "./steps.ts";
 
 const SCRIPT = fileURLToPath(
@@ -48,12 +51,30 @@ const tmf621 = Effect.gen(function* runTmf621() {
   // Before anything else: without strace the credential check cannot run.
   yield* findStrace();
 
-  const server = yield* startHelpdeskServer(ADMIN);
+  const listener = yield* startListener(0);
+
+  const server = yield* startHelpdeskServer(ADMIN, {
+    STD_HUB_ALLOW_PRIVATE_ADDRESSES: "true",
+  });
+
+  const worker = yield* spawnGroup(process.execPath, [CLI, "worker"], {
+    env: server.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const workerLog: string[] = [];
+  worker.stdout?.on("data", (chunk: Uint8Array) => {
+    workerLog.push(String(chunk));
+  });
+  worker.stderr?.on("data", (chunk: Uint8Array) => {
+    workerLog.push(String(chunk));
+  });
 
   yield* Effect.gen(function* runWithServer() {
     const env = {
       ...process.env,
       STD_URL: server.url,
+      TMF621_LISTENER: listener,
       TMF621_LOGIN: ADMIN.login,
       TMF621_PASSWORD: ADMIN.password,
     };
@@ -75,7 +96,11 @@ const tmf621 = Effect.gen(function* runTmf621() {
       }
     );
   }).pipe(
-    Effect.tapError(() => Console.error(`\n### std serve log\n${server.log()}`))
+    Effect.tapError(() =>
+      Console.error(
+        `\n### std serve log\n${server.log()}\n### std worker log\n${workerLog.join("")}`
+      )
+    )
   );
 
   return yield* Console.log("\ntmf621-example:ci: both runs exited 0");

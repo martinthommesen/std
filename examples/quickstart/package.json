@@ -16,6 +16,7 @@
     "@effect/platform-node": "catalog:",
     "@std/api": "workspace:*",
     "@std/definitions": "workspace:*",
+    "@std/example-listener": "workspace:*",
     "@std/server": "workspace:*",
     "@std/testing": "workspace:*",
     "effect": "catalog:"

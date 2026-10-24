@@ -100,7 +100,8 @@ jobs:
         run: pnpm quickstart:ci
       # The Step 3 runnable result: the helpdesk set v3 installed by
       # `std upgrade --set`, then examples/helpdesk/tmf621.sh through TMF621
-      # twice, under the same execve trace as the quickstart.
+      # twice with a production worker and the local listener, checking callback
+      # receipts and eventId duplicates under the quickstart's execve trace.
       - name: TMF621 example (examples/helpdesk/tmf621.sh against std serve, run twice)
         run: pnpm tmf621-example:ci
       # Release compatibility, a database-upgrade check (decision 0021,

@@ -45,7 +45,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 6 | `ws/api-v1-consolidation` | 3G follow-up | Martin, 2026-10-23: the old `/api/v1` is deleted and the TMF630 API becomes `/api/v1`; release compatibility becomes a database-upgrade check | merged |
 | 6 | `ws/web-new-api` | 3G follow-up | the web app on the TMF630 API (merged with the consolidation) | merged |
 | 6 | `ws/3h-events-hubs` | 3H | hubs on the generic API and the TMF framework, event delivery from per-change images, TMF688 topics and events (decision 0032) | merged |
-| 6 | `ws/3h-events` | 3H | the listener example (`examples/listener`) | planned |
+| 6 | `ws/3h-events` | 3H | local TMF621 listener (`examples/listener`), callback receipts and eventId deduplication; walkthrough hub registration/replay/cleanup; `pnpm tmf621-example:ci` runs twice with a production worker | implemented locally; integration pending |
 | 6 | `ws/3t-conformance-matrix` | 3T | `@std/tmf` pins and vendored OpenAPI documents, `check-conformance-matrix`, Step 3 matrix files, spec check of Contracts 10–15 against the member documents and Martin's decisions on it (decision 0026; 0021 decisions 34–55); Contracts 8.8 rolling-upgrade draft | merged |
 | 6 | `ws/3t-tmf-framework` | 3T | mapping rules over the aggregates, CTK runner and OpenAPI contract tests in CI (Contracts 11.1); decision 0033 | merged |
 | 6 | `ws/3p-party-foundation` | 3P | `core.party`, `core.individual`, `core.organization`, `core.user.individual`, the `data` migration kind and the user backfill (Contracts 1.9, 11.3), release-compat baseline `v0.0.2` | merged |

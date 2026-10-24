@@ -23,6 +23,12 @@
 #   TMF621_LOGIN      the user who signs in      admin
 #   TMF621_PASSWORD   its password               helpdesk-admin-demo-password
 #   TMF621_RUN        tag for this run's ticket  the current UTC time
+#   TMF621_LISTENER   local listener origin      http://127.0.0.1:8081
+#
+# Start `pnpm --filter @std/example-listener start` first. Both `std serve`
+# and `std worker` need STD_HUB_ALLOW_PRIVATE_ADDRESSES=true for loopback
+# callbacks. See examples/listener/README.md. The script registers its own
+# hub, checks callback receipts, replays one notification and unregisters.
 #
 # The default credential is the helpdesk demo administrator's, a disposable
 # demo credential. Never reuse it.
@@ -36,13 +42,30 @@ STD_URL=${STD_URL:-http://127.0.0.1:8080}
 TMF621_LOGIN=${TMF621_LOGIN:-admin}
 TMF621_PASSWORD=${TMF621_PASSWORD:-helpdesk-admin-demo-password}
 RUN=${TMF621_RUN:-$(date -u +%Y%m%d-%H%M%S)}
+LISTENER=${TMF621_LISTENER:-http://127.0.0.1:8081}
+CALLBACK="$LISTENER/listener?source=tmf621"
+HUBS="$STD_URL/tmf-api/troubleTicket/v5/hub"
 
 SESSION_API="$STD_URL/api/v1"
 TICKETS="/tmf-api/troubleTicket/v5/troubleTicket"
 BODY_FILE=$(mktemp)
 HEADER_FILE=$(mktemp)
 RESPONSE_HEADERS=$(mktemp)
-trap 'rm -f "$BODY_FILE" "$HEADER_FILE" "$RESPONSE_HEADERS"' EXIT
+
+cleanup() {
+  local result=$?
+  if [[ -n ${HUB_ID:-} ]]; then
+    if request DELETE "$HUBS/$HUB_ID" && [[ $STATUS == 204 ]]; then
+      echo "  unregistered this run's hub"
+    else
+      echo "FAILED: unregister hub $HUB_ID (HTTP ${STATUS:-unavailable})" >&2
+      result=1
+    fi
+  fi
+  rm -f "$BODY_FILE" "$HEADER_FILE" "$RESPONSE_HEADERS"
+  exit "$result"
+}
+trap cleanup EXIT
 
 # --- HTTP helpers -----------------------------------------------------------
 #
@@ -82,7 +105,7 @@ request() {
     args+=(-H "content-type: $type" --data-binary @-)
   fi
 
-  STATUS=$(printf '%s' "$body" | curl "${args[@]}" "$url")
+  STATUS=$(printf '%s' "$body" | curl "${args[@]}" "$url") || return
   BODY=$(cat "$BODY_FILE")
 }
 
@@ -137,10 +160,13 @@ TOKEN=$(sign_in "$TMF621_LOGIN" "$TMF621_PASSWORD")
 [[ -n $TOKEN && $TOKEN != null ]] || fail "sign-in answered no token"
 echo "  signed in"
 
-# TODO(3H): examples/listener prints the events (TroubleTicketCreateEvent,
-# TroubleTicketStatusChangeEvent, ...) the steps below cause: register its
-# hub here, with POST /tmf-api/troubleTicket/v5/hub, once workstream 3H ships
-# the listener.
+heading "Register the local listener through TMF621's hub"
+TOKEN='' ok 200 GET "$LISTENER/receipts"
+ok 201 POST "$HUBS" "$(jq -nc --arg callback "$CALLBACK" \
+  '{"@type": "Hub", callback: $callback, query: "eventType=TroubleTicketCreateEvent,TroubleTicketAttributeValueChangeEvent,TroubleTicketStatusChangeEvent,TroubleTicketResolvedEvent"}')"
+HUB_ID=$(jq -er .id <<<"$BODY")
+expect "$BODY" ".callback == \"$CALLBACK\"" "the registered callback, including its query string"
+echo "  hub $HUB_ID registered"
 
 heading "Open an incident (POST $TICKETS)"
 ok 201 POST "$STD_URL$TICKETS" "$(jq -nc --arg name "Laptop does not boot [$RUN]" \
@@ -185,6 +211,48 @@ IF_MATCH=$STALE request PATCH "$URL" "$(jq -nc '{status: "closed"}')"
 echo "  $STATUS $(jq -r '.code // empty' <<<"$BODY")"
 [[ $STATUS == 409 ]] || fail "expected 409, got $STATUS $BODY"
 expect "$BODY" '.code == "VersionConflict"' "the error code VersionConflict"
+
+heading "Committed callback receipts (waiting for std worker)"
+# Hang tripwire: pnpm tmf621-example:ci on 2026-10-24 received all callbacks
+# within one second of resolution in both runs (listener README receipt).
+# A minute leaves ample headroom for this disposable example, not a worker SLA.
+LISTENER_WAIT_SECONDS=60
+WAIT_STARTED=$SECONDS
+# Eight notifications: create; update (attribute + status and a separate
+# aggregate attribute event for the first note); second note (attribute);
+# resolve (attribute + status + resolved). Tmf.resource saves own fields and
+# finalizes changed parts as distinct versions in the same operation.
+# A stale write produces none (Contracts 12.1, decision 0035).
+while true; do
+  TOKEN='' ok 200 GET "$LISTENER/receipts"
+  RECEIPTS=$(jq -c --arg id "$ID" '[.[] | select(.notification.event.troubleTicket.id == $id)]' <<<"$BODY")
+  COUNT=$(jq length <<<"$RECEIPTS")
+  [[ $COUNT -le 8 ]] || fail "expected 8 committed notifications, received $COUNT"
+  [[ $COUNT -lt 8 ]] || break
+  if (( SECONDS - WAIT_STARTED >= LISTENER_WAIT_SECONDS )); then
+    fail "listener_wait_seconds=$LISTENER_WAIT_SECONDS exceeded; received $COUNT of 8 notifications for $ID. Check std worker and STD_HUB_ALLOW_PRIVATE_ADDRESSES=true."
+  fi
+  sleep 0.2
+done
+expect "$RECEIPTS" '[.[].notification.eventType] == ["TroubleTicketCreateEvent", "TroubleTicketAttributeValueChangeEvent", "TroubleTicketStatusChangeEvent", "TroubleTicketAttributeValueChangeEvent", "TroubleTicketAttributeValueChangeEvent", "TroubleTicketAttributeValueChangeEvent", "TroubleTicketStatusChangeEvent", "TroubleTicketResolvedEvent"]' "the eight committed notifications in version order"
+expect "$RECEIPTS" 'all(.[]; .idempotencyKey == .notification.eventId) and ([.[].notification.eventId] | unique | length) == 8' "eight distinct event IDs, each its own Idempotency-Key"
+expect "$RECEIPTS" '.[0].notification.event.troubleTicket.status == "acknowledged" and .[2].notification.event.troubleTicket.status == "inProgress" and .[7].notification.event.troubleTicket.status == "resolved" and (.[3].notification.event.troubleTicket.note | length) == 1 and (.[4].notification.event.troubleTicket.note | length) == 2 and .[1].notification.correlationId == .[3].notification.correlationId' "committed create, update, whole note arrays and resolution payloads"
+jq -r '.[] | "  \(.notification.eventType)  eventId \(.notification.eventId)"' <<<"$RECEIPTS"
+
+heading "Replay a received event: deduplicate by eventId"
+REPLAY=$(jq -c '.[0].notification' <<<"$RECEIPTS")
+EVENT_ID=$(jq -r .eventId <<<"$REPLAY")
+DUPLICATES=$(jq '.[0].duplicates' <<<"$RECEIPTS")
+# This is a public notification ID, never a bearer credential.
+printf 'idempotency-key: %s\n' "$EVENT_ID" >"$HEADER_FILE"
+STATUS=$(printf '%s' "$REPLAY" | curl -sS -o "$BODY_FILE" -w '%{http_code}' \
+  -H "@$HEADER_FILE" -H 'content-type: application/json' --data-binary @- "$CALLBACK")
+[[ $STATUS == 202 ]] || fail "duplicate callback -> $STATUS (expected 202)"
+expect "$(cat "$BODY_FILE")" ".duplicate == true and .eventId == \"$EVENT_ID\"" "the same event ID acknowledged as a duplicate"
+TOKEN='' ok 200 GET "$LISTENER/receipts"
+expect "$BODY" "[.[] | select(.notification.event.troubleTicket.id == \"$ID\")] | length == 8" "still eight unique notifications after replay"
+expect "$BODY" ".[] | select(.notification.eventId == \"$EVENT_ID\") | .duplicates > $DUPLICATES" "a recorded duplicate"
+echo "  duplicate $EVENT_ID acknowledged; still 8 unique notifications"
 
 heading "Done"
 echo "  incident $ID opened, updated and resolved; the stale write changed nothing"

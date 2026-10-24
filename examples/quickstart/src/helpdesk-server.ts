@@ -45,14 +45,19 @@ export interface HelpdeskServer {
  * Brings up STD with the helpdesk set v3 on the harness's disposable
  * database and waits until it listens. The server ends with the scope.
  * @param admin - The first administrator.
+ * @param envOverrides - Explicit startup settings for this disposable server.
  * @returns The running server.
  */
 export const startHelpdeskServer = Effect.fn("HelpdeskServer.start")(
-  function* startHelpdeskServer(admin: HelpdeskAdmin) {
+  function* startHelpdeskServer(
+    admin: HelpdeskAdmin,
+    envOverrides: NodeJS.ProcessEnv = {}
+  ) {
     const database = yield* TestDatabase;
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      ...envOverrides,
       STD_ADMIN_LOGIN: admin.login,
       STD_ADMIN_PASSWORD: admin.password,
       STD_DATABASE_DIRECT_URL: database.url,
