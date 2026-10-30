@@ -54,8 +54,8 @@ import { DefinitionInvalid, problem } from "@std/definitions/problems";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import type { PlatformTable } from "@std/definitions/well-known";
-import { stringifyJson } from "@std/values/json";
 import type { JsonObject } from "@std/values/json-value";
+import { jsonbEquals } from "@std/values/jsonb";
 import { Effect, Option, Schema } from "effect";
 import type { Redacted } from "effect";
 
@@ -265,7 +265,7 @@ const writtenColumns = (
     properties = Object.keys(draft).filter(
       (key) =>
         before === undefined ||
-        stringifyJson(before[key] ?? null) !== stringifyJson(draft[key] ?? null)
+        !jsonbEquals(before[key] ?? null, draft[key] ?? null)
     );
   }
 

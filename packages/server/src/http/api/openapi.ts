@@ -9,6 +9,7 @@
  * `@schemaLocation` (`#/components/schemas/<_tag>`, Contracts 10.6).
  */
 import { StdApi } from "@std/api/api";
+import { stringifyJson } from "@std/values/json";
 import type { JsonObject } from "@std/values/json-value";
 import { Schema } from "effect";
 import { OpenApi } from "effect/http-api";
@@ -17,3 +18,9 @@ import { OpenApi } from "effect/http-api";
 export const apiOpenApi: JsonObject = Schema.decodeUnknownSync(
   Schema.Record(Schema.String, Schema.Json)
 )(OpenApi.fromApi(StdApi));
+
+/**
+ * The document as the route answers it, written once: the document never
+ * changes while the server runs.
+ */
+export const apiOpenApiText = stringifyJson(apiOpenApi);

@@ -47,9 +47,9 @@ import type { FieldError } from "@std/definitions/field-errors";
 import type { DefinitionId } from "@std/definitions/ids";
 import { OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
-import { stringifyJson } from "@std/values/json";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
+import { jsonbEquals } from "@std/values/jsonb";
 import { Effect, Predicate, Result, Schema, SchemaIssue } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 import { SqlClient } from "effect/sql";
@@ -524,7 +524,7 @@ const PATCH_BUILDERS: Readonly<
 };
 
 const sameValue = (left: JsonValue, right: JsonValue | undefined): boolean =>
-  stringifyJson(left) === stringifyJson(right ?? null);
+  jsonbEquals(left, right ?? null);
 
 /** The codecs of JSON-valued definition columns. */
 const JSON_CODECS: ReadonlySet<string> = new Set(["json", "nullableJson"]);

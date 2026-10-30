@@ -25,11 +25,7 @@ import type { DefinitionId } from "@std/definitions/ids";
 import { apiAttributeNameOf } from "@std/definitions/names";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { stringifyJson } from "@std/values/json";
-import {
-  isJsonArray,
-  isJsonObject,
-  isJsonString,
-} from "@std/values/json-value";
+import { isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Option } from "effect";
 import { HttpServerResponse } from "effect/http";
@@ -349,10 +345,9 @@ const concreteRecords = Effect.fn("Api.concreteRecords")(
 
     for (const record of records) {
       if (fields === undefined && record.classId !== view.classId) {
-        children.set(record.classId, [
-          ...(children.get(record.classId) ?? []),
-          record.id,
-        ]);
+        const ids = children.get(record.classId) ?? [];
+        ids.push(record.id);
+        children.set(record.classId, ids);
       }
     }
 
@@ -610,11 +605,8 @@ export interface RouteInput {
   readonly collection: string;
 }
 
-/** What the record service answers for a record's history. */
-type HistoryAnswer = Effect.Success<ReturnType<typeof recordHistory>>;
-
 // A record or table the caller cannot see has no history to link.
-const noHistory = () => Effect.succeed(Option.none<HistoryAnswer>());
+const noHistory = () => Effect.succeed(Option.none<string>());
 
 /**
  * The ID of the latest history entry of a record the caller may see
@@ -634,24 +626,16 @@ const latestChangeOf = Effect.fn("Api.latestChange")(function* latestChangeOf(
     return Option.none<string>();
   }
 
-  const history = yield* recordHistory({
+  return yield* recordHistory({
     id: record.id,
     selection: { kind: "latest" },
     table,
   }).pipe(
-    Effect.map((found): Option.Option<HistoryAnswer> => Option.some(found)),
+    Effect.map((found) =>
+      Option.fromNullishOr(found.page.entries.at(-1)?.changeId)
+    ),
     Effect.catchTags({ NotFound: noHistory, UnknownTable: noHistory })
   );
-
-  const entries = Option.isSome(history) ? history.value.body.entries : null;
-  const last = isJsonArray(entries) ? entries.at(-1) : undefined;
-
-  const changeId =
-    last !== undefined && isJsonObject(last) ? last.changeId : undefined;
-
-  return changeId !== undefined && isJsonString(changeId)
-    ? Option.some(changeId)
-    : Option.none<string>();
 });
 
 /**

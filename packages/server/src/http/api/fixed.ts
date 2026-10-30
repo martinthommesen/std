@@ -33,7 +33,6 @@ import type {
 } from "@std/definitions/table-metadata";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
 import { formatDateTime } from "@std/values/date-time";
-import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Plaintext } from "@std/values/write-only";
 import { Effect, Layer, Option, Redacted, Result } from "effect";
@@ -64,7 +63,7 @@ import {
 import { tableOpenApi } from "../table-openapi.ts";
 import { answered } from "./answered.ts";
 import { getAndHead } from "./methods.ts";
-import { apiOpenApi } from "./openapi.ts";
+import { apiOpenApiText } from "./openapi.ts";
 import { jsonAnswer } from "./records.ts";
 import { checkedSessionCreate } from "./request-schemas.ts";
 import {
@@ -95,43 +94,6 @@ const committedSignInRefusal = (
 const SESSION_PATH = `${API_PREFIX}/session`;
 const CURRENT_SESSION = `${SESSION_PATH}/current`;
 const METADATA_PATH = `${API_PREFIX}/tableMetadata`;
-
-/** A sign-in body: login, password, and where the token goes. */
-interface SessionRequest {
-  readonly login: string;
-  readonly password: Plaintext;
-  readonly tokenDelivery: "body" | "cookie";
-}
-
-const invalidBody = () =>
-  new InvalidRequest({
-    message:
-      "A session is created with login, password and tokenDelivery (body or cookie).",
-    parameter: "body",
-  });
-
-const sessionRequestOf = Effect.fn("Api.sessionRequest")(
-  function* sessionRequestOf(body: JsonValue) {
-    const fields = isJsonObject(body) ? body : {};
-    const login = fields.login ?? null;
-    const password = fields.password ?? null;
-    const delivery = fields.tokenDelivery ?? "body";
-
-    if (
-      isJsonString(login) &&
-      isJsonString(password) &&
-      (delivery === "body" || delivery === "cookie")
-    ) {
-      return {
-        login,
-        password: new Plaintext(password),
-        tokenDelivery: delivery,
-      } satisfies SessionRequest;
-    }
-
-    return yield* invalidBody();
-  }
-);
 
 const userRef = Effect.fn("Api.userRef")(function* userRef(
   origin: string,
@@ -425,9 +387,15 @@ export const FixedRoutes = Layer.unwrap(
           const stated = yield* parseRequestRevision(request);
           const origin = yield* originOf(request);
 
-          const body = yield* sessionRequestOf(
-            yield* checkedSessionCreate(yield* jsonBodyOf(request))
+          const signInBody = yield* checkedSessionCreate(
+            yield* jsonBodyOf(request)
           );
+
+          const body = {
+            login: signInBody.login,
+            password: new Plaintext(signInBody.password),
+            tokenDelivery: signInBody.tokenDelivery ?? "body",
+          };
 
           // A cookie sign-in is the web app's: without `STD-Client: web` it
           // is refused before any session exists, so a cross-site form cannot
@@ -714,7 +682,10 @@ export const FixedRoutes = Layer.unwrap(
           Effect.gen(function* openApiRequest() {
             yield* checkUnscopedRevision(stated);
 
-            return jsonAnswer(apiOpenApi, 200);
+            return HttpServerResponse.text(apiOpenApiText, {
+              contentType: "application/json",
+              status: 200,
+            });
           })
         );
       });

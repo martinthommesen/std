@@ -78,10 +78,10 @@ export const checkedJsonPatch = (body: JsonValue) =>
   );
 
 /**
- * A sign-in body, checked against `SessionCreate`.
+ * A sign-in body, decoded as `SessionCreate`.
  *
  * @param body - The parsed body.
- * @returns The body, or `InvalidRequest`.
+ * @returns The decoded sign-in, or `InvalidRequest`.
  */
 export const checkedSessionCreate = (body: JsonValue) => {
   if (isJsonObject(body)) {
@@ -116,8 +116,5 @@ export const checkedSessionCreate = (body: JsonValue) => {
     }
   }
 
-  return decodeSession(body).pipe(
-    Effect.mapError(refused("SessionCreate")),
-    Effect.as(body)
-  );
+  return decodeSession(body).pipe(Effect.mapError(refused("SessionCreate")));
 };
