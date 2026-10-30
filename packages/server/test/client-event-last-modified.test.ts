@@ -5,7 +5,7 @@ import {
   EVENT_PAYLOAD_FIELD_ID,
 } from "@std/definitions/event-ids";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
-import { Cause, DateTime, Effect, Exit, Schema } from "effect";
+import { Cause, DateTime, Effect, Exit, Logger, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 
@@ -364,8 +364,19 @@ describe("client-event-last-modified", () => {
     "sends the date over TCP, clamps a future stored date, fails on invalid storage and keeps HEAD unsupported",
     () =>
       Effect.gen(function* wireDate() {
-        const { path, recordId, token } = yield* storedEvent;
-        const origin = yield* edgeServer;
+        const { http, path, recordId, token } = yield* storedEvent;
+        const loggedCauses: string[] = [];
+
+        const logger = Logger.make(({ cause }) => {
+          if (cause.reasons.length > 0) {
+            loggedCauses.push(Cause.pretty(cause));
+          }
+        });
+
+        const origin = yield* edgeServer.pipe(
+          Effect.provide(Logger.layer([logger]))
+        );
+
         const headers = { authorization: `Bearer ${token}` };
         const sql = yield* SqlClient.SqlClient;
         yield* sql`UPDATE core.event_resource SET updated_at = '2024-01-01T00:00:00.999Z'::timestamptz WHERE id = ${recordId}::uuid`;
@@ -411,6 +422,21 @@ describe("client-event-last-modified", () => {
         assert.isUndefined(head.headers["last-modified"]);
         assert.strictEqual(head.headers["cache-control"], "no-store");
 
+        const typed = yield* http.get(`${path}-missing`, { token });
+
+        const missing = yield* edgeRequest(origin, `${path}-missing`, {
+          headers,
+          method: "GET",
+        });
+
+        assert.strictEqual(typed.status, 404, typed.text);
+        assert.strictEqual(asObject(typed.json).code, "NotFound");
+        assert.strictEqual(missing.status, typed.status);
+        assert.strictEqual(missing.text, typed.text);
+        assert.strictEqual(missing.headers["cache-control"], "no-store");
+        assert.isUndefined(missing.headers["last-modified"]);
+        assert.deepStrictEqual(loggedCauses, []);
+
         // PostgreSQL permits infinity; STD's persisted date codec must reject it.
         yield* sql`UPDATE core.event_resource SET updated_at = 'infinity'::timestamptz WHERE id = ${recordId}::uuid`;
 
@@ -420,10 +446,33 @@ describe("client-event-last-modified", () => {
         });
 
         assert.strictEqual(invalid.status, 500, invalid.text);
+        assert.strictEqual(invalid.text, "");
         assert.isUndefined(invalid.headers["last-modified"]);
-        // Existing TMF defect responses bypass its no-store response mapping;
-        // preserve that behavior here rather than expanding LM1 into middleware.
-        assert.isUndefined(invalid.headers["cache-control"]);
+        assert.strictEqual(invalid.headers["cache-control"], "no-store");
+        assert.lengthOf(loggedCauses, 1);
+        assert.include(
+          loggedCauses[0] ?? "",
+          "The stored timestamptz is outside what STD represents."
+        );
+
+        const generic = yield* edgeRequest(
+          origin,
+          `/api/v1/coreEvent/${recordId}`,
+          {
+            headers,
+            method: "GET",
+          }
+        );
+
+        assert.strictEqual(generic.status, 500, generic.text);
+        assert.strictEqual(generic.text, "");
+        assert.strictEqual(generic.headers["cache-control"], "no-store");
+        assert.isUndefined(generic.headers["last-modified"]);
+        assert.lengthOf(loggedCauses, 2);
+        assert.include(
+          loggedCauses[1] ?? "",
+          "The stored timestamptz is outside what STD represents."
+        );
       }).pipe(Effect.provide(hubTestLayer))
   );
 });
