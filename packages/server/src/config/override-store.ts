@@ -16,7 +16,7 @@ import type { SqlError } from "effect/sql/SqlError";
 
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
-import { jsonColumn } from "./layer-store.ts";
+import { deleteOverrides, jsonColumn } from "./layer-store.ts";
 
 /** How a conflict was resolved (Contracts 8.4). */
 export type Resolution = "keep_local" | "take_shipped" | "replace";
@@ -77,26 +77,6 @@ const upsertOverrides = Effect.fn("Config.upsertOverrides")(
       ON CONFLICT (record_id, property) DO UPDATE SET version = core."config_override".version + 1,
         updated_at = now(), updated_by = EXCLUDED.updated_by, value = EXCLUDED.value,
         base_when_set = EXCLUDED.base_when_set, set_by = EXCLUDED.set_by, set_at = EXCLUDED.set_at`;
-  }
-);
-
-const deleteOverrides = Effect.fn("Config.deleteOverrides")(
-  function* deleteOverrides(deletes: readonly DroppedOverride[]) {
-    if (deletes.length === 0) {
-      return;
-    }
-
-    const sql = yield* SqlClient.SqlClient;
-
-    const rows = deletes.map((entry): JsonObject => ({
-      property: entry.property,
-      recordId: entry.recordId,
-    }));
-
-    yield* sql`
-      DELETE FROM core."config_override" AS o
-      USING jsonb_array_elements(${stringifyJson(rows)}::jsonb) AS e
-      WHERE o.record_id = (e ->> 'recordId')::uuid AND o.property = e ->> 'property'`;
   }
 );
 
